@@ -1,0 +1,12 @@
+<!-- BLE Scan Modal -->
+    <div class="modal-bg" id="modal-ble-scan">
+        <div class="modal" style="max-width:500px">
+            <h3>🔍 BLE Sensor Scan</h3>
+            <p class="muted" id="ble-scan-status">Press Scan to search for sensors...</p>
+            <div id="ble-scan-results"></div>
+            <div class="modal-btns">
+                <button class="btn" onclick="document.getElementById('modal-ble-scan').classList.remove('open')">Close</button>
+                <button class="btn accent" id="btn-ble-scan" onclick="App.bleScanStart(this)">📡 Scan</button>
+            </div>
+        </div>
+    </div>

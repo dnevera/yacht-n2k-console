@@ -1,0 +1,21 @@
+            <div class="card">
+                <div class="card-head">
+                    <h2>🌐 CAN Bus Network Scanner</h2>
+                    <div class="btn-row">
+                        <select id="network-scan-dur" class="input">
+                            <option value="5">5 sec</option>
+                            <option value="10" selected>10 sec</option>
+                            <option value="15">15 sec</option>
+                            <option value="30">30 sec</option>
+                        </select>
+                        <button class="btn accent" id="btn-network-scan" onclick="App.startNetworkScan(this)">📡 Scan CAN Bus</button>
+                    </div>
+                </div>
+                <p class="muted">Scans CAN bus for NMEA 2000, Victron Energy, Gobius C and other marine devices. Use ⚙️ Configure to send PGN 126208 commands.</p>
+                <div id="network-scan-status" class="loading-msg" style="display:none"></div>
+            </div>
+            <div id="network-devices" class="grid-3">
+                <div class="card muted center">Press "Scan CAN Bus" to discover devices on the network.</div>
+            </div>
+            <div id="network-frames" class="muted" style="padding:0.75rem">Frames: 0</div>
+        

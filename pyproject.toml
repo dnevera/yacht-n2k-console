@@ -1,0 +1,12 @@
+[project]
+dependencies = [
+    "fastapi>=0.140.0",
+    "uvicorn>=0.51.0",
+    "bleak>=3.0.2",
+    "websockets>=16.1.1",
+    "python-multipart",
+    "nmea2000"
+]
+name = "nmea2000"
+version = "0.1.0"
+requires-python = ">=3.11"

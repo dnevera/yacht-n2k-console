@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YDNU-02 NMEA 2000 Console</title>
+    <meta name="description" content="Web console for Yacht Devices YDNU-02 NMEA 2000 USB Gateway">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css?v=10">
+</head>
+<body>
+
+    <header>
+        <div class="logo">⚓ YDNU-02 Console</div>
+        <div class="status">
+            <span id="status-text">Connecting...</span>
+            <div id="status-led" class="led"></div>
+        </div>
+    </header>
+
+    <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="dashboard">📊 Dashboard</button>
+        <button class="tab" data-tab="monitor">📡 Monitor</button>
+        <button class="tab" data-tab="network">🌐 Network</button>
+        <button class="tab" data-tab="service">⚙️ Service</button>
+        <button class="tab" data-tab="gobius">🌊 Gobius C</button>
+        <button class="tab" data-tab="mopeka">💧 Mopeka</button>
+        <button class="tab" data-tab="maintenance">🔧 Maintenance</button>
+    </nav>
+
+    <main>
+        <!-- ===== DASHBOARD ===== -->
+        <section id="tab-dashboard" class="panel active"></section>
+
+        <!-- ===== MONITOR ===== -->
+        <section id="tab-monitor" class="panel"></section>
+
+        <!-- ===== NETWORK (CAN Bus Scanner + Device Config) ===== -->
+        <section id="tab-network" class="panel"></section>
+
+        <!-- ===== SERVICE ===== -->
+        <section id="tab-service" class="panel"></section>
+
+        <!-- ===== MAINTENANCE ===== -->
+        <section id="tab-maintenance" class="panel"></section>
+
+        <!-- ===== GOBIUS C BLE ===== -->
+        <section id="tab-gobius" class="panel"></section>
+
+        <!-- ===== MOPEKA BLE ===== -->
+        <section id="tab-mopeka" class="panel"></section>
+
+    </main>
+
+    <!-- Toast container -->
+    <div id="toasts"></div>
+
+
+    <script src="/static/js/core.js?v=900"></script>
+    <script src="/static/js/dashboard.js?v=700"></script>
+    <script src="/static/js/monitor.js?v=700"></script>
+    <script src="/static/js/network.js?v=900"></script>
+    <script src="/static/js/n2k_config.js?v=900"></script>
+    <script src="/static/js/service.js?v=800"></script>
+    <script src="/static/js/maintenance.js?v=700"></script>
+    <script src="/static/js/gobius.js?v=701"></script>
+    <script src="/static/js/mopeka.js?v=800"></script>
+</body>
+</html>

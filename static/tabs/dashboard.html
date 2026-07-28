@@ -1,0 +1,53 @@
+            <div class="grid-3">
+                <div class="card">
+                    <div class="card-head">
+                        <h2>Device Info</h2>
+                        <button class="btn accent" id="btn-refresh" onclick="App.refreshInfo(this)">↻ Refresh</button>
+                    </div>
+                    <div id="info-loading" class="loading-msg">⏳ Connecting to YDNU-02...</div>
+                    <table class="info-table">
+                        <tr><td>Firmware</td><td id="v-fw">--</td></tr>
+                        <tr><td>Serial</td><td id="v-serial">--</td></tr>
+                        <tr><td>Mode</td><td id="v-mode">--</td></tr>
+                        <tr><td>Silent</td><td id="v-silent">--</td></tr>
+                        <tr><td>Port</td><td id="v-port">--</td></tr>
+                        <tr><td>State</td><td><span id="v-state">--</span> <button class="btn" id="btn-state-toggle" onclick="App.toggleService(this)" style="font-size:0.7em;padding:2px 8px;margin-left:6px">⏳</button></td></tr>
+                    </table>
+                </div>
+
+                <div class="card">
+                    <div class="card-head"><h2>Quick Actions</h2></div>
+                    <label>Switch Mode</label>
+                    <div class="btn-row">
+                        <button class="btn" onclick="App.setMode('auto', this)">AUTO</button>
+                        <button class="btn" onclick="App.setMode('0183', this)">0183</button>
+                        <button class="btn" onclick="App.setMode('n2k', this)">N2K</button>
+                        <button class="btn" onclick="App.setMode('raw', this)">RAW</button>
+                    </div>
+                    <label>Silent Mode</label>
+                    <div class="btn-row">
+                        <button class="btn" onclick="App.setSilent('on', this)">ON</button>
+                        <button class="btn" onclick="App.setSilent('off', this)">OFF</button>
+                    </div>
+                    <div class="spacer"></div>
+                    <button class="btn warn" onclick="App.resetMCU(this)">🔄 Reboot MCU</button>
+                </div>
+
+                <div class="card" id="io-control-card">
+                    <div class="card-head">
+                        <h2>I/O Control</h2>
+                        <button class="btn accent" id="btn-io-toggle" onclick="App.ioToggle(this)">⏸ Stop</button>
+                    </div>
+                    <table class="info-table">
+                        <tr><td>Serial Port</td><td><span id="io-serial-port" class="muted">--</span> <span id="io-serial-state" class="muted"></span></td></tr>
+                        <tr><td>Gobius BLE</td><td><span id="io-gobius-state" class="muted">--</span></td></tr>
+                        <tr><td>Mopeka BLE</td><td><span id="io-mopeka-state" class="muted">--</span></td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Dynamic sensor cards — separate grid, max 3 per row -->
+            <div id="sensor-cards" class="grid-3">
+                <div class="card muted center" id="sensor-cards-empty">Loading sensors...</div>
+            </div>
+        

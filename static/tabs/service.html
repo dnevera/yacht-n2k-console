@@ -1,0 +1,48 @@
+            <div class="service-grid">
+                <div class="card">
+                    <div class="card-head">
+                        <h2>Service Mode</h2>
+                        <span id="svc-state" class="muted">IDLE</span>
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn accent" id="btn-svc-enter" onclick="App.enterService(this)">🔌 Enter</button>
+                        <button class="btn warn" id="btn-svc-exit" onclick="App.exitService(this)">⏏ Exit</button>
+                    </div>
+
+                    <div class="spacer"></div>
+                    <div class="card-head">
+                        <h2>Filters</h2>
+                        <button class="btn" onclick="App.loadFilters(this)">↻ Load</button>
+                    </div>
+                    <div id="filters-box" class="muted">Click Load to fetch filters</div>
+
+                    <div class="spacer"></div>
+                    <h3>Diagnostics</h3>
+                    <div class="btn-row">
+                        <select id="diag-scope" class="input">
+                            <option>ALL</option><option>USB_RX</option><option>USB_TX</option>
+                            <option>N2K_RX</option><option>N2K_TX</option>
+                        </select>
+                        <button class="btn" onclick="App.loadDiag(this)">Get</button>
+                    </div>
+                    <pre id="diag-out" class="pre-box"></pre>
+                </div>
+
+                <div class="card terminal-card">
+                    <div class="term-out" id="term-out">YDNU-02 Service Terminal
+Type a command or use quick buttons.
+</div>
+                    <div class="term-quick">
+                        <button class="btn sm" onclick="App.termCmd('HELP')">HELP</button>
+                        <button class="btn sm" onclick="App.termCmd('HELP SET')">HELP SET</button>
+                        <button class="btn sm" onclick="App.termCmd('HELP MODE')">HELP MODE</button>
+                        <button class="btn sm" onclick="App.termCmd('HELP FILTER')">HELP FILTER</button>
+                    </div>
+                    <div class="term-input">
+                        <span class="prompt">❯</span>
+                        <input type="text" id="term-in" class="input mono" placeholder="Command..." onkeydown="if(event.key==='Enter')App.termSubmit()">
+                        <button class="btn accent" onclick="App.termSubmit()">Send</button>
+                    </div>
+                </div>
+            </div>
+        

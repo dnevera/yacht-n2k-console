@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  signalk:
+    image: signalk/signalk-server:latest
+    container_name: signalk-server
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    environment:
+      - TZ=Europe/Moscow
+      - NODE_OPTIONS=--dns-result-order=ipv4first
+    volumes:
+      - ./signalk-data:/home/node/.signalk
+      - /var/run/dbus:/var/run/dbus
+      - /dev:/dev

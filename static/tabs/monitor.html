@@ -1,0 +1,25 @@
+            <div class="card">
+                <div class="card-head">
+                    <div class="live-group">
+                        <div id="live-dot" class="live-dot"></div>
+                        <span id="live-label">IDLE</span>
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn accent" id="btn-mon-toggle" onclick="App.toggleMonitor()">▶ Start</button>
+                        <button class="btn" onclick="App.clearMonitor()">⌫ Clear</button>
+                    </div>
+                </div>
+                <div class="filter-row">
+                    <input type="text" id="f-pgn" class="input mono" placeholder="PGN filter">
+                    <input type="text" id="f-src" class="input mono" placeholder="Src filter">
+                    <input type="text" id="f-text" class="input" placeholder="Search text...">
+                    <label><input type="checkbox" id="f-scroll" checked> Auto-scroll</label>
+                </div>
+            </div>
+            <div class="log-box" id="monitor-log"></div>
+            <div class="status-bar">
+                <span>Packets: <b id="mon-count">0</b></span>
+                <span>Rate: <b id="mon-rate">0</b>/s</span>
+                <span>Errors: <b id="mon-errors" class="red">0</b></span>
+            </div>
+        

@@ -1,0 +1,58 @@
+            <div class="grid-3">
+                <div class="card">
+                    <div class="card-head">
+                        <h2>Backups</h2>
+                        <button class="btn accent" onclick="App.createBackup(this)">📥 Create</button>
+                    </div>
+                    <div id="backup-list" class="muted">Loading...</div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head"><h2>Reset</h2></div>
+                    <div class="btn-col">
+                        <button class="btn warn" onclick="App.apiAction('/api/reset/settings','Reset Settings', null, this)">⚠️ Reset Settings</button>
+                        <button class="btn warn" onclick="App.apiAction('/api/reset/filters','Reset Filters', null, this)">⚠️ Reset Filters</button>
+                        <button class="btn" onclick="App.resetMCU(this)">🔄 Reboot MCU</button>
+                        <button class="btn danger" onclick="App.resetHardware(this)">🚨 Factory Reset</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head">
+                        <h2>Firmware</h2>
+                        <button class="btn" onclick="App.checkFirmware(this)">🔎 Check Updates</button>
+                    </div>
+                    <div class="info-table">
+                        <table>
+                            <tr><td>Installed</td><td id="v-fw2">--</td></tr>
+                            <tr><td>Latest</td><td id="v-fw-latest">--</td></tr>
+                        </table>
+                    </div>
+                    <div id="fw-status" class="muted small"></div>
+                    <div class="spacer"></div>
+                    <h3>Upload & Flash</h3>
+                    <div class="drop-zone" id="fw-drop">
+                        <p>Drag & Drop .BIN here</p>
+                        <p class="muted small">Auto-backup before flash</p>
+                    </div>
+                    <div id="fw-uploaded" style="display:none; margin-top:0.75rem">
+                        <span id="fw-filename" class="mono"></span>
+                        <button class="btn danger" onclick="App.flashFirmware(this)">⚡ Flash Now</button>
+                    </div>
+                </div>
+            </div>
+        
+
+<!-- Reset Hardware Modal -->
+    <div class="modal-bg" id="modal-reset">
+        <div class="modal">
+            <h3>⚠️ Factory Reset Hardware</h3>
+            <p>This will restore factory firmware from EEPROM and erase ALL settings.</p>
+            <label>Type <b>RESET</b> to confirm:</label>
+            <input type="text" id="reset-input" class="input">
+            <div class="modal-btns">
+                <button class="btn" onclick="App.closeModal()">Cancel</button>
+                <button class="btn danger" onclick="App.confirmReset()">Erase Everything</button>
+            </div>
+        </div>
+    </div>
