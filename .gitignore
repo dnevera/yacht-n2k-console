@@ -33,3 +33,5 @@ uv.lock
 # Firmware binaries
 *.BIN
 *.bin
+docs/chat_logs/
+*.jsonl
