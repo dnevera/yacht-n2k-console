@@ -1,65 +1,116 @@
-# Интеграция NMEA 2000 + YDNU-02 + Gobius C + Mopeka BLE (Raspberry Pi 5)
+# yacht-n2k-console
 
-## 📌 Обзор архитектуры
+NMEA 2000 Web Console for Yacht Devices — a self-hosted web application for managing marine electronics over a CAN bus network.
 
-Система объединяет датчики уровня баков и marine-электронику для Home Assistant и Victron Venus OS:
+## Overview
+
+A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
+
+- **Device Discovery** — automatic detection of all NMEA 2000 devices on the CAN bus via ISO Address Claim (PGN 60928) and Product Information (PGN 126996)
+- **Dynamic Configuration** — read and write device parameters using PGN 126208 Group Functions (Read/Write Fields, Command) with field metadata extracted dynamically from the `nmea2000` Python library
+- **Tank Level Monitoring** — Gobius C (NMEA 2000 + BLE) and Mopeka Pro 200 (BLE) fluid sensor support
+- **Live Bus Monitor** — real-time CAN frame viewer via WebSocket
+- **YDNU-02 Gateway Management** — serial protocol control, service mode, firmware updates
+
+## Architecture
 
 ```
-[ Gobius C (Radar/US) ] ── (NMEA 2000) ──┐
-                                         ├──> [ YDNU-02 USB ] ──> (/dev/ttyACM0) ──> [ Signal K Server ] ──> Home Assistant / Victron
-[ Mopeka Pro 200 BLE  ] ── (BLE Advert) ─┴────────────────────> [ Bluetooth D-Bus] ──┘
+┌──────────────────────────────────────────────────────────┐
+│                    Raspberry Pi 5                        │
+│                                                          │
+│  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐  │
+│  │  FastAPI     │   │  Device      │   │  BLE         │  │
+│  │  + WebSocket │◄──│  Manager     │◄──│  Scanner     │  │
+│  │  (app.py)    │   │  (bus_worker)│   │  (Mopeka/    │  │
+│  └──────┬───────┘   └──────┬───────┘   │   Gobius)    │  │
+│         │                  │           └──────────────┘  │
+│         │           ┌──────┴───────┐                     │
+│         │           │  YDNU-02     │                     │
+│         │           │  Serial Port │                     │
+│         │           │  /dev/ttyACM0│                     │
+│         │           └──────┬───────┘                     │
+└─────────┼──────────────────┼─────────────────────────────┘
+          │                  │
+          ▼                  ▼
+    ┌──────────┐      ┌─────────────┐
+    │ Browser  │      │  NMEA 2000  │
+    │ Web UI   │      │  CAN Bus    │
+    └──────────┘      └──┬──────┬───┘
+                         │      │
+                    ┌────┴┐  ┌──┴─────┐
+                    │Tank │  │Battery │
+                    │Sensor│  │Monitor │
+                    └─────┘  └────────┘
 ```
 
----
+## Hardware
 
-## 🛠️ Базовые параметры оборудования
+| Component | Model | Interface |
+|-----------|-------|-----------|
+| USB-CAN Gateway | Yacht Devices YDNU-02 | USB Serial (`/dev/ttyACM0`) |
+| Fluid Sensor | Gobius C | NMEA 2000 + BLE |
+| Tank Sensor | Mopeka Pro 200 | BLE Advertisement |
+| Battery Monitor | Victron SmartShunt | NMEA 2000 |
+| Solar Charger | Victron MPPT | NMEA 2000 |
+| Host | Raspberry Pi 5 | — |
 
-1. **Физический слой NMEA 2000:**
-   * Сопротивление шины между CAN-H и CAN-L: **60 Ом** (2 терминатора по 120 Ом).
-   * Напряжение питания CAN-шины: **12V DC**.
+## Quick Start
 
-2. **Yacht Devices YDNU-02 USB Gateway:**
-   * Устройство на Pi 5: `/dev/ttyACM0`.
-   * Режимы работы: `AUTO`, `0183`, `RAW`, `N2K`.
-   * Диагностика сервисного режима: [ydnu02.py](file:///Users/denn/Develop/3dprint/ha/nmea2000/ydnu02.py).
-
-3. **Датчик Gobius C NMEA 2000:**
-   * Приложение Gobius C (Bluetooth):
-     - `NMEA 2000 State: 1` (Включен).
-     - `Device Instance: 0`, `Fluid Instance: 0` (Бак 1).
-     - `Fluid Type`: Water (1) или Fuel (0).
-     - **Обязательная калибровка:** Выполнить калибровку бака в приложении.
-
----
-
-## 💻 Управление YDNU-02 через сервисный режим
-
-Для запуска диагностики YDNU-02 из консоли Pi 5:
+### On the Raspberry Pi
 
 ```bash
-# 1. Убедиться, что порт свободен
-pkill -f signalk
+# Initial setup
+./setup_gateway.local.sh
 
-# 2. Запустить скрипт диагностики YDNU-02
-python3 ha/nmea2000/ydnu02.py
+# Run the service
+python3 app.py --port 8080
 ```
 
-### Набор сервисных команд:
-- `HELP` — Вывод меню помощи.
-- `STATUS` — Диагностика CAN-шины (RX/TX counters, Bus-ON).
-- `INFO` — Ревизия и версия прошивки.
-- `MODE AUTO` / `MODE 0183` / `MODE RAW` — Установка режима работы.
-- `YD:RESET` — Заводской сброс настроек EEPROM.
-
----
-
-## 🚀 Запуск Signal K в Docker
-
-После проверки YDNU-02 запустите контейнер Signal K:
+### As a systemd service
 
 ```bash
-cd ha/nmea2000
-docker compose up -d
+sudo cp ydnu02-web.service /etc/systemd/system/
+sudo systemctl enable --now ydnu02-web.service
 ```
 
-Веб-интерфейс Signal K: `http://192.168.68.56:3000`
+### Access the Web UI
+
+```
+http://<raspberry-pi-ip>:8080
+```
+
+## API Endpoints
+
+### Device Configuration (Dynamic)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/n2k/devices` | List all discovered N2K devices |
+| `GET` | `/api/n2k/devices/{src}/config/{pgn}` | Read current field values from device |
+| `POST` | `/api/n2k/devices/{src}/config/{pgn}` | Write fields, verify with read-back diff |
+| `GET` | `/api/n2k/pgn/{pgn}/metadata` | Get field metadata (types, enums, units) |
+
+### Sensors & Monitoring
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/sensors` | All sensor readings |
+| `GET` | `/api/device/status` | Gateway status and bus health |
+| `WS` | `/ws/monitor` | Live CAN frame stream |
+| `WS` | `/ws/scan` | Device discovery scan |
+
+See [TECHNICAL.md](TECHNICAL.md) for full API reference and protocol details.
+
+## Development
+
+```bash
+# Deploy changes to Raspberry Pi
+./deploy.sh
+
+# Run tests
+python3 tests/run.py
+```
+
+## License
+
+Private. All rights reserved.
