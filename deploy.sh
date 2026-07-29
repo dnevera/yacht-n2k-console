@@ -53,6 +53,8 @@ if $DEPLOY_PROXY; then
 
     log "Installing ydnu02-tcp-gateway service..."
     ${SSH} ${HOST} "sudo mv /tmp/ydnu02-tcp-gateway.service /etc/systemd/system/${PROXY_SERVICE}.service \
+      && sudo cp /tmp/ydnu02_tcp_gateway.py ${REMOTE_DIR}/ydnu02_tcp_gateway.py \
+      && sudo chown denn:denn ${REMOTE_DIR}/ydnu02_tcp_gateway.py \
       && sudo systemctl daemon-reload \
       && sudo systemctl enable ${PROXY_SERVICE} \
       && sudo systemctl restart ${PROXY_SERVICE}"
