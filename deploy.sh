@@ -18,9 +18,10 @@
 #      systemd: ydnu02-web.service  (Requires=ydnu02-tcp-gateway.service)
 #
 # USAGE
-#   ./deploy.sh [host]           — deploy both services  (default: user@<gateway-host>)
-#   ./deploy.sh [host] --proxy   — gateway only (faster, no web restart)
-#   ./deploy.sh [host] --web     — web only (gateway untouched, no HA restart)
+#   ./deploy.sh [host]              — deploy both services + patch HA
+#   ./deploy.sh [host] --proxy      — gateway only + patch HA (no web restart)
+#   ./deploy.sh [host] --web        — web only (gateway/HA untouched)
+#   ./deploy.sh [host] --patch-ha   — re-apply HA patches only (after HA update)
 #
 # FILE OWNERSHIP RULE
 #   ydnu02_tcp_gateway.py is uploaded via scp directly to REMOTE_DIR.
@@ -28,13 +29,14 @@
 #   The .service unit goes via /tmp → sudo mv (only systemd dir needs root).
 #   NEVER use "sudo cp + sudo chown" for py files — scp ownership is correct.
 #
-# HA AUTO-RECONNECT (spin-loop bug fixed)
-#   Bug was in nmea2000 lib v2026.5.2 TextNmea2000Gateway._receive_impl():
-#   readline() returns b"" on EOF but no check existed → silent return →
-#   _receive_loop() spun at 100% CPU. Fixed: raise ConnectionError on b"".
-#   Patch applied to HA container. PR: github.com/dnevera/nmea2000
-#   HA now auto-reconnects to :4001 within ~10s after gateway restart.
-#   --web deploy: gateway untouched → HA connection unaffected.
+# HA AUTO-RECONNECT (spin-loop bug fixed, patch applied by this script)
+#   Bug in nmea2000 lib TextNmea2000Gateway._receive_impl(): readline() returns
+#   b"" on EOF but had no check → silent return → 100% CPU spin-loop.
+#   Fix in patches/nmea2000_ioclient.py — applied to HA container on every
+#   proxy deploy. Path discovered dynamically (survives Python version bumps).
+#   HA is restarted to reload the module, then auto-reconnects within ~10s.
+#   If HA image is updated: run ./deploy.sh [host] --patch-ha to re-apply.
+#   Remove patch when: nmea2000 package > 2026.5.2 has the fix included.
 #
 # SERVICE START ORDER
 #   ydnu02-tcp-gateway  →  ydnu02-web  →  homeassistant (docker)
@@ -55,12 +57,14 @@
 set -euo pipefail
 
 HOST="${1:-user@<gateway-host>}"
-MODE="${2:-}"   # --proxy | --web | (empty = both)
+MODE="${2:-}"   # --proxy | --web | --patch-ha | (empty = both)
 
 REMOTE_DIR="/opt/nmea2000/ydnu02-web"
 WEB_SERVICE="ydnu02-web"
 PROXY_SERVICE="ydnu02-tcp-gateway"
+HA_CONTAINER="homeassistant"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
+PATCH_DIR="${LOCAL_DIR}/patches"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -76,8 +80,41 @@ SCP="scp -o ConnectTimeout=10"
 
 DEPLOY_PROXY=true
 DEPLOY_WEB=true
-[[ "$MODE" == "--proxy" ]] && DEPLOY_WEB=false
-[[ "$MODE" == "--web"   ]] && DEPLOY_PROXY=false
+[[ "$MODE" == "--proxy"    ]] && DEPLOY_WEB=false
+[[ "$MODE" == "--web"      ]] && DEPLOY_PROXY=false
+[[ "$MODE" == "--patch-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false
+
+# ── patch_ha() ───────────────────────────────────────────────────────────────
+# Applies local patches/ fixes to third-party libs inside the HA docker container.
+# Called automatically on every proxy deploy (gateway restart triggers EOF → HA
+# needs patched nmea2000 to reconnect cleanly instead of spinning at 100% CPU).
+# Also callable standalone: ./deploy.sh [host] --patch-ha
+#
+# Patches applied:
+#   patches/nmea2000_ioclient.py → nmea2000/ioclient.py
+#     Fix: TextNmea2000Gateway readline() EOF → ConnectionError (not silent return)
+#     Upstream PR: github.com/dnevera/nmea2000/tree/fix/text-gateway-eof-spin-loop
+#
+patch_ha() {
+    section "HA patches"
+
+    # Discover exact path inside container (survives Python version bumps)
+    local ioclient_path
+    ioclient_path=$(${SSH} ${HOST} \
+        "sudo docker exec ${HA_CONTAINER} python3 -c \
+        'import nmea2000.ioclient as m; print(m.__file__)'" 2>/dev/null) \
+        || { warn "Cannot find nmea2000.ioclient in HA container — skipping patch"; return 1; }
+
+    log "Patching ${ioclient_path}"
+    ${SCP} "${PATCH_DIR}/nmea2000_ioclient.py" "${HOST}:/tmp/nmea2000_ioclient.py"
+    ${SSH} ${HOST} "sudo docker cp /tmp/nmea2000_ioclient.py \
+        ${HA_CONTAINER}:${ioclient_path}"
+    log "Patch applied ✓"
+
+    log "Restarting HA to reload patched module..."
+    ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
+    log "HA restarted ✓  (auto-reconnects to :4001 within ~10s)"
+}
 
 ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}"
 
@@ -102,13 +139,14 @@ if $DEPLOY_PROXY; then
       && echo 'ydnu02-tcp-gateway: RUNNING ✓' || echo 'ydnu02-tcp-gateway: FAILED ✗'"
     log "ydnu02-tcp-gateway deploy complete ✓"
 
-    # ── HA reconnects automatically (no restart needed) ──────────────────────
-    # Previously required: sudo docker restart homeassistant
-    # Fixed in nmea2000 lib: TextNmea2000Gateway._receive_impl() now raises
-    # ConnectionError on EOF (b"") instead of silently returning, which caused
-    # _receive_loop() to spin at 100% CPU. PR: github.com/dnevera/nmea2000
-    # HA now auto-reconnects to :4001 within ~10s after gateway restart.
-    log "HA will auto-reconnect to gateway (spin-loop bug fixed) ✓"
+    # Patch HA and restart — gateway restart sends EOF to HA's TCP connection.
+    # HA must have the patched nmea2000 lib to reconnect cleanly (not spin).
+    patch_ha
+fi
+
+# ── Standalone --patch-ha ────────────────────────────────────────────────────
+if [[ "$MODE" == "--patch-ha" ]]; then
+    patch_ha
 fi
 
 # ── Web Service ───────────────────────────────────────────────────────────────
