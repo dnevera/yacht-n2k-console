@@ -51,10 +51,10 @@ if $DEPLOY_PROXY; then
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02_tcp_gateway.py" "${HOST}:${REMOTE_DIR}/ydnu02_tcp_gateway.py"
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02-tcp-gateway.service" "${HOST}:/tmp/ydnu02-tcp-gateway.service"
 
+    # Note: py file is uploaded via scp (line above) directly as denn → denn-owned, no sudo needed.
+    # Service unit goes via /tmp because /etc/systemd/system/ requires sudo.
     log "Installing ydnu02-tcp-gateway service..."
     ${SSH} ${HOST} "sudo mv /tmp/ydnu02-tcp-gateway.service /etc/systemd/system/${PROXY_SERVICE}.service \
-      && sudo cp /tmp/ydnu02_tcp_gateway.py ${REMOTE_DIR}/ydnu02_tcp_gateway.py \
-      && sudo chown denn:denn ${REMOTE_DIR}/ydnu02_tcp_gateway.py \
       && sudo systemctl daemon-reload \
       && sudo systemctl enable ${PROXY_SERVICE} \
       && sudo systemctl restart ${PROXY_SERVICE}"
@@ -63,6 +63,15 @@ if $DEPLOY_PROXY; then
     ${SSH} ${HOST} "sudo systemctl is-active ${PROXY_SERVICE} \
       && echo 'ydnu02-tcp-gateway: RUNNING ✓' || echo 'ydnu02-tcp-gateway: FAILED ✗'"
     log "ydnu02-tcp-gateway deploy complete ✓"
+
+    # ── HA restart (MANDATORY after every proxy restart) ─────────────────────
+    # Bug in nmea2000 lib v2026.5.2 (ioclient.py): when the proxy TCP connection
+    # drops (EOF on reconnect), HA enters an infinite spin loop at 100% CPU.
+    # The only fix is a full HA container restart. See SKILL.md §HA CPU Spin Loop.
+    log "Restarting Home Assistant (CPU spin-loop bug workaround)..."
+    ${SSH} ${HOST} "sudo docker restart homeassistant" \
+      && log "Home Assistant restarted ✓" \
+      || warn "HA restart failed — check: ssh ${HOST} 'sudo docker ps'"
 fi
 
 # ── Web Service ───────────────────────────────────────────────────────────────
