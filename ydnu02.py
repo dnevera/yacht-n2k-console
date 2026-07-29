@@ -298,7 +298,9 @@ class YDNU02Controller:
     # --- Level 2: Terminal Session ---
 
     def _open_terminal(self) -> bool:
-        """Открытие serial-сессии с DTR=True."""
+        """Открытие serial-сессии с DTR=True. Пропускается если работаем через _passthrough."""
+        if getattr(self, '_passthrough', None):
+            return True  # passthrough already provides serial access via proxy
         if self.ser and self.ser.is_open:
             return True
         try:
@@ -320,14 +322,22 @@ class YDNU02Controller:
         self.ser = None
 
     def _write(self, data: bytes):
-        """Отправка байт в открытый serial."""
+        """Отправка байт — через _passthrough (прокси) или прямой serial."""
+        pcc = getattr(self, '_passthrough', None)
+        if pcc:
+            pcc.passthrough_write(data)
+            self._log("TX[proxy]", data)
+            return
         if self.ser and self.ser.is_open:
             self.ser.write(data)
             self.ser.flush()
             self._log("TX", data)
 
     def _read_response(self, duration: float = 2.0) -> str:
-        """Чтение текстового ответа из serial за период duration."""
+        """Чтение ответа — через _passthrough или прямой serial."""
+        pcc = getattr(self, '_passthrough', None)
+        if pcc:
+            return pcc.passthrough_read_for(duration)
         if not self.ser:
             return ""
         chunks = []
@@ -342,13 +352,15 @@ class YDNU02Controller:
 
     def _send_terminal_command(self, cmd: str, wait: float = 2.0) -> str:
         """Отправка текстовой команды Service Menu и чтение ответа."""
-        if not self.ser or not self.ser.is_open:
+        pcc = getattr(self, '_passthrough', None)
+        if not pcc and (not self.ser or not self.ser.is_open):
             raise RuntimeError("Терминальная сессия не открыта. Вызовите enter_service_mode() сначала.")
-        # Дочитать всё что осталось в буфере от предыдущей команды
-        if self.ser.in_waiting:
-            self.ser.read(self.ser.in_waiting)
-        self.ser.reset_input_buffer()
-        time.sleep(0.1)
+        if not pcc:
+            # Direct serial: flush buffer before command
+            if self.ser.in_waiting:
+                self.ser.read(self.ser.in_waiting)
+            self.ser.reset_input_buffer()
+            time.sleep(0.1)
         self._write(f"{cmd}\r\n".encode('ascii'))
         time.sleep(0.3)
         return self._read_response(duration=wait)
@@ -358,11 +370,23 @@ class YDNU02Controller:
     def enter_service_mode(self) -> str:
         """
         Вход в сервисный режим YDNU-02.
-        1. Закрыть serial.
-        2. echo "YDNU MODE SERVICE" > port.
-        3. Открыть serial.
-        4. Отправить HELP, вернуть Welcome Screen.
+        При работе через прокси (_passthrough): команда идёт через control API.
+        При прямом доступе: echo "YDNU MODE SERVICE" > port (shell).
         """
+        pcc = getattr(self, '_passthrough', None)
+        if pcc:
+            # Proxy control session already paused broadcast.
+            # Send MODE SERVICE through passthrough.
+            print(f"[YDNU02] Вход в сервисный режим через прокси...")
+            pcc.passthrough_write(b"YDNU MODE SERVICE\r\n")
+            time.sleep(1.5)
+            welcome = pcc.passthrough_read_for(2.0)
+            pcc.passthrough_write(b"HELP\r\n")
+            welcome += pcc.passthrough_read_for(2.0)
+            self.mode = "SERVICE"
+            return welcome
+
+        # Legacy: direct serial path (no proxy)
         print(f"[YDNU02] Вход в сервисный режим ({self.port})...")
         self._send_shell_command("YDNU MODE SERVICE")
 
@@ -370,9 +394,7 @@ class YDNU02Controller:
             return "[ERROR] Не удалось открыть порт после YDNU MODE SERVICE"
 
         self.mode = "SERVICE"
-        # Читаем возможный Welcome Screen (может прийти сразу)
         welcome = self._read_response(duration=1.0)
-        # Запрашиваем HELP
         self._write(b"HELP\r\n")
         welcome += self._read_response(duration=2.0)
         return welcome
@@ -381,14 +403,23 @@ class YDNU02Controller:
         """
         Выход из сервисного режима.
         Из Service Menu отправляет MODE <target>, затем закрывает serial.
+
+        В passthrough режиме (_passthrough is set): команда идёт через прокси.
+        При прямом доступе: отправляется через открытый serial.
         """
         result = ""
-        if self.ser and self.ser.is_open:
+        pcc = getattr(self, '_passthrough', None)
+        if pcc:
+            # Proxy passthrough: send MODE command through passthrough, not self.ser
+            # (self.ser is None in passthrough mode — serial is never opened directly)
+            result = self._send_terminal_command(f"MODE {target_mode.upper()}", wait=1.5)
+        elif self.ser and self.ser.is_open:
             result = self._send_terminal_command(f"MODE {target_mode.upper()}", wait=1.5)
         self._close_terminal()
         self.mode = target_mode.upper()
         print(f"[YDNU02] Режим установлен: {self.mode}")
         return result
+
 
     # --- Service Menu commands (Level 2) ---
 

@@ -136,37 +136,57 @@ def _build_io_state() -> dict:
 @router.get("/filters")
 async def api_filters():
     if _io_paused: return io_paused_response()
-    return await asyncio.to_thread(get_device_mgr().get_filters)
+    try:
+        return await asyncio.to_thread(get_device_mgr().get_filters)
+    except Exception as e:
+        return {"filters": {}, "error": str(e)}
 
 
 @router.get("/settings")
 async def api_settings():
     if _io_paused: return io_paused_response()
-    return await asyncio.to_thread(get_device_mgr().get_settings)
+    try:
+        return await asyncio.to_thread(get_device_mgr().get_settings)
+    except Exception as e:
+        return {"settings": {}, "error": str(e)}
 
 
 @router.get("/diag/{scope}")
 async def api_diag(scope: str):
     if _io_paused: return io_paused_response()
-    return await asyncio.to_thread(get_device_mgr().get_diag, scope)
+    try:
+        return await asyncio.to_thread(get_device_mgr().get_diag, scope)
+    except Exception as e:
+        return {"data": f"[Error] {e}"}
 
 
 @router.post("/service/cmd")
 async def api_service_cmd(req: CmdRequest):
     if _io_paused: return io_paused_response()
-    return await asyncio.to_thread(get_device_mgr().send_service_cmd, req.cmd)
+    try:
+        return await asyncio.to_thread(get_device_mgr().send_service_cmd, req.cmd)
+    except Exception as e:
+        # Return JSON with error text so it displays in the terminal UI
+        # (prevents HTTP 500 plain text which breaks JS JSON.parse)
+        return {"response": f"[Error] {e}"}
 
 
 @router.post("/service/enter")
 async def api_service_enter():
     if _io_paused: return io_paused_response()
-    return await asyncio.to_thread(get_device_mgr().enter_service)
+    try:
+        return await asyncio.to_thread(get_device_mgr().enter_service)
+    except Exception as e:
+        return {"state": "error", "error": str(e)}
 
 
 @router.post("/service/exit")
 async def api_service_exit():
     if _io_paused: return io_paused_response()
-    return await asyncio.to_thread(get_device_mgr().exit_service)
+    try:
+        return await asyncio.to_thread(get_device_mgr().exit_service)
+    except Exception as e:
+        return {"state": "error", "error": str(e)}
 
 
 @router.get("/service/state")
