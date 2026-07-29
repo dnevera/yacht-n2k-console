@@ -369,29 +369,37 @@ class YDNU02Controller:
 
     def enter_service_mode(self) -> str:
         """
-        Вход в сервисный режим YDNU-02.
-        При работе через прокси (_passthrough): команда идёт через control API.
-        При прямом доступе: echo "YDNU MODE SERVICE" > port (shell).
+        Enter YDNU-02 service terminal mode.
+
+        Passthrough path (proxy mode, _passthrough is set):
+            The proxy already switched YDNU-02 to service terminal mode during
+            SERVICE_START (via OS-level close → stty hupcl → echo → reopen).
+            We just read any buffered welcome text and request HELP output.
+            Do NOT send 'YDNU MODE SERVICE' here — serial.write() cannot trigger
+            the DTR toggle that YDNU-02 requires; the proxy handles this internally.
+
+        Legacy path (direct serial, no proxy):
+            Uses _send_shell_command() which closes the port, runs stty+echo, reopens.
         """
         pcc = getattr(self, '_passthrough', None)
         if pcc:
-            # Proxy control session already paused broadcast.
-            # Send MODE SERVICE through passthrough.
-            print(f"[YDNU02] Вход в сервисный режим через прокси...")
-            pcc.passthrough_write(b"YDNU MODE SERVICE\r\n")
-            time.sleep(1.5)
-            welcome = pcc.passthrough_read_for(2.0)
+            # Proxy has already switched YDNU-02 to service terminal mode.
+            # Read any welcome text buffered since the proxy reopened serial.
+            # A brief read window is enough — the welcome is small and immediate.
+            print("[YDNU02] Service mode via proxy (device already in service terminal)")
+            welcome = pcc.passthrough_read_for(0.5)
+            # Request HELP to populate the welcome screen shown in the UI
             pcc.passthrough_write(b"HELP\r\n")
             welcome += pcc.passthrough_read_for(2.0)
             self.mode = "SERVICE"
             return welcome
 
         # Legacy: direct serial path (no proxy)
-        print(f"[YDNU02] Вход в сервисный режим ({self.port})...")
+        print(f"[YDNU02] Entering service mode directly ({self.port})...")
         self._send_shell_command("YDNU MODE SERVICE")
 
         if not self._open_terminal():
-            return "[ERROR] Не удалось открыть порт после YDNU MODE SERVICE"
+            return "[ERROR] Failed to open port after YDNU MODE SERVICE"
 
         self.mode = "SERVICE"
         welcome = self._read_response(duration=1.0)
@@ -401,23 +409,33 @@ class YDNU02Controller:
 
     def exit_service_mode(self, target_mode: str = "AUTO") -> str:
         """
-        Выход из сервисного режима.
-        Из Service Menu отправляет MODE <target>, затем закрывает serial.
+        Exit YDNU-02 service terminal mode.
 
-        В passthrough режиме (_passthrough is set): команда идёт через прокси.
-        При прямом доступе: отправляется через открытый serial.
+        Passthrough path (proxy mode, _passthrough is set):
+            The proxy handles the MODE RAW switch and serial reopen during SERVICE_END
+            (called via pcc.exit_service()). We just update local state here.
+            Sending MODE via passthrough is NOT needed and would race with the proxy's
+            own MODE RAW write in the SERVICE_END handler.
+
+        Legacy path (direct serial, no proxy):
+            Sends MODE <target> via the open serial terminal, then closes the port.
         """
-        result = ""
         pcc = getattr(self, '_passthrough', None)
         if pcc:
-            # Proxy passthrough: send MODE command through passthrough, not self.ser
-            # (self.ser is None in passthrough mode — serial is never opened directly)
-            result = self._send_terminal_command(f"MODE {target_mode.upper()}", wait=1.5)
-        elif self.ser and self.ser.is_open:
+            # Proxy sends MODE RAW when it receives SERVICE_END (via pcc.exit_service()).
+            # Nothing to do here except update local bookkeeping.
+            self._close_terminal()      # no-op in passthrough (self.ser is None)
+            self.mode = target_mode.upper()
+            print(f"[YDNU02] Exit service mode (proxy will send MODE RAW on SERVICE_END)")
+            return "OK"
+
+        # Legacy: direct serial path
+        result = ""
+        if self.ser and self.ser.is_open:
             result = self._send_terminal_command(f"MODE {target_mode.upper()}", wait=1.5)
         self._close_terminal()
         self.mode = target_mode.upper()
-        print(f"[YDNU02] Режим установлен: {self.mode}")
+        print(f"[YDNU02] Mode set to: {self.mode}")
         return result
 
 
