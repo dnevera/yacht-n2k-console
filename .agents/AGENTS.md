@@ -56,19 +56,25 @@
 
 **Почему:** скилл в гите версионируется вместе с кодом, доступен всей команде, не теряется при сбросе агентского контекста.
 
+## Rule: Все комментарии в коде — только на английском
+**Категорически запрещено писать комментарии в коде на русском языке.**
+Любые `#`, docstring, inline-комментарии — исключительно на английском.
+Это относится ко всем файлам проекта: `.py`, `.js`, `.html`, `.css`, конфигам.
+Общение с пользователем — на русском. Код — на английском.
+
 ## Rule: Комментарии — уровня мини-скилла
-**Весь новый код комментируется на уровне "мини-скилл" — объясняет WHY, а не WHAT.**
+**All new code must be commented at "mini-skill" level — explain WHY, not WHAT.**
 
-Обязательно документировать:
-- **ПОЧЕМУ** такой подход (а не просто что делает строка)
-- **Ловушки и gotchas** — всё нестандартное поведение, которое уже обжигало
-- **Архитектурный контекст** — как этот кусок вписывается в систему
-- **Что сломается** если убрать фикс или изменить поведение
+Must document:
+- **WHY** this approach was chosen (not just what the line does)
+- **Traps and gotchas** — all non-obvious behaviour that already burned us
+- **Architectural context** — how this piece fits into the system
+- **What breaks** if the fix is removed or behaviour is changed
 
-Пример хорошего комментария (из service mode):
+Good comment example (from service mode):
 ```python
-# ЛОВУШКА — default-arg capture:
-# port=_PROXY_CTRL_PORT вычисляется ОДИН РАЗ при определении класса.
-# Патч dm._PROXY_CTRL_PORT после импорта НЕ влияет на уже захваченный default.
-# Всегда передавай port= явно или патчи сам класс (dm.ProxyControlClient = _TestPCC).
+# TRAP — default-arg capture:
+# port=_PROXY_CTRL_PORT is evaluated ONCE at class definition time (module load).
+# Patching dm._PROXY_CTRL_PORT after import does NOT affect the already-captured default.
+# Always pass port= explicitly or patch the class itself (dm.ProxyControlClient = _TestPCC).
 ```
