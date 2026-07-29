@@ -382,6 +382,12 @@ class DeviceManager:
         # Mutex for YDNU02Controller access (service/firmware operations are blocking)
         self._lock = threading.Lock()
 
+        # Serializes ALL service/firmware operations (enter_service through exit_service).
+        # Prevents concurrent API calls from racing into pcc.enter_service() at the same time,
+        # which would cause proxy to refuse with "ERROR: another control session is active".
+        # Acquired BEFORE pcc.enter_service() so the proxy sees only one client at a time.
+        self._service_lock = threading.Lock()
+
         # YDNU02Controller is created lazily (only when service/firmware op runs).
         # In passthrough mode it routes I/O through ProxyControlClient, not serial.
         self._ctrl: Optional[YDNU02Controller] = None
@@ -746,39 +752,44 @@ class DeviceManager:
 
         Used by: get_info, get_filters, get_settings, get_diag, send_service_cmd,
                  create_backup, reset_settings, reset_filters.
+
+        Thread-safety: _service_lock ensures only ONE service operation runs at a
+        time. Concurrent API calls (e.g. user spamming HELP) will queue up and
+        execute sequentially — no racing into pcc.enter_service().
         """
-        self._pause_event.set()     # Stop: signal bus worker to pause
-        time.sleep(0.2)             # Wait: give worker time to exit readline()
-        pcc = ProxyControlClient()
-        try:
-            pcc.enter_service()     # Proxy: pause broadcast, open passthrough
-            with self._lock:
-                ctrl = self._get_ctrl()
-                try:
-                    ctrl._passthrough = pcc     # Wire: ctrl uses TCP passthrough
+        with self._service_lock:    # Serialize: only ONE service op at a time
+            self._pause_event.set()     # Stop: signal bus worker to pause
+            time.sleep(0.2)             # Wait: give worker time to exit readline()
+            pcc = ProxyControlClient()
+            try:
+                pcc.enter_service()     # Proxy: pause broadcast, open passthrough
+                with self._lock:
+                    ctrl = self._get_ctrl()
+                    try:
+                        ctrl._passthrough = pcc     # Wire: ctrl uses TCP passthrough
 
-                    # Enter YDNU-02 service terminal through passthrough.
-                    # This sends "YDNU MODE SERVICE\r\n" to serial and reads welcome.
-                    # Without this, _send_terminal_command writes to RAW-mode device
-                    # which doesn't understand HELP/FILTER/etc commands.
-                    ctrl.enter_service_mode()
+                        # Enter YDNU-02 service terminal through passthrough.
+                        # This sends "YDNU MODE SERVICE\r\n" to serial and reads welcome.
+                        # Without this, _send_terminal_command writes to RAW-mode device
+                        # which doesn't understand HELP/FILTER/etc commands.
+                        ctrl.enter_service_mode()
 
-                    result = func(ctrl)
+                        result = func(ctrl)
 
-                    # Exit service terminal, return device to RAW mode
-                    ctrl.exit_service_mode(exit_mode)
+                        # Exit service terminal, return device to RAW mode
+                        ctrl.exit_service_mode(exit_mode)
 
-                    ctrl._passthrough = None    # Unwire before returning
-                    self._state = "IDLE"
-                    return result
-                except Exception:
-                    ctrl._passthrough = None
-                    ctrl._close_terminal()      # Ensure terminal is cleanly closed
-                    self._state = "IDLE"
-                    raise
-        finally:
-            pcc.exit_service()          # Resume: proxy restores broadcast
-            self._pause_event.clear()   # Resume: bus worker reconnects and reads
+                        ctrl._passthrough = None    # Unwire before returning
+                        self._state = "IDLE"
+                        return result
+                    except Exception:
+                        ctrl._passthrough = None
+                        ctrl._close_terminal()      # Ensure terminal is cleanly closed
+                        self._state = "IDLE"
+                        raise
+            finally:
+                pcc.exit_service()          # Resume: proxy restores broadcast
+                self._pause_event.clear()   # Resume: bus worker reconnects and reads
 
     def _locked_operation(self, func):
         """
@@ -793,23 +804,24 @@ class DeviceManager:
 
         Used by: set_mode, set_silent.
         """
-        self._pause_event.set()
-        time.sleep(0.2)
-        pcc = ProxyControlClient()
-        try:
-            pcc.enter_service()
-            with self._lock:
-                ctrl = self._get_ctrl()
-                ctrl._passthrough = pcc
-                try:
-                    result = func(ctrl)
-                    self._state = "IDLE"
-                    return result
-                finally:
-                    ctrl._passthrough = None    # Always unwire, even on exception
-        finally:
-            pcc.exit_service()
-            self._pause_event.clear()
+        with self._service_lock:
+            self._pause_event.set()
+            time.sleep(0.2)
+            pcc = ProxyControlClient()
+            try:
+                pcc.enter_service()
+                with self._lock:
+                    ctrl = self._get_ctrl()
+                    ctrl._passthrough = pcc
+                    try:
+                        result = func(ctrl)
+                        self._state = "IDLE"
+                        return result
+                    finally:
+                        ctrl._passthrough = None    # Always unwire, even on exception
+            finally:
+                pcc.exit_service()
+                self._pause_event.clear()
 
     def _raw_locked_operation(self, func):
         """
@@ -828,24 +840,25 @@ class DeviceManager:
         Used by: reset_mcu, reset_hardware, flash_firmware, enter_service,
                  exit_service (manual control endpoints).
         """
-        self._pause_event.set()
-        time.sleep(0.2)
-        pcc = ProxyControlClient()
-        try:
-            pcc.enter_service()
-            with self._lock:
-                ctrl = self._get_ctrl()
-                ctrl._passthrough = pcc
-                try:
-                    return func(ctrl)
-                except Exception:
-                    ctrl._passthrough = None
-                    ctrl._close_terminal()
-                    self._state = "IDLE"
-                    raise
-        finally:
-            pcc.exit_service()          # Always resumes broadcast even after reboot
-            self._pause_event.clear()   # Always resumes bus worker
+        with self._service_lock:
+            self._pause_event.set()
+            time.sleep(0.2)
+            pcc = ProxyControlClient()
+            try:
+                pcc.enter_service()
+                with self._lock:
+                    ctrl = self._get_ctrl()
+                    ctrl._passthrough = pcc
+                    try:
+                        return func(ctrl)
+                    except Exception:
+                        ctrl._passthrough = None
+                        ctrl._close_terminal()
+                        self._state = "IDLE"
+                        raise
+            finally:
+                pcc.exit_service()          # Always resumes broadcast even after reboot
+                self._pause_event.clear()   # Always resumes bus worker
 
     # ══════════════════════════════════════════════════════════════════════════
     # Service mode operations (use _service_operation pattern)

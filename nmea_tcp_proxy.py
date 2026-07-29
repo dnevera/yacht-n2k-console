@@ -182,12 +182,16 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
     except OSError:
         pass
     finally:
-        # Always exit service mode when control client disconnects
-        if service_mode.is_set():
-            service_mode.clear()
-            print("[ctrl] session ended — broadcast resumed", flush=True)
+        # Only clean up service_mode if WE are still the active session.
+        # Race-safe: if a new session connected between SERVICE_END and this
+        # connection closing, service_conn != conn → don't clear the new session's state.
+        # Both checks are atomic under service_conn_lock.
         with service_conn_lock:
-            service_conn = None
+            if service_conn is conn:
+                if service_mode.is_set():
+                    service_mode.clear()
+                    print("[ctrl] session ended — broadcast resumed", flush=True)
+                service_conn = None
         try:
             conn.close()
         except OSError:
