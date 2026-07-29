@@ -71,15 +71,33 @@ _NMEA_LINE_RE = re.compile(
 **КРИТИЧЕСКИ ВАЖНО:** Без этого фильтра init-эхо YDNU-02 попадает в broadcast,
 HA библиотека получает нечитаемые строки и спинится на 100% CPU.
 
-**Control API (:4002) протокол:**
+**Control API (:4002) протокол (gateway mode):**
 ```
-Client -> Proxy:  SERVICE_START\n    -> Proxy pauses broadcast -> ответ READY\n
-Client -> Proxy:  <serial commands>  -> Proxy forwards to serial (passthrough)
-Proxy  -> Client: <serial responses> -> from serial to client
-Client -> Proxy:  SERVICE_END\n      -> Proxy resumes broadcast -> ответ OK\n
+Client -> Proxy:  SERVICE_START\n
+  Proxy internally:
+    1. serial.close()                   — release DTR
+    2. stty -F /dev/ttyACM0 hupcl       — arm DTR hangup-on-close
+    3. echo "YDNU MODE SERVICE" > port  — OS-level mode switch (DTR toggle)
+    4. serial.open(timeout=2.0)         — reopen for service terminal I/O
+  Proxy -> Client: READY\n             — YDNU-02 is now in service terminal mode
 
-FIRMWARE_START / FIRMWARE_END — alias для SERVICE_START/END
+Client -> Proxy:  <terminal command>\r\n  -> forwarded verbatim to serial
+Proxy  -> Client: <terminal response>     -> pushed every 100ms poll
+
+Client -> Proxy:  SERVICE_END\n
+  Proxy internally:
+    1. serial.write(b"MODE RAW\r\n")   — exit service terminal (works: port is open)
+    2. serial.timeout = 0.1            — reset to fast NMEA polling
+    3. service_mode.clear()            — serial_reader resumes broadcast
+  Proxy -> Client: OK\n
+
+FIRMWARE_START / FIRMWARE_END — raw passthrough without DTR mode switch
 ```
+
+**КРИТИЧЕСКИ ВАЖНО:** `serial.write("YDNU MODE SERVICE")` НЕ РАБОТАЕТ пока порт открыт!
+YDNU-02 требует аппаратный DTR toggle (закрыть порт → открыть). Прокси делает это
+внутри себя при SERVICE_START. Ctrl клиент (ProxyControlClient / ydnu02.py) НЕ шлёт
+`YDNU MODE SERVICE` — gateway берёт это на себя полностью.
 
 ---
 
@@ -348,7 +366,11 @@ Byte 6-7: Accelerometer X, Y
 
 ```
 yacht-n2k-console/
-├── ydnu02_tcp_gateway.py     # ПРОКСИ: держит /dev/ttyACM0, broadcast :4001, ctrl :4002
+├── ydnu02_tcp_gateway/   # НЕЗАВИСИМЫЙ МОДУЛЬ — TCP шлюз для YDNU-02
+│   ├── ydnu02_tcp_gateway.py      # сам шлюз: держит /dev/ttyACM0, :4001/:4002
+│   │                              # деплоится в /opt/nmea2000/ydnu02-web/
+│   ├── ydnu02-tcp-gateway.service # systemd unit (Before=ydnu02-web.service)
+│   └── README.md                  # полная документация: архитектура, DTR, деплой
 ├── device_manager.py     # TCPProxyConnection + ProxyControlClient + DeviceManager
 ├── ydnu02.py             # YDNU02Controller (serial protocol, passthrough поддержка)
 ├── n2k_meta.py           # PGN metadata из nmea2000 lib, frame builders (PGN 126208)
@@ -393,7 +415,8 @@ yacht-n2k-console/
 │       ├── dashboard.html, monitor.html, network.html, service.html
 │       ├── gobius.html, mopeka.html, maintenance.html, modal_ble_scan.html
 ├── tests/
-│   ├── test_ydnu02_tcp_gateway.py  # TCP proxy tests
+│   ├── test_ydnu02_tcp_gateway.py  # TCP gateway unit tests
+│   ├── test_service_mode.py       # 19 тестов: ctrl protocol, race fix, DM state machine
 │   ├── test_sensors_service.py
 │   ├── test_gobius_parsers.py
 │   ├── test_mopeka_parsers.py
@@ -411,7 +434,7 @@ yacht-n2k-console/
 
 ## Service Mode — Подробный разбор
 
-### Архитектура сервисного режима
+### Архитектура сервисного режима (актуальная — gateway pattern)
 
 ```
 Фронтенд (Enter кнопка)
@@ -420,21 +443,34 @@ yacht-n2k-console/
         → _pause_event.set()         # bus worker перестаёт читать :4001
         → sleep(0.2)                  # ждём завершения текущего readline()
         → pcc = ProxyControlClient()  # подключаемся к :4002
-        → pcc.enter_service()         # SERVICE_START → READY
-        → ctrl._passthrough = pcc     # YDNU02Controller пишет через pcc
-        → ctrl.enter_service_mode()   # "YDNU MODE SERVICE\r\n" → ответ
+        → pcc.enter_service()         # SERVICE_START
+            GATEWAY делает внутри:
+              serial.close() → stty hupcl → echo "YDNU MODE SERVICE" → serial.open()
+            → READY (YDNU-02 уже в service terminal mode)
+        → ctrl._passthrough = pcc     # YDNU02Controller.write() → pcc.passthrough_write()
+        → ctrl.enter_service_mode()   # НЕ шлёт YDNU MODE SERVICE (gateway уже сделал)
+                                      # только читает welcome + запрашивает HELP
         → self._state = "SERVICE"
-        → возвращает {status:'ok', state:'SERVICE', welcome:'YDNU-02 Help...'}
+        → возвращает {status:'ok', state:'SERVICE', welcome:'Firmware 1.75...'}
 
 Фронтенд (Exit кнопка)
     → POST /api/service/exit
     → DeviceManager.exit_service()
-        → pcc.exit_service()          # SERVICE_END → OK
-        → ctrl.exit_service_mode()    # "MODE RAW\r\n" → "RAW mode.\r\n"
+        → pcc.exit_service()          # SERVICE_END
+            GATEWAY делает внутри:
+              serial.write(b"MODE RAW\r\n") → reset timeout=0.1s
+            → OK
+        → ctrl.exit_service_mode()    # НЕ шлёт MODE RAW (gateway уже сделал)
+                                      # только обновляет self.mode = "RAW"
         → _pause_event.clear()        # bus worker переподключается к :4001
         → self._state = "IDLE"
-        → возвращает {status:'ok', state:'IDLE', response:'RAW mode.\r\n'}
+        → возвращает {status:'ok', state:'IDLE'}
 ```
+
+**КЛЮЧЕВОЕ ПРАВИЛО:** `ydnu02.py::enter_service_mode()` и `exit_service_mode()`
+в passthrough-режиме НЕ отправляют никаких mode-switch команд на устройство.
+Гейтвей (`ydnu02_tcp_gateway.py`) берёт это полностью на себя в SERVICE_START/END.
+See: `ydnu02_tcp_gateway.py::_enter_service_mode_on_device()` и `_exit_service_mode_on_device()`.
 
 ---
 
@@ -676,17 +712,21 @@ ssh user@<gateway-host> 'cat /opt/nmea2000/ydnu02-web/io_state.json'
 ssh user@<gateway-host> 'ps aux --sort=-%cpu | head -5'
 ```
 
-### Деплой прокси (отдельный сервис)
+### Деплой (оба сервиса)
 ```bash
-scp /Users/denn/Develop/yacht/yacht-n2k-console/ydnu02_tcp_gateway.py user@<gateway-host>:/home/denn/
-ssh user@<gateway-host> 'sudo mv /home/denn/ydnu02_tcp_gateway.py /usr/local/bin/ydnu02_tcp_gateway.py \
-  && sudo systemctl restart ydnu02-tcp-gateway \
-  && sudo docker restart homeassistant'
+# Оба сразу (шлюз + веб)
+cd /Users/denn/Develop/yacht/yacht-n2k-console && ./deploy.sh
+
+# Только шлюз (быстро, без перезапуска веб)
+cd /Users/denn/Develop/yacht/yacht-n2k-console && ./deploy.sh user@<gateway-host> --proxy
+
+# Только веб
+cd /Users/denn/Develop/yacht/yacht-n2k-console && ./deploy.sh user@<gateway-host> --web
 ```
 
-### Деплой ydnu02-web
+После рестарта шлюза — **ОБЯЗАТЕЛЬНО** рестартовать HA (CPU spin-loop bug):
 ```bash
-cd /Users/denn/Develop/yacht/yacht-n2k-console && ./deploy.sh
+ssh user@<gateway-host> 'sudo docker restart homeassistant'
 ```
 
 ### Запуск тестов
