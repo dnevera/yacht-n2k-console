@@ -4,6 +4,8 @@ description: >-
   Полное руководство и база знаний по проекту yacht-n2k-console:
   TCP прокси архитектура (nmea_tcp_proxy.py), YDNU-02, Gobius C, Mopeka Pro 200 BLE,
   TCPProxyConnection, ProxyControlClient, DeviceManager, IO Stop/Resume,
+  Service Mode (enter/exit, race-condition fix, frontend #svc-state),
+  тестирование (test_service_mode.py, ProxyControlClient default-arg trap),
   деплой на Raspberry Pi 5 (gateway.local), HA интеграция.
 ---
 
@@ -407,7 +409,194 @@ yacht-n2k-console/
 
 ---
 
-## Двухуровневая система команд YDNU-02
+## Service Mode — Подробный разбор
+
+### Архитектура сервисного режима
+
+```
+Фронтенд (Enter кнопка)
+    → POST /api/service/enter
+    → DeviceManager.enter_service()
+        → _pause_event.set()         # bus worker перестаёт читать :4001
+        → sleep(0.2)                  # ждём завершения текущего readline()
+        → pcc = ProxyControlClient()  # подключаемся к :4002
+        → pcc.enter_service()         # SERVICE_START → READY
+        → ctrl._passthrough = pcc     # YDNU02Controller пишет через pcc
+        → ctrl.enter_service_mode()   # "YDNU MODE SERVICE\r\n" → ответ
+        → self._state = "SERVICE"
+        → возвращает {status:'ok', state:'SERVICE', welcome:'YDNU-02 Help...'}
+
+Фронтенд (Exit кнопка)
+    → POST /api/service/exit
+    → DeviceManager.exit_service()
+        → pcc.exit_service()          # SERVICE_END → OK
+        → ctrl.exit_service_mode()    # "MODE RAW\r\n" → "RAW mode.\r\n"
+        → _pause_event.clear()        # bus worker переподключается к :4001
+        → self._state = "IDLE"
+        → возвращает {status:'ok', state:'IDLE', response:'RAW mode.\r\n'}
+```
+
+---
+
+### Race Condition — Анатомия и Фикс
+
+**ПРОБЛЕМА (была до фикса):**
+```
+Timeline без фикса:
+  t=0:    DeviceManager вызывает enter_service()
+  t=1ms:  service_mode.set()  — прокси "поставил флаг"
+  t=2ms:  pcc.enter_service() → SERVICE_START → прокси отправляет READY
+  t=3ms:  ctrl.enter_service_mode() → pcc.passthrough_write("YDNU MODE SERVICE\r\n")
+  t=4ms:  YDNU-02 отвечает "YD NMEA 2000 USB gateway, FW 4.04. Ready.\r\n"
+  t=???:  serial_reader ещё в readline() (timeout=2.0s!) — читает ответ
+          и пытается сделать broadcast. NMEA фильтр отбрасывает.
+  t=???:  ctrl client ждёт ответ → timeout → пустая строка
+```
+
+**ФИКС — три части:**
+```python
+# 1. serial.Serial(timeout=0.1)  — в serial_reader
+# serial_reader завершает readline() за ≤100мс вместо 2000мс
+# Это уменьшает race window с 2000мс до 100мс
+
+# 2. В handle_ctrl_client при SERVICE_START:
+service_mode.set()          # флаг: serial_reader должен остановиться
+time.sleep(0.15)            # ждём: serial_reader успевает выйти из readline()
+serial_instance.reset_input_buffer()  # сбрасываем накопленное
+# ТЕПЕРЬ отправляем READY — буфер чист, serial_reader спит
+conn.sendall(b'READY\n')
+
+# 3. conn.settimeout(0.1) в handle_ctrl_client
+# Ctrl handler не ждёт 2с пока serial ответит.
+# Каждые 100мс: проверяем serial.in_waiting → если есть данные → форвардим
+```
+
+**Почему sleep(0.15) > timeout(0.1):**
+Serial timeout = 0.1s → serial_reader может быть в начале readline().
+Нужен запас: 0.15s > 0.1s гарантирует что readline() завершился.
+
+---
+
+### Frontend #svc-state Bug (исправлен)
+
+**Была проблема:** кнопки Enter/Exit в UI не обновляли бейдж состояния.
+
+```javascript
+// БЫЛО (багованный код):
+async enterService(btnEl) {
+    await this.withButton(btnEl, '🔌 Enter', async () => {
+        return await this.api('/api/service/enter', 'POST');
+        // result = {status:'ok', state:'SERVICE', welcome:'...'}
+        // но state НИКОГДА не читался → #svc-state не обновлялся
+    });
+},
+
+// СТАЛО (исправленный код):
+async enterService(btnEl) {
+    await this.withButton(btnEl, '🔌 Enter', async () => {
+        const data = await this.api('/api/service/enter', 'POST');
+        this._updateSvcState(data?.state);  // ← обновляем бейдж сразу
+        return { message: data?.state || 'OK' };
+    });
+},
+
+_updateSvcState(state) {
+    const el = document.getElementById('svc-state');
+    if (!el) return;
+    el.textContent = state || 'IDLE';
+    el.className = state === 'SERVICE' ? 'val-green' : 'muted';
+},
+
+// При переключении на вкладку — синхронизируем с сервером:
+async _refreshSvcState() {
+    const data = await this.api('/api/service/state');
+    this._updateSvcState(data?.state);
+},
+```
+
+**Порядок вкладок (актуальный):**
+```
+Dashboard | Monitor | Network | Gobius C | Mopeka | Service | Maintenance
+```
+Service — предпоследняя (как и просил пользователь).
+
+---
+
+### ProxyControlClient — default-arg capture ловушка
+
+```python
+# В device_manager.py:
+_PROXY_CTRL_PORT = int(os.getenv("NMEA_CTRL_PORT", "4002"))  # = 4002 при старте
+
+class ProxyControlClient:
+    def __init__(self, host=_PROXY_HOST, port=_PROXY_CTRL_PORT):  # ← default arg!
+        self._port = port
+```
+
+**ЛОВУШКА:** Python вычисляет `port=_PROXY_CTRL_PORT` ОДИН РАЗ при определении
+класса (загрузка модуля). После этого:
+
+```python
+import device_manager as dm
+dm._PROXY_CTRL_PORT = 9999  # ← НЕ РАБОТАЕТ для default arg!
+PCC = dm.ProxyControlClient()
+PCC._port  # всё равно 4002 !!!
+```
+
+**ПРАВИЛЬНЫЙ СПОСОБ патчить для тестов:**
+```python
+# Вариант 1: передавать порт явно
+ProxyControlClient(port=self.ctrl_port)
+
+# Вариант 2: патчить сам класс в модуле
+_port = self.ctrl_port
+_orig = dm.ProxyControlClient
+class _TestPCC(_orig):
+    def __init__(self): super().__init__(port=_port)
+dm.ProxyControlClient = _TestPCC  # теперь `pcc = ProxyControlClient()` внутри dm
+                                   # создаёт _TestPCC с нашим портом
+# восстановить в tearDown:
+dm.ProxyControlClient = _orig
+```
+
+Патч класса работает потому что внутри `_raw_locked_operation` написано:
+`pcc = ProxyControlClient()` — поиск имени `ProxyControlClient` в `dm.__dict__`
+происходит при ВЫЗОВЕ функции, не при её определении.
+
+---
+
+### Test Patterns для Service Mode
+
+```python
+# Изолированная загрузка прокси (каждый тест — свой экземпляр):
+mod = _load_proxy_module(ctrl_port=_free_port())
+# Каждый вызов создаёт отдельный модуль (уникальное имя в importlib)
+# → отдельный service_mode Event, service_conn = None, clients = set()
+
+# Запуск только ctrl сервера (без DATA port и serial_reader):
+stop = _start_ctrl_server(mod, ctrl_port, fake_serial)
+# Minimal setup: только то что нужно для ctrl protocol тестов
+
+# Обязательный tearDown:
+self.stop.set()                           # останавливаем сервер
+self.mod.service_mode.clear()             # сбрасываем флаг
+with self.mod.service_conn_lock:          # освобождаем сессию
+    self.mod.service_conn = None
+```
+
+**Структура test_service_mode.py:**
+```
+tests/test_service_mode.py — 19 тестов, 4 класса:
+
+TestProxyCtrlProtocol (7)  — raw TCP: START/END/FIRMWARE/passthrough/ERROR/reject/free
+TestServiceModeRaceFix (4) — race fix: reset_input_buffer, delay, <200ms, flag set/clear  
+TestProxyControlClient (4) — PCC: enter/exit/write/read через mock proxy
+TestDeviceManagerService(4)— DM: state машина, concurrent serialization
+```
+
+---
+
+## Структура проекта
 
 **КРИТИЧЕСКИ ВАЖНО:** У YDNU-02 ДВА ОТДЕЛЬНЫХ УРОВНЯ управления:
 1. **OS Shell** — `YDNU MODE ...` через serial (`DeviceManager._locked_operation`)
