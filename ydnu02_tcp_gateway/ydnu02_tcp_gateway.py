@@ -1,30 +1,46 @@
 #!/usr/bin/env python3
 """
-NMEA 2000 bidirectional TCP proxy for YDNU-02
-==============================================
-Data port  (NMEA_PROXY_PORT, default 4001):
-    Serial → TCP: broadcasts \\n-terminated NMEA lines to all clients.
-    TCP → Serial: forwards commands from clients to the bus.
+ydnu02_tcp_gateway.py — NMEA 2000 TCP Gateway for YDNU-02
+==========================================================
 
-Control port (NMEA_CTRL_PORT, default 4002):
-    Single-client control API for service / firmware mode.
-    Protocol:
-        → SERVICE_START   pause broadcast; proxy switches YDNU-02 to service terminal
-        ← READY
-        ← <serial lines>  (passthrough: service terminal output from YDNU-02)
-        → <commands>      (passthrough: service terminal commands forwarded to serial)
-        → SERVICE_END     proxy switches YDNU-02 back to RAW; broadcast resumes
-        ← OK
+DEPLOYMENT
+  File:    /opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py    (gateway.local.local)
+  Service: ydnu02-tcp-gateway.service  (starts BEFORE ydnu02-web.service)
+  Deploy:  ./deploy.sh  or  ./deploy.sh user@<gateway-host> --proxy
 
-        → FIRMWARE_START  same as SERVICE_START but WITHOUT mode switch (raw passthrough)
-        → FIRMWARE_END    same as SERVICE_END but WITHOUT mode switch
+KEY INVARIANT — only this process ever opens /dev/ttyACM0.
+  All other services (ydnu02-web, Home Assistant, Signal K) connect via TCP.
+  HA connects to :4001. ydnu02-web connects to :4001 (data) + :4002 (ctrl).
 
-    Design — proxy as gateway:
-        The YDNU-02 requires an OS-level DTR transition to enter service terminal mode.
-        serial.write("YDNU MODE SERVICE") does NOT work while the port is held open.
-        The proxy handles the full mode switch internally (close → stty hupcl →
-        echo > port → reopen) so the ctrl client never needs to know about it.
-        The ctrl client (ProxyControlClient) only sends/receives terminal commands.
+PORTS
+  :4001  DATA  — Serial→TCP broadcast of NMEA 2000 ASCII frames. Multiple clients.
+  :4002  CTRL  — Exclusive passthrough session for service terminal / firmware flash.
+
+CTRL PROTOCOL (line-oriented UTF-8)
+  → SERVICE_START   proxy does: serial.close() → stty hupcl → echo → serial.open()
+  ← READY           YDNU-02 is now in service terminal mode
+  → <cmd>\r\n       forwarded verbatim to serial
+  ← <response>      pushed to client on each 100ms poll
+  → SERVICE_END     proxy does: serial.write("MODE RAW\r\n") → reset timeout
+  ← OK
+
+CRITICAL DESIGN DECISION — DTR toggle required for service mode entry
+  serial.write("YDNU MODE SERVICE") is SILENTLY IGNORED while port is held open.
+  YDNU-02 only processes the command when it sees a DTR low→high transition,
+  which only happens when the port is CLOSED and then REOPENED (or via OS echo).
+  Therefore: _enter_service_mode_on_device() closes the port, uses subprocess echo,
+  then reopens. The ctrl client (ProxyControlClient / ydnu02.py) does NOT send
+  "YDNU MODE SERVICE" — the gateway handles this entirely internally.
+  See also: ydnu02.py::enter_service_mode() — passthrough path reads welcome only.
+
+THREAD MODEL
+  serial_reader thread  — owns serial_instance, broadcasts to DATA clients
+  ctrl handler thread   — takes over serial_instance during SERVICE_START/END
+  serial_reader adopts  — checks serial_instance every 50ms in service_mode loop
+
+FIRMWARE_START vs SERVICE_START
+  SERVICE_START: full DTR toggle mode switch (YDNU-02 → service terminal)
+  FIRMWARE_START: raw passthrough only, no mode switch (used for firmware flash)
 """
 import os
 import re
