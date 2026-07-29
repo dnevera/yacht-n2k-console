@@ -7,9 +7,10 @@ Object.assign(App, {
     termHistory: [],
     termHistoryIdx: -1,
 
-    /** Called on Service tab switch — loads I/O state */
+    /** Called on Service tab switch — loads I/O state and service mode state */
     async refreshServiceState() {
         await this.ioRefreshState();
+        await this._refreshSvcState();
     },
 
     /** Quick-command buttons (HELP, HELP SET, etc.) */
@@ -182,13 +183,33 @@ Object.assign(App, {
 
     async enterService(btnEl) {
         await this.withButton(btnEl, '🔌 Enter', async () => {
-            return await this.api('/api/service/enter', 'POST');
+            const data = await this.api('/api/service/enter', 'POST');
+            this._updateSvcState(data?.state);
+            return { message: data?.state || 'OK' };
         });
     },
 
     async exitService(btnEl) {
         await this.withButton(btnEl, '⏏ Exit', async () => {
-            return await this.api('/api/service/exit', 'POST');
+            const data = await this.api('/api/service/exit', 'POST');
+            this._updateSvcState(data?.state);
+            return { message: data?.state || 'OK' };
         });
+    },
+
+    /** Poll /api/service/state and sync badge */
+    async _refreshSvcState() {
+        try {
+            const data = await this.api('/api/service/state');
+            this._updateSvcState(data?.state);
+        } catch (e) {}
+    },
+
+    /** Update the #svc-state badge text and color */
+    _updateSvcState(state) {
+        const el = document.getElementById('svc-state');
+        if (!el) return;
+        el.textContent = state || 'IDLE';
+        el.className = state === 'SERVICE' ? 'val-green' : 'muted';
     },
 });
