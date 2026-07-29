@@ -2,7 +2,7 @@
 name: nmea2000-setup
 description: >-
   Полное руководство и база знаний по проекту yacht-n2k-console:
-  TCP прокси архитектура (nmea_tcp_proxy.py), YDNU-02, Gobius C, Mopeka Pro 200 BLE,
+  TCP прокси архитектура (ydnu02_tcp_gateway.py), YDNU-02, Gobius C, Mopeka Pro 200 BLE,
   TCPProxyConnection, ProxyControlClient, DeviceManager, IO Stop/Resume,
   Service Mode (enter/exit, race-condition fix, frontend #svc-state),
   тестирование (test_service_mode.py, ProxyControlClient default-arg trap),
@@ -28,7 +28,7 @@ description: >-
 ```
 YDNU-02 /dev/ttyACM0
        |
-  nmea_tcp_proxy.py  (systemd: nmea-tcp-proxy.service)
+  ydnu02_tcp_gateway.py  (systemd: ydnu02-tcp-gateway.service)
        |-- :4001  DATA port   -> broadcast NMEA строк всем клиентам
        |          <- принимает ISO Request команды от клиентов (scan_bus)
        +-- :4002  CTRL port   -> эксклюзивный serial passthrough (service/firmware)
@@ -40,7 +40,7 @@ YDNU-02 /dev/ttyACM0
 
 **Никто кроме прокси не открывает `/dev/ttyACM0` напрямую.**
 
-### nmea_tcp_proxy.py — ключевые детали
+### ydnu02_tcp_gateway.py — ключевые детали
 
 **Env vars:**
 - `NMEA_SERIAL_PORT` (default `/dev/ttyACM0`)
@@ -246,7 +246,7 @@ HA log: `decoding failed. Invalid CAN Frame ASCII string format`
 
 **ОБЯЗАТЕЛЬНЫЙ restart sequence:**
 ```bash
-sudo systemctl restart nmea-tcp-proxy
+sudo systemctl restart ydnu02-tcp-gateway
 sudo docker restart homeassistant   # <- ОБЯЗАТЕЛЬНО после КАЖДОГО рестарта прокси
 
 # Проверить через 60 сек:
@@ -348,7 +348,7 @@ Byte 6-7: Accelerometer X, Y
 
 ```
 yacht-n2k-console/
-├── nmea_tcp_proxy.py     # ПРОКСИ: держит /dev/ttyACM0, broadcast :4001, ctrl :4002
+├── ydnu02_tcp_gateway.py     # ПРОКСИ: держит /dev/ttyACM0, broadcast :4001, ctrl :4002
 ├── device_manager.py     # TCPProxyConnection + ProxyControlClient + DeviceManager
 ├── ydnu02.py             # YDNU02Controller (serial protocol, passthrough поддержка)
 ├── n2k_meta.py           # PGN metadata из nmea2000 lib, frame builders (PGN 126208)
@@ -393,7 +393,7 @@ yacht-n2k-console/
 │       ├── dashboard.html, monitor.html, network.html, service.html
 │       ├── gobius.html, mopeka.html, maintenance.html, modal_ble_scan.html
 ├── tests/
-│   ├── test_nmea_tcp_proxy.py  # TCP proxy tests
+│   ├── test_ydnu02_tcp_gateway.py  # TCP proxy tests
 │   ├── test_sensors_service.py
 │   ├── test_gobius_parsers.py
 │   ├── test_mopeka_parsers.py
@@ -654,7 +654,7 @@ POST /api/n2k/command              -> универсальный PGN 126208 send
 
 ```bash
 # Прокси работает?
-ssh user@<gateway-host> 'systemctl status nmea-tcp-proxy --no-legend | head -4'
+ssh user@<gateway-host> 'systemctl status ydnu02-tcp-gateway --no-legend | head -4'
 
 # ydnu02-web работает?
 ssh user@<gateway-host> 'systemctl status ydnu02-web --no-legend | head -4'
@@ -667,7 +667,7 @@ ssh user@<gateway-host> 'timeout 15 bash -c "nc localhost 4001" | head -5'
 # Пример: 03:35:31.851 R 19F2115C 00 30 5C 64 00 00 00 FF
 
 # Лог прокси
-ssh user@<gateway-host> 'sudo journalctl -u nmea-tcp-proxy -n 20 --no-pager'
+ssh user@<gateway-host> 'sudo journalctl -u ydnu02-tcp-gateway -n 20 --no-pager'
 
 # IO state
 ssh user@<gateway-host> 'cat /opt/nmea2000/ydnu02-web/io_state.json'
@@ -678,9 +678,9 @@ ssh user@<gateway-host> 'ps aux --sort=-%cpu | head -5'
 
 ### Деплой прокси (отдельный сервис)
 ```bash
-scp /Users/denn/Develop/yacht/yacht-n2k-console/nmea_tcp_proxy.py user@<gateway-host>:/home/denn/
-ssh user@<gateway-host> 'sudo mv /home/denn/nmea_tcp_proxy.py /usr/local/bin/nmea_tcp_proxy.py \
-  && sudo systemctl restart nmea-tcp-proxy \
+scp /Users/denn/Develop/yacht/yacht-n2k-console/ydnu02_tcp_gateway.py user@<gateway-host>:/home/denn/
+ssh user@<gateway-host> 'sudo mv /home/denn/ydnu02_tcp_gateway.py /usr/local/bin/ydnu02_tcp_gateway.py \
+  && sudo systemctl restart ydnu02-tcp-gateway \
   && sudo docker restart homeassistant'
 ```
 
@@ -777,14 +777,14 @@ HA nmea2000 custom integration **не поддерживает YDNU-02 напр�
 несовместимый протокол (YDNU-02 говорит ASCII RAW, интеграция ожидает другое).
 
 **Решение — TCP прокси:**
-Именно поэтому был создан `nmea_tcp_proxy.py`.
+Именно поэтому был создан `ydnu02_tcp_gateway.py`.
 Прокси держит `/dev/ttyACM0` эксклюзивно, инициализирует YDNU-02 в RAW mode,
 фильтрует NMEA строки и раздаёт их по TCP `:4001`.
 HA nmea2000 интеграция подключается к `:4001` и получает чистый NMEA поток.
 
 ```
 /dev/ttyACM0
-    └── nmea_tcp_proxy.py (держит порт ЭКСКЛЮЗИВНО)
+    └── ydnu02_tcp_gateway.py (держит порт ЭКСКЛЮЗИВНО)
             ├── :4001 → HA (nmea2000 custom integration)
             ├── :4001 → ydnu02-web DeviceManager._bus_worker
             └── :4002 → ydnu02-web ProxyControlClient (service/firmware ops)
@@ -809,7 +809,7 @@ services:
       - /mnt/ssd-data/homeassistant/config:/config
       - /etc/localtime:/etc/localtime:ro
       - /run/dbus:/run/dbus:ro
-    # НЕ добавлять devices: ttyACM0 — порт держит nmea_tcp_proxy.py
+    # НЕ добавлять devices: ttyACM0 — порт держит ydnu02_tcp_gateway.py
     environment:
       - TZ=Europe/London
 ```
@@ -821,7 +821,7 @@ services:
 - **Баг в lib v2026.5.2:** при EOF (прокси рестартовал) входит в infinite spin loop → 100% CPU
 - **После КАЖДОГО рестарта прокси ОБЯЗАТЕЛЬНО:**
   ```bash
-  sudo systemctl restart nmea-tcp-proxy
+  sudo systemctl restart ydnu02-tcp-gateway
   sudo docker restart homeassistant
   ```
 
@@ -841,7 +841,7 @@ ssh user@<gateway-host> 'sudo docker logs homeassistant --tail 50'
 ssh user@<gateway-host> 'sudo docker logs homeassistant 2>&1 | grep -i nmea | tail -20'
 
 # Полный стек (прокси + HA)
-ssh user@<gateway-host> 'systemctl status nmea-tcp-proxy --no-legend | head -3 && sudo docker ps --format "{{.Names}} {{.Status}}" | grep homeassistant'
+ssh user@<gateway-host> 'systemctl status ydnu02-tcp-gateway --no-legend | head -3 && sudo docker ps --format "{{.Names}} {{.Status}}" | grep homeassistant'
 ```
 
 ### Путь к HA конфигу

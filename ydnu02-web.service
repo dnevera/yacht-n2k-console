@@ -1,7 +1,9 @@
 [Unit]
 Description=YDNU-02 NMEA 2000 Web Console
-After=network.target bluetooth.target
+# ydnu02-tcp-gateway must be running first — it holds /dev/ttyACM0 and exposes :4001/:4002
+After=network.target bluetooth.target ydnu02-tcp-gateway.service
 Wants=network.target bluetooth.target
+Requires=ydnu02-tcp-gateway.service
 
 [Service]
 Type=simple

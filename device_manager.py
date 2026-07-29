@@ -17,7 +17,7 @@ from ydnu02 import YDNU02Controller, N2KPGNDecoder
 from sensors import GobiusCSensor
 
 # ── Proxy connection configuration ────────────────────────────────────────────
-# These env vars MUST match what nmea_tcp_proxy.py uses (shared config convention).
+# These env vars MUST match what ydnu02_tcp_gateway.py uses (shared config convention).
 # Default values work for local deployment (proxy + web on the same host).
 
 _PROXY_HOST      = os.getenv("NMEA_PROXY_HOST", "127.0.0.1")

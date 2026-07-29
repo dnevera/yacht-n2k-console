@@ -134,7 +134,7 @@ def _recv_line(sock: socket.socket, timeout: float = 3.0) -> str:
 
 def _load_proxy_module(ctrl_port: int = 0) -> types.ModuleType:
     """
-    Load an isolated copy of nmea_tcp_proxy.py.
+    Load an isolated copy of ydnu02_tcp_gateway.py.
 
     Each call returns a NEW module with a unique name — this is essential
     for test isolation: every test gets its own service_mode Event, clients
@@ -142,8 +142,8 @@ def _load_proxy_module(ctrl_port: int = 0) -> types.ModuleType:
     service_mode flag and interfere with each other.
     """
     spec = importlib.util.spec_from_file_location(
-        f'nmea_tcp_proxy_{ctrl_port}',
-        os.path.join(ROOT, 'nmea_tcp_proxy.py'),
+        f'ydnu02_tcp_gateway_{ctrl_port}',
+        os.path.join(ROOT, 'ydnu02_tcp_gateway', 'ydnu02_tcp_gateway.py'),
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

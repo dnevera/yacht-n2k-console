@@ -1,0 +1,30 @@
+[Unit]
+Description=NMEA 2000 TCP proxy gateway for YDNU-02
+After=network.target
+# ydnu02-web depends on the proxy being up; start proxy first
+Before=ydnu02-web.service
+# If proxy dies, restart HA so it reconnects cleanly to port 4001
+OnFailure=homeassistant-restart.service
+
+[Service]
+Type=simple
+User=denn
+WorkingDirectory=/opt/nmea2000/ydnu02-web
+ExecStart=/usr/bin/python3 /opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ydnu02-tcp-gateway
+
+# Serial port access (same group as ydnu02-web)
+SupplementaryGroups=dialout
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/nmea2000/ydnu02-web
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for nmea_tcp_proxy.py
+Tests for ydnu02_tcp_gateway.py
 Covers: Serial→TCP fanout, TCP→Serial forwarding, line buffering,
         CR/LF stripping, empty line filtering, multi-client, reconnect.
 """
@@ -50,11 +50,11 @@ def _recv_line(sock: socket.socket, timeout: float = 3.0) -> bytes:
 # ── proxy loader (isolated per test) ──────────────────────────────────────────
 
 def _load_proxy_module(serial_port: str = '/dev/null', tcp_port: int = 0) -> types.ModuleType:
-    """Load nmea_tcp_proxy with patched constants (does NOT start anything)."""
+    """Load ydnu02_tcp_gateway with patched constants (does NOT start anything)."""
     spec = importlib.util.spec_from_file_location(
-        'nmea_tcp_proxy',
+        'ydnu02_tcp_gateway',
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     'nmea_tcp_proxy.py'),
+                     'ydnu02_tcp_gateway', 'ydnu02_tcp_gateway.py'),
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # executes module-level code (sets constants)
