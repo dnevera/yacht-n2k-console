@@ -1,0 +1,18 @@
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    volumes:
+      - /mnt/ssd-data/homeassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    devices:
+      # YDNU-02 NMEA 2000 USB Gateway (persistent symlink)
+      - /dev/serial/by-id/usb-Yacht_Devices_Ltd._NMEA_2000_USB_Gateway_00402047-if00:/dev/ttyACM0
+    group_add:
+      - dialout
+    environment:
+      - TZ=Europe/London
