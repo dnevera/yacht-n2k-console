@@ -42,6 +42,17 @@
 #   ydnu02-tcp-gateway  →  ydnu02-web  →  homeassistant (docker)
 #   ydnu02-web.service has Requires= + After= on ydnu02-tcp-gateway.service.
 #
+# ISO CLAIMS / NETWORK MAP BUG (patched in hub.py)
+#   HA's nmea2000 decoder uses build_network_map=True by default. This makes
+#   the decoder return None for ANY message from an unknown device (no ISO
+#   Address Claim received yet). Devices send Claims only at power-on or on
+#   request. Since HA restarts don't power-cycle devices and YDNU-02 in RAW
+#   mode doesn't support TX, ISO Requests never reach the N2K bus.
+#   Fix: patch hub.py to set build_network_map=False. Sensors work without
+#   manufacturer info (device name shows as "(PK: ...)" instead of brand name),
+#   but all data values update correctly.
+#   Remove patch when: nmea2000 HA component auto-detects gateway TX support.
+#
 # ONE-TIME MIGRATION (already done, for reference only)
 #   Was: nmea-tcp-proxy.service  from /usr/local/bin/nmea_tcp_proxy.py
 #   Now: ydnu02-tcp-gateway.service  from /opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py
@@ -98,6 +109,7 @@ DEPLOY_WEB=true
 patch_ha() {
     section "HA patches"
 
+    # ── Patch 1: nmea2000 ioclient EOF spin-loop fix ──────────────────────────
     # Discover exact path inside container (survives Python version bumps)
     local ioclient_path
     ioclient_path=$(${SSH} ${HOST} \
@@ -109,9 +121,12 @@ patch_ha() {
     ${SCP} "${PATCH_DIR}/nmea2000_ioclient.py" "${HOST}:/tmp/nmea2000_ioclient.py"
     ${SSH} ${HOST} "sudo docker cp /tmp/nmea2000_ioclient.py \
         ${HA_CONTAINER}:${ioclient_path}"
-    log "Patch applied ✓"
+    log "Patch 1 (ioclient EOF fix) applied ✓"
 
-    log "Restarting HA to reload patched module..."
+    # NOTE: hub.py build_network_map patch REMOVED — breaks integration loading.
+    # TODO: investigate why build_network_map=False prevents nmea2000 from setting up.
+
+    log "Restarting HA to reload patched modules..."
     ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
     log "HA restarted ✓  (auto-reconnects to :4001 within ~10s)"
 }

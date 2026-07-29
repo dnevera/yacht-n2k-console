@@ -83,10 +83,35 @@ service_mode = threading.Event()          # set  → serial in exclusive passthr
 service_conn: socket.socket | None = None # active control client socket
 service_conn_lock = threading.Lock()
 
+# Signals that YDNU-02 has finished its init sequence and is ready for N2K frames.
+# ISO Requests must NOT be sent before this is set — YDNU-02 will ignore them.
+_serial_ready = threading.Event()
+
+# ISO Address Claim (PGN 60928) cache: keyed by source-address bytes (last 2 hex
+# chars of the CAN ID field). Populated from startup serial data and live traffic.
+# Replayed to every new TCP client so HA's nmea2000 decoder can build its network
+# map immediately without needing to transmit an ISO Request on the N2K bus.
+#
+# CAN ID pattern for ISO Address Claim (PGN 60928):
+#   Prio=6, R=0, DP=0, PF=0xEE, PS=0xFF (bcast), SA=varies
+#   => 18EEFFxx in YD RAW format (first 6 chars of 8-char CAN ID = '18EEFF')
+_iso_claim_cache: dict[bytes, bytes] = {}   # SA-hex-bytes → last YD_RAW line
+_iso_claim_lock  = threading.Lock()
+_ISO_CLAIM_RE    = re.compile(rb"^\d{2}:\d{2}:\d{2}\.\d{3} [RT] 18[Ee]{2}[0-9A-Fa-f]{4}")
+
 # ── Data port helpers ─────────────────────────────────────────────────────────
 
 def _broadcast(line: bytes) -> None:
-    """Send a line to all data clients, removing dead ones."""
+    """Send a line to all data clients, removing dead ones.
+    
+    Also caches ISO Address Claim lines (PGN 60928) for replay to new clients.
+    """
+    # Cache ISO Address Claims so new clients can receive them on connect
+    if _ISO_CLAIM_RE.match(line):
+        sa_key = line[21:23]   # last 2 hex chars of 8-char CAN ID = source address
+        with _iso_claim_lock:
+            _iso_claim_cache[sa_key] = line
+
     dead: set = set()
     with clients_lock:
         for conn in list(clients):
@@ -97,11 +122,87 @@ def _broadcast(line: bytes) -> None:
         clients.difference_update(dead)
 
 
+def _replay_iso_claims(conn: socket.socket) -> None:
+    """Send all cached ISO Address Claim lines to a newly connected client.
+
+    Called immediately after a new data client registers, before normal data
+    starts flowing. This primes HA's network map so that subsequent PGN decodes
+    return non-None and sensor states update.
+
+    ISO Address Claims are cached from:
+      1. YDNU-02 startup data (captured during serial init)
+      2. Live N2K traffic (devices send Claims on power-on or address conflict)
+    """
+    with _iso_claim_lock:
+        claims = list(_iso_claim_cache.values())
+    if not claims:
+        print("[data] no cached ISO Claims to replay", flush=True)
+        return
+    sent = 0
+    for claim in claims:
+        try:
+            conn.sendall(claim)
+            sent += 1
+        except OSError:
+            break
+    print(f"[data] replayed {sent}/{len(claims)} cached ISO Claim(s)", flush=True)
+
+
+_iso_request_lock = threading.Lock()
+_iso_request_last_sent: float = 0.0
+_ISO_REQUEST_MIN_INTERVAL = 5.0  # seconds: don't flood bus with requests
+
+
+def _send_iso_request() -> None:
+    """Best-effort: transmit ISO Request (PGN 59904) via YDNU-02 RAW TX.
+
+    Asks all N2K devices to broadcast their ISO Address Claim (PGN 60928).
+    Effective only if YDNU-02 firmware supports TX in RAW mode.
+    Primary mechanism is _replay_iso_claims() which works unconditionally.
+
+    YDNU-02 RAW TX format: "HH:MM:SS.mmm T CANID DD DD DD\r\n"
+    CAN ID 18EAFFFE: prio=6, PF=0xEA (ISO Request), PS=0xFF, SA=0xFE (null)
+    Data: 00 EE 00  (PGN 60928 in little-endian, 3 bytes)
+    """
+    global _iso_request_last_sent
+    with _iso_request_lock:
+        now = time.time()
+        if now - _iso_request_last_sent < _ISO_REQUEST_MIN_INTERVAL:
+            return
+        _iso_request_last_sent = now
+
+    if not _serial_ready.wait(timeout=10.0):
+        print("[data] ISO Request skipped — YDNU-02 not ready after 10s", flush=True)
+        return
+
+    with serial_lock:
+        ser = serial_instance
+    if ser is None or not ser.is_open or service_mode.is_set():
+        return
+    frame = b"00:00:00.000 T 18EAFFFE 00 EE 00\r\n"
+    try:
+        ser.write(frame)
+        print("[data] ISO Request TX sent (best-effort)", flush=True)
+    except serial.SerialException as e:
+        print(f"[data] ISO Request TX error: {e}", flush=True)
+
+
 def handle_data_client(conn: socket.socket, addr) -> None:
     """Data port client: register for Serial→TCP broadcast, forward TCP→Serial."""
     print(f"[data] client connected: {addr}", flush=True)
     with clients_lock:
         clients.add(conn)
+
+    # 1. Replay cached ISO Address Claims so HA can build its network map immediately.
+    #    Claims are cached from YDNU-02 startup data and live N2K traffic.
+    #    Without this, HA's decoder (build_network_map=True) returns None for all
+    #    messages and sensors stay Unavailable indefinitely.
+    _replay_iso_claims(conn)
+
+    # 2. Best-effort ISO Request TX (works only if YDNU-02 supports RAW TX mode).
+    #    Triggers fresh Claims from devices that came online after our startup.
+    _send_iso_request()
+
     try:
         while True:
             data = conn.recv(4096)
@@ -400,19 +501,43 @@ def serial_reader() -> None:
                 serial_instance = ser
             print(f"[serial] opened {SERIAL_PORT} @ {SERIAL_BAUD}", flush=True)
 
-            # Initialize YDNU-02 into RAW mode.
-            # serial.write() works here because we just opened a fresh connection
-            # (DTR transitioned low→high). The device processes YDNU MODE RAW on startup.
-            # "0\n" sets the filter to show-all (equivalent to PRINT GLOBAL_RX 0).
+            # Capture ALL bytes during init (don't discard) so we can extract
+            # any ISO Address Claims the YDNU-02 or other devices sent at startup.
+            init_data = b""
+
             ser.write(b"YDNU MODE RAW\r\n")
             time.sleep(2.0)
             if ser.in_waiting:
-                ser.read(ser.in_waiting)   # flush mode-switch echo
+                init_data += ser.read(ser.in_waiting)
             ser.write(b"0\n")
             time.sleep(0.5)
             if ser.in_waiting:
-                ser.read(ser.in_waiting)   # flush filter echo
+                init_data += ser.read(ser.in_waiting)
             print("[serial] YDNU-02 initialized in RAW mode", flush=True)
+
+            # Parse startup data for ISO Address Claims and cache them.
+            # YDNU-02 sends its own Claim (and may relay others) right after init.
+            # These are the only Claims we'll see without an explicit ISO Request.
+            for raw_line in init_data.split(b"\n"):
+                if not raw_line:
+                    continue
+                line = raw_line.rstrip(b"\r") + b"\n"
+                if _NMEA_LINE_RE.match(line) and _ISO_CLAIM_RE.match(line):
+                    sa_key = line[21:23]
+                    with _iso_claim_lock:
+                        _iso_claim_cache[sa_key] = line
+                    print(f"[serial] cached startup ISO Claim: "
+                          f"{line.decode(errors='ignore').strip()}", flush=True)
+
+            claimed = len(_iso_claim_cache)
+            print(f"[serial] {claimed} ISO Claim(s) cached from startup data", flush=True)
+
+            # Signal readiness and send initial ISO Request so all N2K devices
+            # announce themselves. This primes HA's network map even if HA connected
+            # before init completed (the _serial_ready.wait() in _send_iso_request
+            # ensures the on-connect call also runs after this point).
+            _serial_ready.set()
+            _send_iso_request()
 
             while True:
                 if service_mode.is_set():
@@ -442,12 +567,14 @@ def serial_reader() -> None:
 
         except serial.SerialException as e:
             print(f"[serial] error: {e} — retrying in 5s", flush=True)
+            _serial_ready.clear()  # not ready until re-initialized
             with serial_lock:
                 serial_instance = None
             service_mode.clear()   # safety: exit service mode on serial error
             time.sleep(5)
         except Exception as e:
             print(f"[serial] unexpected error: {e} — retrying in 5s", flush=True)
+            _serial_ready.clear()
             with serial_lock:
                 serial_instance = None
             service_mode.clear()
