@@ -128,7 +128,7 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
         service_conn = conn
 
     try:
-        conn.settimeout(2.0)
+        conn.settimeout(0.1)
         buf = b""
 
         while True:
@@ -159,6 +159,16 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
                 if cmd in ("SERVICE_START", "FIRMWARE_START"):
                     service_mode.set()
                     print(f"[ctrl] {cmd} — broadcast paused", flush=True)
+                    # Wait for serial_reader to exit its current readline() cycle.
+                    # With timeout=0.1s, serial_reader releases the port in ≤100ms.
+                    # Then flush any accumulated serial data (NMEA frames, echoes)
+                    # so the first passthrough read sees only device responses,
+                    # not stale data from before SERVICE_START.
+                    time.sleep(0.15)
+                    with serial_lock:
+                        _ser = serial_instance
+                    if _ser and _ser.is_open:
+                        _ser.reset_input_buffer()
                     _ctrl_send(conn, "READY")
 
                 elif cmd in ("SERVICE_END", "FIRMWARE_END"):
@@ -209,7 +219,7 @@ def serial_reader() -> None:
     global serial_instance
     while True:
         try:
-            ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=2,
+            ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=0.1,
                                 dsrdtr=True, rtscts=False)
             ser.dtr = True
             with serial_lock:
