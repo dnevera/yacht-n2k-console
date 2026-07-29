@@ -36,9 +36,10 @@ const App = {
     /** Generate ➕ Add Sensor buttons for all tabs with data-sensor-type attribute */
     initTabActions() {
         document.querySelectorAll('.tab-actions[data-sensor-type]').forEach(el => {
+            if (el.querySelector('.btn-add-sensor')) return; // already initialized
             const type = el.dataset.sensorType;
             const btn = document.createElement('button');
-            btn.className = 'btn';
+            btn.className = 'btn btn-add-sensor';
             btn.title = 'Add ' + type + ' sensor';
             btn.textContent = '➕ Add Sensor';
             btn.addEventListener('click', () => this.bleScanModal(type));
