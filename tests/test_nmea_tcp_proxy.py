@@ -311,7 +311,7 @@ class TestIntegration(unittest.TestCase):
             try:
                 conn, addr = srv.accept()
                 ct = threading.Thread(
-                    target=mod.handle_client, args=(conn, addr), daemon=True
+                    target=mod.handle_data_client, args=(conn, addr), daemon=True
                 )
                 ct.start()
             except _socket.timeout:
