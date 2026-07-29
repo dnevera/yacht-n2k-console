@@ -28,12 +28,13 @@
 #   The .service unit goes via /tmp → sudo mv (only systemd dir needs root).
 #   NEVER use "sudo cp + sudo chown" for py files — scp ownership is correct.
 #
-# HA RESTART (MANDATORY after every proxy restart)
-#   Bug in nmea2000 lib v2026.5.2 (ioclient.py): when the proxy TCP connection
-#   drops on restart, HA enters an infinite spin loop at 100% CPU.
-#   Fix: always "sudo docker restart homeassistant" after proxy restart.
-#   This script does it automatically in the --proxy / both sections.
-#   Only --web skips it (proxy not touched → HA connection unaffected).
+# HA AUTO-RECONNECT (spin-loop bug fixed)
+#   Bug was in nmea2000 lib v2026.5.2 TextNmea2000Gateway._receive_impl():
+#   readline() returns b"" on EOF but no check existed → silent return →
+#   _receive_loop() spun at 100% CPU. Fixed: raise ConnectionError on b"".
+#   Patch applied to HA container. PR: github.com/dnevera/nmea2000
+#   HA now auto-reconnects to :4001 within ~10s after gateway restart.
+#   --web deploy: gateway untouched → HA connection unaffected.
 #
 # SERVICE START ORDER
 #   ydnu02-tcp-gateway  →  ydnu02-web  →  homeassistant (docker)
@@ -101,14 +102,13 @@ if $DEPLOY_PROXY; then
       && echo 'ydnu02-tcp-gateway: RUNNING ✓' || echo 'ydnu02-tcp-gateway: FAILED ✗'"
     log "ydnu02-tcp-gateway deploy complete ✓"
 
-    # ── HA restart (MANDATORY after every proxy restart) ─────────────────────
-    # Bug in nmea2000 lib v2026.5.2 (ioclient.py): when the proxy TCP connection
-    # drops (EOF on reconnect), HA enters an infinite spin loop at 100% CPU.
-    # The only fix is a full HA container restart. See SKILL.md §HA CPU Spin Loop.
-    log "Restarting Home Assistant (CPU spin-loop bug workaround)..."
-    ${SSH} ${HOST} "sudo docker restart homeassistant" \
-      && log "Home Assistant restarted ✓" \
-      || warn "HA restart failed — check: ssh ${HOST} 'sudo docker ps'"
+    # ── HA reconnects automatically (no restart needed) ──────────────────────
+    # Previously required: sudo docker restart homeassistant
+    # Fixed in nmea2000 lib: TextNmea2000Gateway._receive_impl() now raises
+    # ConnectionError on EOF (b"") instead of silently returning, which caused
+    # _receive_loop() to spin at 100% CPU. PR: github.com/dnevera/nmea2000
+    # HA now auto-reconnects to :4001 within ~10s after gateway restart.
+    log "HA will auto-reconnect to gateway (spin-loop bug fixed) ✓"
 fi
 
 # ── Web Service ───────────────────────────────────────────────────────────────
