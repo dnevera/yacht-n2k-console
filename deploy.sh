@@ -1,18 +1,55 @@
 #!/usr/bin/env bash
 #
-# YDNU-02 Web Console + N2K Proxy — deploy to gateway.local (Pi5)
+# deploy.sh — YDNU-02 Web Console + TCP Gateway deploy to gateway.local (Pi5)
 #
-# Usage:
-#   ./deploy.sh [host]           — deploy both web service and proxy
-#   ./deploy.sh [host] --proxy   — deploy proxy only (ydnu02_tcp_gateway.py + service)
-#   ./deploy.sh [host] --web     — deploy web service only
+# ── MINI-SKILL (read this if context is lost) ─────────────────────────────────
 #
-# Default host: user@<gateway-host>
+# WHAT THIS DEPLOYS
+#   Two independent services, both living in /opt/nmea2000/ydnu02-web/ :
 #
-# Both services are collocated in /opt/nmea2000/ydnu02-web/:
-#   ydnu02_tcp_gateway.py     → ydnu02-tcp-gateway.service (starts first)
-#   app.py + ...     → ydnu02-web.service (requires ydnu02-tcp-gateway)
+#   1. ydnu02-tcp-gateway   (ydnu02_tcp_gateway/ydnu02_tcp_gateway.py)
+#      Holds /dev/ttyACM0 exclusively. Exposes:
+#        :4001  DATA — NMEA 2000 ASCII broadcast to all TCP clients (HA + web)
+#        :4002  CTRL — exclusive passthrough for service terminal / firmware
+#      systemd: ydnu02-tcp-gateway.service  (starts BEFORE ydnu02-web)
 #
+#   2. ydnu02-web           (app.py + routes/ + static/ + …)
+#      FastAPI web console on :8080. Reads NMEA from :4001, sends ctrl via :4002.
+#      systemd: ydnu02-web.service  (Requires=ydnu02-tcp-gateway.service)
+#
+# USAGE
+#   ./deploy.sh [host]           — deploy both services  (default: user@<gateway-host>)
+#   ./deploy.sh [host] --proxy   — gateway only (faster, no web restart)
+#   ./deploy.sh [host] --web     — web only (gateway untouched, no HA restart)
+#
+# FILE OWNERSHIP RULE
+#   ydnu02_tcp_gateway.py is uploaded via scp directly to REMOTE_DIR.
+#   scp as user denn → file is denn-owned automatically. NO sudo needed.
+#   The .service unit goes via /tmp → sudo mv (only systemd dir needs root).
+#   NEVER use "sudo cp + sudo chown" for py files — scp ownership is correct.
+#
+# HA RESTART (MANDATORY after every proxy restart)
+#   Bug in nmea2000 lib v2026.5.2 (ioclient.py): when the proxy TCP connection
+#   drops on restart, HA enters an infinite spin loop at 100% CPU.
+#   Fix: always "sudo docker restart homeassistant" after proxy restart.
+#   This script does it automatically in the --proxy / both sections.
+#   Only --web skips it (proxy not touched → HA connection unaffected).
+#
+# SERVICE START ORDER
+#   ydnu02-tcp-gateway  →  ydnu02-web  →  homeassistant (docker)
+#   ydnu02-web.service has Requires= + After= on ydnu02-tcp-gateway.service.
+#
+# ONE-TIME MIGRATION (already done, for reference only)
+#   Was: nmea-tcp-proxy.service  from /usr/local/bin/nmea_tcp_proxy.py
+#   Now: ydnu02-tcp-gateway.service  from /opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py
+#   Also removed: ydnu02-tcp.service (legacy socat bridge, never used)
+#   Migration steps were done manually via SSH (not repeatable via this script).
+#
+# VERIFY AFTER DEPLOY
+#   ssh user@<gateway-host> 'systemctl is-active ydnu02-tcp-gateway ydnu02-web'
+#   ssh user@<gateway-host> 'ss -tnp | grep 4001'    # 2 ESTAB: HA + ydnu02-web
+#   curl http://gateway.local:8080/api/info           # firmware_version, state: online
+# ──────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
