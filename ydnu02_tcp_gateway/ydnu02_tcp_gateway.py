@@ -288,9 +288,15 @@ def _send_iso_request() -> None:
     frame = b"00:00:00.000 T 18EAFFFE 00 EE 00\r\n"
     try:
         ser.write(frame)
-        print("[data] ISO Request TX sent (best-effort)", flush=True)
+        print("[data] ISO Request TX sent to serial (best-effort)", flush=True)
     except serial.SerialException as e:
         print(f"[data] ISO Request TX error: {e}", flush=True)
+
+    # Also broadcast ISO Request to TCP data clients so virtual devices
+    # (e.g. N2KDevice at SA=200) receive it and respond with their ISO Claim.
+    # Format: R-type frame (incoming), SA=0xFE (null address, from gateway itself)
+    tcp_iso_req = _fmt_frame('18EAFFFE', b'\x00\xee\x00')
+    _broadcast(tcp_iso_req)
 
 
 def handle_data_client(conn: socket.socket, addr) -> None:
