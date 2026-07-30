@@ -103,20 +103,28 @@ The heart of the dynamic configuration system. Extracts field metadata for **any
 }
 ```
 
-### device_manager.py — Bus Worker & Discovery
+### nmea_tcp_proxy.py — Standalone TCP Gateway Proxy
 
-- Owns the serial port via `_bus_worker` daemon thread
+- **Exclusive Serial Ownership**: Holds `/dev/ttyACM0` at 115200 baud. No other application opens the USB serial device directly.
+- **Port 4001 (DATA)**: Multi-client broadcast server. Any frame read from serial is immediately broadcasted to all connected TCP clients. Writes from clients are multiplexed down to the serial port.
+- **Port 4002 (CTRL)**: Exclusive control channel (`ProxyControlClient`). Used to pause serial I/O and switch YDNU-02 to service mode for diagnostics, configuration, or firmware flashing.
+- **TCP Disconnect / EOF Protection**: Client sockets raise `ConnectionError` on `b""` (EOF) instead of busy-spinning. Upstream `TextNmea2000Gateway` in `nmea2000` library handles TCP disconnects cleanly without CPU lockup.
+
+### device_manager.py — Bus Worker & TCP Connection
+
+- Manages the TCP stream via `TCPProxyConnection` (port 4001) with exponential backoff reconnect
+- Uses `ProxyControlClient` (port 4002) for atomic hardware pause/resume
 - Parses raw CAN frames using `N2KPGNDecoder` (from `ydnu02.py`)
 - Maintains `_discovered_bus_devices` dict keyed by source address
 - Uses `N2KPGNDecoder.parse_device_info()` for library-based manufacturer/model resolution
 - Tracks `active_pgns` per device for dynamic config UI
 - Manages sensor instances (`GobiusCSensor`) updated from PGN 127505
-- Thread-safe via `_lock` (serial access) and `_sensors_lock` (state)
+- Thread-safe via `_lock` (socket access) and `_sensors_lock` (state)
 
 ### ydnu02.py — YDNU-02 Protocol
 
 - `N2KPGNDecoder`: CAN frame parsing, device info extraction, PGN decode
-- `YDNU02Controller`: serial port management, read/write, service mode commands
+- `YDNU02Controller`: serial/socket port management, read/write, service mode commands
 - Service mode operations: `INFO`, `STATUS`, `MODE`, `RESET`, firmware upload
 
 ## NMEA 2000 Protocol Reference
