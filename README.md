@@ -13,6 +13,26 @@ A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
 - **Live Bus Monitor** — real-time CAN frame viewer via WebSocket
 - **YDNU-02 Gateway Management** — serial protocol control, service mode, firmware updates
 
+## Screenshots
+
+| Dashboard | Monitor |
+|:---:|:---:|
+| ![Dashboard](screenshots/Screenshot%202026-07-30%20at%2017.08.13.png) | ![Monitor](screenshots/Screenshot%202026-07-30%20at%2017.08.24.png) |
+
+| Network — Device Discovery | Gobius C — BLE Config |
+|:---:|:---:|
+| ![Network](screenshots/Screenshot%202026-07-30%20at%2017.08.36.png) | ![Gobius C](screenshots/Screenshot%202026-07-30%20at%2017.08.44.png) |
+
+| Mopeka Pro 200 | Service Terminal |
+|:---:|:---:|
+| ![Mopeka](screenshots/Screenshot%202026-07-30%20at%2017.08.51.png) | ![Service](screenshots/Screenshot%202026-07-30%20at%2017.09.20.png) |
+
+| Maintenance — Backup, Reset & Firmware |
+|:---:|
+| ![Maintenance](screenshots/Screenshot%202026-07-30%20at%2017.09.36.png) |
+
+
+
 ## Architecture
 
 ```
