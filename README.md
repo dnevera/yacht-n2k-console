@@ -8,7 +8,8 @@ A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
 
 - **Device Discovery** — automatic detection of all NMEA 2000 devices on the CAN bus via ISO Address Claim (PGN 60928) and Product Information (PGN 126996)
 - **Dynamic Configuration** — read and write device parameters using PGN 126208 Group Functions (Read/Write Fields, Command) with field metadata extracted dynamically from the `nmea2000` Python library
-- **Tank Level Monitoring** — Gobius C (NMEA 2000 + BLE) and Mopeka Pro 200 (BLE) fluid sensor support
+- **Tank Level Monitoring** — Gobius C (NMEA 2000 data + BLE configuration) and Mopeka Pro 200 (BLE) fluid sensor support
+- **BLE Configuration Management** — centralized confirmation dialogs, change-detection DOM safety guards, dangerous action warnings (`adv_off`, `initialize`, N2K disabling)
 - **Live Bus Monitor** — real-time CAN frame viewer via WebSocket
 - **YDNU-02 Gateway Management** — serial protocol control, service mode, firmware updates
 
@@ -20,11 +21,11 @@ A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
 │                                                          │
 │  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐  │
 │  │  FastAPI     │   │  Device      │   │  BLE         │  │
-│  │  + WebSocket │◄──│  Manager     │◄──│  Scanner     │  │
-│  │  (app.py)    │   │  (bus_worker)│   │  (Mopeka/    │  │
-│  └──────┬───────┘   └──────┬───────┘   │   Gobius)    │  │
-│         │                  │           └──────────────┘  │
-│         │           ┌──────┴───────┐                     │
+│  │  + WebSocket │◄──│  Manager     │◄──│  Poller /    │  │
+│  │  (app.py)    │   │  (bus_worker)│   │  Scanner     │  │
+│  └──────┬───────┘   └──────┬───────┘   │  (Mopeka/    │  │
+│         │                  │           │   Gobius)    │  │
+│         │           ┌──────┴───────┐   └──────────────┘  │
 │         │           │  YDNU-02     │                     │
 │         │           │  Serial Port │                     │
 │         │           │  /dev/ttyACM0│                     │
@@ -48,7 +49,7 @@ A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
 | Component | Model | Interface |
 |-----------|-------|-----------|
 | USB-CAN Gateway | Yacht Devices YDNU-02 | USB Serial (`/dev/ttyACM0`) |
-| Fluid Sensor | Gobius C | NMEA 2000 + BLE |
+| Fluid Sensor | Gobius C | NMEA 2000 (telemetry) + BLE (configuration) |
 | Tank Sensor | Mopeka Pro 200 | BLE Advertisement |
 | Battery Monitor | Victron SmartShunt | NMEA 2000 |
 | Solar Charger | Victron MPPT | NMEA 2000 |
@@ -90,11 +91,23 @@ http://<raspberry-pi-ip>:8080
 | `POST` | `/api/n2k/devices/{src}/config/{pgn}` | Write fields, verify with read-back diff |
 | `GET` | `/api/n2k/pgn/{pgn}/metadata` | Get field metadata (types, enums, units) |
 
+### Gobius C BLE Configuration
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/gobius/status` | Full BLE sensor read (Status, Measurement, Config, Info) |
+| `GET` | `/api/gobius/live` | Fast live telemetry poller status |
+| `POST` | `/api/gobius/n2k` | Write N2K Config GATT `0xFFF2` (enable, instance, fluid type, volume) |
+| `POST` | `/api/gobius/user_config` | Write User Config GATT `0xFFE6` (geometry & LP filters) |
+| `POST` | `/api/gobius/info` | Write Tank Info GATT `0xFFEB/0xFFEC` (name & comment) |
+| `POST` | `/api/gobius/command` | Send command GATT `0xFFE7` (start/stop/calibrate/initialize/write_info) |
+
 ### Sensors & Monitoring
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/sensors` | All sensor readings |
+| `GET` | `/api/dashboard/sensors` | Unified sensor cards with NMEA, BLE, and Registry channels |
 | `GET` | `/api/device/status` | Gateway status and bus health |
 | `WS` | `/ws/monitor` | Live CAN frame stream |
 | `WS` | `/ws/scan` | Device discovery scan |
