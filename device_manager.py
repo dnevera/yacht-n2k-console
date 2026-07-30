@@ -655,12 +655,12 @@ class DeviceManager:
                 # only when the last frame arrives. Non-fast PGNs (like 60928) return
                 # immediately and we ignore them here (already handled above).
                 lib_msg = N2KPGNDecoder.feed_to_lib(parsed)
-                if lib_msg is not None and lib_msg.pgn == 126996:
+                if lib_msg is not None and lib_msg.PGN == 126996:
                     fields = {f.id: f for f in lib_msg.fields}
-                    dev = self._discovered_bus_devices.get(lib_msg.src)
-                    if dev is None and lib_msg.src is not None:
+                    dev = self._discovered_bus_devices.get(lib_msg.source)
+                    if dev is None and lib_msg.source is not None:
                         dev = self._discovered_bus_devices.setdefault(
-                            lib_msg.src, {"src": lib_msg.src}
+                            lib_msg.source, {"src": lib_msg.source}
                         )
                     if dev is not None:
                         for field_id, attr in (

@@ -725,7 +725,7 @@ class TestFeedToLib(unittest.TestCase):
         result = N2KPGNDecoder.feed_to_lib(parsed)
         # Library returns message for single-frame PGNs immediately
         self.assertIsNotNone(result)
-        self.assertEqual(result.pgn, 60928)
+        self.assertEqual(result.PGN, 60928)
 
     def test_feed_to_lib_exception_returns_none(self):
         """feed_to_lib must never raise — returns None on decode error."""
