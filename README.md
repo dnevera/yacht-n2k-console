@@ -28,7 +28,7 @@ A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
 │         │      TCP :4001 / │ :4002     └──────────────┘                 │
 │         │           ┌──────┴─────────────────────┐                     │
 │         │           │  TCP Proxy / Gateway       │                     │
-│         │           │  (nmea_tcp_proxy.py)       │                     │
+│         │           │  (ydnu02_tcp_gateway.py)   │                     │
 │         │           │  Holds /dev/ttyACM0 exclusively                    │
 │         │           └─────────────┬──────────────┘                     │
 └─────────┼─────────────────────────┼────────────────────────────────────┘
@@ -120,7 +120,9 @@ http://<raspberry-pi-ip>:8080
 |--------|----------|-------------|
 | `GET` | `/api/sensors` | All sensor readings |
 | `GET` | `/api/dashboard/sensors` | Unified sensor cards with NMEA, BLE, and Registry channels |
-| `GET` | `/api/device/status` | Gateway status and bus health |
+| `GET` | `/api/info` | Gateway status and bus health |
+| `POST` | `/api/mode/{mode}` | Set YDNU-02 operating mode |
+| `POST` | `/api/silent/{state}` | Enable/disable silent mode |
 | `WS` | `/ws/monitor` | Live CAN frame stream |
 | `WS` | `/ws/scan` | Device discovery scan |
 

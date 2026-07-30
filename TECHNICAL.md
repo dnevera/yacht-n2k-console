@@ -9,18 +9,20 @@ yacht-n2k-console/
 ├── ydnu02.py               # YDNU-02 serial protocol, N2KPGNDecoder, service mode
 ├── n2k_meta.py             # Dynamic PGN field metadata extraction from nmea2000 lib
 ├── n2k_command_builder.py  # Legacy hardcoded command builder (deprecated by n2k_meta)
+├── models.py               # Pydantic request/response models
+├── scan_gobius.py          # CLI utility for direct Gobius C BLE scanning
 │
 ├── routes/
 │   ├── __init__.py         # Lazy singleton getters (avoid circular imports)
-│   ├── device.py           # GET /api/device/status, /api/sensors
+│   ├── device.py           # GET /api/info, /api/sensors, /api/dashboard/sensors
 │   ├── n2k_config.py       # Dynamic device config API (PGN 126208)
 │   ├── n2k.py              # Legacy N2K command endpoint
-│   ├── gobius.py           # Gobius C sensor management
+│   ├── gobius.py           # Gobius C BLE sensor management & config
 │   ├── mopeka.py           # Mopeka Pro BLE sensor management
-│   ├── ble.py              # BLE device registry
-│   ├── service.py          # YDNU-02 service mode, I/O pause
-│   ├── maintenance.py      # Factory reset, diagnostics
-│   ├── firmware.py         # Firmware update flow
+│   ├── ble.py              # BLE device registry (scan, bind, delete)
+│   ├── service.py          # YDNU-02 service mode, I/O pause/resume, diagnostics
+│   ├── maintenance.py      # Backup, factory reset, MCU/hardware reset
+│   ├── firmware.py         # Firmware download, upload, and flash
 │   └── websockets.py       # /ws/monitor, /ws/scan
 │
 ├── sensors/
@@ -34,6 +36,15 @@ yacht-n2k-console/
 ├── mopeka_scanner.py       # Mopeka Pro BLE advertisement scanner
 ├── mopeka_parsers.py       # Mopeka BLE advertisement data parsers
 │
+├── ydnu02_tcp_gateway/     # Standalone TCP Gateway module (see ydnu02_tcp_gateway/README.md)
+│   ├── ydnu02_tcp_gateway.py      # Proxy server — exclusive /dev/ttyACM0 owner
+│   ├── ydnu02_gateway_device.py   # Virtual N2K node SA=200 (ISO Claim, HB, CPU Temp)
+│   └── ydnu02-tcp-gateway.service # systemd unit (starts before ydnu02-web)
+│
+├── patches/                # Runtime patches for third-party libraries
+│   ├── nmea2000_ioclient.py       # EOF fix — prevents 100% CPU spin in TextNmea2000Gateway
+│   └── README.md                  # Patch documentation and apply instructions
+│
 ├── static/
 │   ├── index.html          # Shell with tab navigation
 │   ├── css/style.css       # Dark theme UI styles
@@ -43,17 +54,17 @@ yacht-n2k-console/
 │   │   ├── network.js      # Network tab — CAN bus scan, device cards
 │   │   ├── n2k_config.js   # Dynamic N2K config modal (from API metadata)
 │   │   ├── monitor.js      # Monitor tab — live CAN frame viewer
-│   │   ├── gobius.js       # Gobius tab — BLE pairing, calibration
+│   │   ├── gobius.js       # Gobius tab — BLE pairing, calibration, config
 │   │   ├── mopeka.js       # Mopeka tab — BLE scan, binding
 │   │   ├── service.js      # Service tab — YDNU-02 terminal
-│   │   └── maintenance.js  # Maintenance tab — reset, diagnostics
+│   │   └── maintenance.js  # Maintenance tab — reset, diagnostics, firmware
 │   └── tabs/               # HTML fragments loaded into tab sections
 │
 ├── tests/                  # API and unit tests
-├── deploy.sh               # SCP deploy to gateway.local + service restart
+├── deploy.sh               # SCP deploy to gateway.local + service restart + HA patch
 ├── build_bundle.sh         # Build tarball for offline deployment
 ├── setup_gateway.local.sh      # Initial Raspberry Pi setup script
-├── ydnu02-web.service      # Systemd service unit file
+├── ydnu02-web.service      # Systemd unit for ydnu02-web (depends on tcp-gateway)
 ├── docker-compose.yml      # Signal K server (optional)
 └── pyproject.toml          # Python project metadata
 ```
@@ -106,9 +117,10 @@ The heart of the dynamic configuration system. Extracts field metadata for **any
 ### ydnu02_tcp_gateway.py — Standalone TCP Gateway Proxy
 
 - **Exclusive Serial Ownership**: Holds `/dev/ttyACM0` at 115200 baud. No other application opens the USB serial device directly.
-- **Port 4001 (DATA)**: Multi-client broadcast server. Any frame read from serial is immediately broadcasted to all connected TCP clients. Writes from clients are multiplexed down to the serial port.
-- **Port 4002 (CTRL)**: Exclusive control channel (`ProxyControlClient`). Used to pause serial I/O and switch YDNU-02 to service mode for diagnostics, configuration, or firmware flashing.
-- **TCP Disconnect / EOF Protection**: Client sockets raise `ConnectionError` on `b""` (EOF) instead of busy-spinning. Upstream `TextNmea2000Gateway` in `nmea2000` library handles TCP disconnects cleanly without CPU lockup.
+- **Port 4001 (DATA)**: Multi-client broadcast server. Serial frames are broadcast to all TCP clients. TCP client frames are forwarded to all **other** TCP clients. Only ISO Request (PGN 59904) frames are additionally forwarded to serial — all other TX frames (virtual device ISO Claim, Product Info) stay in the TCP hub.
+- **Port 4002 (CTRL)**: Exclusive control channel. Supports `SERVICE_START`/`SERVICE_END` (DTR toggle + service terminal) and `FIRMWARE_START`/`FIRMWARE_END` (raw passthrough for firmware flash).
+- **Device Frame Cache**: ISO Address Claims (PGN 60928) and Product Info (PGN 126996) are cached per SA and replayed to every new TCP client on connect — no hardware rescan needed.
+- **TCP Disconnect / EOF Protection**: `ConnectionError` on `b""` (EOF) prevents spin-loops in `TextNmea2000Gateway`.
 
 For full technical specifications, DTR state machines, and systemd service setup, see [ydnu02_tcp_gateway/README.md](ydnu02_tcp_gateway/README.md).
 
@@ -219,6 +231,97 @@ Each card on the Dashboard standardizes telemetry into 3 isolated channels:
 1. `📡 NMEA 2000` — live CAN bus telemetry (teal header, live age)
 2. `📶 BLE` — live GATT measurements / status (teal header, live age)
 3. `📋 Registry` — user configuration context from `ble_sensors.json` (muted secondary styling, `config` label)
+
+## Full API Reference
+
+All routes are mounted under `/api` prefix (except WebSockets).
+
+### Device (`routes/device.py`)
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/api/info` | Gateway status, firmware info, serial port state |
+| `GET` | `/api/sensors` | All active sensor readings |
+| `GET` | `/api/dashboard/sensors` | Dashboard cards (NMEA + BLE + Registry channels) |
+| `POST` | `/api/mode/{mode}` | Set YDNU-02 operating mode |
+| `POST` | `/api/silent/{state}` | Enable/disable silent CAN mode |
+
+### N2K Dynamic Config (`routes/n2k_config.py`)
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/api/n2k/devices` | All discovered N2K devices |
+| `GET` | `/api/n2k/devices/{src}/config/{pgn}` | Read field values from device |
+| `POST` | `/api/n2k/devices/{src}/config/{pgn}` | Write fields + read-back diff |
+| `GET` | `/api/n2k/pgn/{pgn}/metadata` | Field metadata (types, enums, units) |
+| `POST` | `/api/n2k/command` | Legacy N2K command |
+
+### Gobius C BLE (`routes/gobius.py`)
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/api/gobius/live` | Fast live telemetry poller status |
+| `GET` | `/api/gobius/status` | Full BLE read (Status/Measurement/Config/Info) |
+| `POST` | `/api/gobius/n2k` | Write N2K Config `0xFFF2` |
+| `POST` | `/api/gobius/user_config` | Write User Config `0xFFE6` |
+| `POST` | `/api/gobius/command` | Send command `0xFFE7` |
+| `POST` | `/api/gobius/info` | Write Info `0xFFEB`+`0xFFEC` + commit |
+| `POST` | `/api/gobius/n2k_command` | Send raw N2K command via BLE |
+
+### Mopeka Pro (`routes/mopeka.py`)
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/api/mopeka/sensors` | All registered Mopeka sensors |
+| `GET` | `/api/mopeka/sensor/{mac}` | Single sensor reading |
+| `POST` | `/api/mopeka/config/{mac}` | Update sensor configuration |
+| `DELETE` | `/api/mopeka/sensor/{mac}` | Remove sensor binding |
+
+### BLE Registry (`routes/ble.py`)
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/api/ble/sensors` | All registered BLE sensors |
+| `POST` | `/api/ble/sensors` | Register new BLE sensor |
+| `PUT` | `/api/ble/sensors/{mac}` | Update sensor metadata |
+| `DELETE` | `/api/ble/sensors/{mac}` | Remove sensor from registry |
+| `GET` | `/api/ble/scan` | Trigger BLE advertisement scan |
+
+### Service & I/O (`routes/service.py`)
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `POST` | `/api/io/pause` | Pause serial I/O (for firmware flash / service) |
+| `POST` | `/api/io/resume` | Resume serial I/O |
+| `GET` | `/api/io/state` | Current I/O pause state |
+| `GET` | `/api/filters` | Active CAN frame filters |
+| `GET` | `/api/settings` | Gateway settings |
+| `GET` | `/api/diag/{scope}` | Diagnostics for a given scope |
+| `POST` | `/api/service/cmd` | Send command to YDNU-02 service terminal |
+| `POST` | `/api/service/enter` | Enter YDNU-02 service terminal mode |
+| `POST` | `/api/service/exit` | Exit YDNU-02 service terminal mode |
+| `GET` | `/api/service/state` | Service mode state |
+
+### Maintenance (`routes/maintenance.py`)
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `POST` | `/api/backup` | Create configuration backup |
+| `GET` | `/api/backups` | List available backups |
+| `GET` | `/api/backup/download/{filename}` | Download backup file |
+| `POST` | `/api/reset/settings` | Reset settings to defaults |
+| `POST` | `/api/reset/filters` | Reset CAN filters |
+| `POST` | `/api/reset/mcu` | Software reset YDNU-02 MCU |
+| `POST` | `/api/reset/hardware` | Hardware reset YDNU-02 |
+
+### Firmware (`routes/firmware.py`)
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/api/firmware/latest` | Latest available firmware info |
+| `GET` | `/api/firmware/progress` | Ongoing flash progress |
+| `POST` | `/api/firmware/download` | Download firmware from remote |
+| `POST` | `/api/firmware/upload` | Upload firmware file |
+| `POST` | `/api/firmware/flash/{filename}` | Flash firmware to YDNU-02 |
+| `GET` | `/api/firmware/files` | List locally available firmware files |
+
+### WebSockets
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `WS` | `/ws/monitor` | Live CAN frame stream |
+| `WS` | `/ws/scan` | Device discovery scan results |
 
 ## Deployment
 
