@@ -457,6 +457,24 @@ class DeviceManager:
         if self._worker_running:
             return
         self._worker_running = True
+
+        # Pre-seed our virtual TCP-GW device (SA=200) so the scanner shows a real name
+        # immediately — regardless of whether Product Info fast-packet arrives in time.
+        _GW_SA = 200  # matches ydnu02_gateway_device.GW_PREFERRED_SA
+        with self._sensors_lock:
+            self._discovered_bus_devices[_GW_SA] = {
+                "src":               _GW_SA,
+                "manufacturer":      "Yacht Devices",
+                "model":             "YDNU-02 TCP-GW",
+                "serial":            "",
+                "firmware":          "",
+                "device_class":      "Gateway",
+                "function_name":     "PC Gateway",
+                "device_class_name": "Internetwork device",
+                "unique_id":         12345,
+                "active_pgns":       [],
+            }
+
         self._worker_thread = threading.Thread(target=self._bus_worker, daemon=True)
         self._worker_thread.start()
         print("[Gateway] Bus Worker started (TCP proxy mode)")
@@ -624,13 +642,13 @@ class DeviceManager:
                 if src not in self._discovered_bus_devices:
                     self._discovered_bus_devices[src] = {
                         "src": src,
-                        "manufacturer": "NMEA 2000 Device",
-                        "model": f"Device (SRC {src})",
-                        "serial": "--",
-                        "firmware": "--",
-                        "device_class": "--",
-                        "function_name": "--",
-                        "device_class_name": "--",
+                        "manufacturer": "",   # filled by ISO Claim (PGN 60928)
+                        "model": "",          # filled by Product Info (PGN 126996)
+                        "serial": "",         # filled by Product Info
+                        "firmware": "",       # filled by Product Info
+                        "device_class": "",
+                        "function_name": "",
+                        "device_class_name": "",
                         "active_pgns": [],
                     }
                 if pgn and pgn not in self._discovered_bus_devices[src]["active_pgns"]:
@@ -1225,7 +1243,7 @@ class DeviceManager:
         """Build a clean device summary dict for WebSocket scan_bus response."""
         return {
             "src":               dev.get("src", 0),
-            "manufacturer":      dev.get("manufacturer", "Unknown"),
+            "manufacturer":      dev.get("manufacturer", "") or "NMEA 2000 Device",
             "model":             dev.get("model", ""),
             "serial":            dev.get("serial", ""),
             "firmware":          dev.get("firmware", ""),
