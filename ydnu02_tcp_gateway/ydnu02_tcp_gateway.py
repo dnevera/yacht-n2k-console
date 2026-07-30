@@ -41,10 +41,35 @@ THREAD MODEL
 FIRMWARE_START vs SERVICE_START
   SERVICE_START: full DTR toggle mode switch (YDNU-02 → service terminal)
   FIRMWARE_START: raw passthrough only, no mode switch (used for firmware flash)
+
+DEVICE FRAME CACHE
+  The gateway caches ISO Address Claims (PGN 60928) and Product Information
+  (PGN 126996) for every N2K device seen in live traffic.  On each new TCP
+  client connect the full cache is replayed so HA immediately builds its network
+  map without requiring a manual rescan or device power-cycle.
+
+  The gateway also registers itself as a virtual N2K device (SA=200) using
+  synthetic ISO Claim + Product Info frames that are pre-seeded in the cache at
+  startup.  This ensures HA always has at least the gateway device visible,
+  independent of whether a physical rescan has ever been performed.
+
+GATEWAY VIRTUAL IDENTITY — NMEA 2000 NAME bit layout (64-bit, little-endian):
+  [0:20]  Unique Number (21 bits)
+  [21:31] Manufacturer Code (11 bits) — 741 = sum(ord(c) for c in "dnevera") % 2048
+  [32:35] Device Instance Lower (4 bits)
+  [36:39] Device Instance Upper (4 bits)
+  [40:46] Device Function  (7 bits)  — 130 = PC Gateway
+  [47]    Reserved = 0
+  [48:54] Device Class     (7 bits)  — 25  = Internetwork device
+  [55:57] System Instance  (3 bits)
+  [58:61] Industry Group   (4 bits)  — 4   = Marine Industry
+  [62]    Reserved = 0
+  [63]    Arbitrary Address Capable = 1
 """
 import os
 import re
 import socket
+import struct
 import subprocess
 import serial
 import sys
@@ -87,30 +112,202 @@ service_conn_lock = threading.Lock()
 # ISO Requests must NOT be sent before this is set — YDNU-02 will ignore them.
 _serial_ready = threading.Event()
 
-# ISO Address Claim (PGN 60928) cache: keyed by source-address bytes (last 2 hex
-# chars of the CAN ID field). Populated from startup serial data and live traffic.
-# Replayed to every new TCP client so HA's nmea2000 decoder can build its network
-# map immediately without needing to transmit an ISO Request on the N2K bus.
+# ── Gateway virtual identity constants ────────────────────────────────────────
+
+_GW_SA                = 200   # virtual source address (0xC8) for this process
+_GW_UNIQUE_NUMBER     = 12345 # 21-bit (arbitrary, non-colliding with real devices)
+_GW_MANUFACTURER_CODE = 741   # 11-bit: sum(ord(c) for c in "dnevera") % 2048
+_GW_DEVICE_FUNCTION   = 130   # PC Gateway
+_GW_DEVICE_CLASS      = 25    # Internetwork device
+_GW_INDUSTRY_GROUP    = 4     # Marine Industry
+_GW_AAC               = 1     # Arbitrary Address Capable
+
+
+def _read_version() -> str:
+    """Read software version from VERSION file in project root."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, '..', 'VERSION'),
+                 os.path.join(here, 'VERSION')):
+        try:
+            with open(path) as fh:
+                return fh.read().strip()
+        except OSError:
+            pass
+    return '0.0.0'
+
+
+def _fmt_frame(can_id_hex: str, data: bytes) -> bytes:
+    """Format raw CAN data as a YDNU-02 ASCII text line."""
+    return f'00:00:00.000 R {can_id_hex} {" ".join(f"{b:02X}" for b in data)}\n'.encode()
+
+
+def _make_gw_iso_claim() -> bytes:
+    """Construct synthetic ISO Address Claim line (PGN 60928) for the gateway."""
+    name_int = (
+        (_GW_UNIQUE_NUMBER     & 0x1FFFFF)       |
+        ((_GW_MANUFACTURER_CODE & 0x7FF)  << 21) |
+        ((_GW_DEVICE_FUNCTION   & 0x7F)   << 40) |
+        ((_GW_DEVICE_CLASS      & 0x7F)   << 48) |
+        ((_GW_INDUSTRY_GROUP    & 0x0F)   << 58) |
+        ((_GW_AAC & 0x01) << 63)
+    )
+    name_bytes = name_int.to_bytes(8, 'little')
+    # CAN ID: priority=6, DP=0, PF=0xEE, PS=0xFF (broadcast), SA=_GW_SA
+    can_id = (6 << 26) | (0xEE << 16) | (0xFF << 8) | _GW_SA
+    return _fmt_frame(f'{can_id:08X}', name_bytes)
+
+
+def _make_gw_product_info(version: str, serial_code: str) -> list[bytes]:
+    """Construct synthetic Product Information fast-packet lines (PGN 126996).
+
+    PGN 126996 payload (134 bytes):
+      [0:2]    N2K Version (uint16, units 0.001 → 1301 = 1.301)
+      [2:4]    Product Code (uint16)
+      [4:36]   Model ID (strfix32)
+      [36:68]  Software Version Code (strfix32)
+      [68:100] Model Version (strfix32)
+      [100:132] Model Serial Code (strfix32)
+      [132]    Certification Level (uint8, 2=Level B)
+      [133]    Load Equivalency (uint8)
+    """
+    def pad(s: str, n: int = 32) -> bytes:
+        b = s.encode('ascii', errors='replace')[:n]
+        return b + b'\xff' * (n - len(b))
+
+    payload = bytearray()
+    payload += struct.pack('<H', 1301)               # N2K Version (1.301)
+    payload += struct.pack('<H', 1)                  # Product Code
+    payload += pad('YDNU-02 TCP-GW')                 # Model ID
+    payload += pad(version)                           # Software Version Code
+    payload += pad('yacht-n2k-console')               # Model Version
+    payload += pad(serial_code[:32])                  # Model Serial Code
+    payload += bytes([2, 1])                          # Cert Level B=2, Load Equiv=1
+
+    # CAN ID: priority=6, DP=1, PF=0xF0, PS=0x14, SA=_GW_SA
+    can_id = (6 << 26) | (1 << 24) | (0xF0 << 16) | (0x14 << 8) | _GW_SA
+    cid_hex = f'{can_id:08X}'
+
+    total = len(payload)    # 134
+    seq   = 0
+    frames: list[bytes] = []
+
+    # Frame 0: [seq<<5|0] [total_bytes] [first 6 payload bytes]
+    frames.append(_fmt_frame(cid_hex,
+                             bytes([(seq << 5) | 0, total]) + bytes(payload[:6])))
+
+    # Frames 1..N: [seq<<5|fn] [7 payload bytes, 0xFF-padded on last frame]
+    offset, fn = 6, 1
+    while offset < total:
+        chunk = bytes(payload[offset:offset + 7]).ljust(7, b'\xff')
+        frames.append(_fmt_frame(cid_hex, bytes([(seq << 5) | fn]) + chunk))
+        offset += 7
+        fn += 1
+
+    return frames
+
+
+# ── Device frame cache ────────────────────────────────────────────────────────
 #
-# CAN ID pattern for ISO Address Claim (PGN 60928):
-#   Prio=6, R=0, DP=0, PF=0xEE, PS=0xFF (bcast), SA=varies
-#   => 18EEFFxx in YD RAW format (first 6 chars of 8-char CAN ID = '18EEFF')
-_iso_claim_cache: dict[bytes, bytes] = {}   # SA-hex-bytes → last YD_RAW line
-_iso_claim_lock  = threading.Lock()
-_ISO_CLAIM_RE    = re.compile(rb"^\d{2}:\d{2}:\d{2}\.\d{3} [RT] 18[Ee]{2}[0-9A-Fa-f]{4}")
+# Per-SA storage of device identification frames for replay to new TCP clients.
+# Pre-seeded with gateway synthetic frames; continuously updated from live traffic.
+#
+# Structure: {sa_int: {'iso_claim': bytes, 'product_info': [bytes, ...]}}
+
+_device_frame_cache: dict[int, dict] = {}
+_device_frame_lock  = threading.Lock()
+
+# Fast-packet reassembly buffer (PGN 126996 only).
+# Holds in-progress multi-frame messages until all frames arrive.
+_fp_buf:  dict[int, dict] = {}   # {sa: {'seq': int, 'total': int, 'lines': [bytes]}}
+_fp_lock  = threading.Lock()
+
+
+def _get_pgn_sa(can_id: bytes | str) -> tuple[int, int]:
+    """Decode (PGN, SourceAddress) from 8-char hex CAN ID in YDNU-02 RAW format.
+
+    CAN ID layout (29-bit, zero-extended to 32-bit):
+      bits 28-26 : priority
+      bit  25    : reserved
+      bit  24    : DP (Data Page)
+      bits 23-16 : PF (PDU Format)
+      bits 15-8  : PS (PDU Specific — destination if PF<240, group ext if PF>=240)
+      bits  7-0  : SA (Source Address)
+    """
+    cid = int(can_id, 16)
+    sa  = cid & 0xFF
+    pf  = (cid >> 16) & 0xFF
+    ps  = (cid >> 8)  & 0xFF
+    dp  = (cid >> 24) & 0x01
+    # PDU2 (PF >= 240): PS is group extension → part of PGN
+    # PDU1 (PF < 240):  PS is destination address → NOT part of PGN
+    pgn = (dp << 16) | (pf << 8) | (ps if pf >= 240 else 0)
+    return pgn, sa
+
+
+def _cache_product_info_frame(sa: int, line: bytes) -> None:
+    """Buffer a PGN 126996 (Product Information) fast-packet frame.
+
+    Complete packets (all frames received) are stored in _device_frame_cache.
+    Incomplete or out-of-order sequences are silently discarded.
+    """
+    # Data bytes follow "HH:MM:SS.mmm R XXXXXXXX " — 24 ASCII chars
+    data_parts = line[24:].decode('ascii', errors='ignore').split()
+    if not data_parts:
+        return
+    try:
+        fb = int(data_parts[0], 16)
+    except ValueError:
+        return
+
+    frame_num = fb & 0x1F
+    seq_num   = (fb >> 5) & 0x07
+
+    with _fp_lock:
+        if frame_num == 0:
+            # First frame: data_parts[1] carries total payload byte count
+            total = int(data_parts[1], 16) if len(data_parts) > 1 else 0
+            _fp_buf[sa] = {'seq': seq_num, 'total': total, 'lines': [line]}
+        else:
+            buf = _fp_buf.get(sa)
+            if buf is None or buf['seq'] != seq_num:
+                return   # missed frame 0 or sequence mismatch
+            if len(buf['lines']) != frame_num:
+                return   # missed intermediate frame; discard this packet
+            buf['lines'].append(line)
+            # Frame 0 carries 6 payload bytes; frames 1..N carry 7 each
+            received = 6 + (len(buf['lines']) - 1) * 7
+            if received >= buf['total']:
+                complete = list(buf['lines'])
+                with _device_frame_lock:
+                    _device_frame_cache.setdefault(sa, {})['product_info'] = complete
+                del _fp_buf[sa]
+                print(f"[cache] Product Info cached SA={sa} "
+                      f"({len(complete)} frames)", flush=True)
+
 
 # ── Data port helpers ─────────────────────────────────────────────────────────
 
 def _broadcast(line: bytes) -> None:
     """Send a line to all data clients, removing dead ones.
-    
-    Also caches ISO Address Claim lines (PGN 60928) for replay to new clients.
+
+    Also updates the device frame cache for:
+      PGN 60928  — ISO Address Claim (single frame, keyed by SA)
+      PGN 126996 — Product Information (fast-packet, reassembled per SA)
+    Cached frames are replayed to every new client on connect so HA can build
+    its N2K network map without requiring a rescan.
     """
-    # Cache ISO Address Claims so new clients can receive them on connect
-    if _ISO_CLAIM_RE.match(line):
-        sa_key = line[21:23]   # last 2 hex chars of 8-char CAN ID = source address
-        with _iso_claim_lock:
-            _iso_claim_cache[sa_key] = line
+    # Update device frame cache from live N2K traffic
+    if len(line) >= 24:
+        try:
+            pgn, sa = _get_pgn_sa(line[15:23])
+            if pgn == 60928:      # ISO Address Claim — single frame, overwrite per SA
+                with _device_frame_lock:
+                    _device_frame_cache.setdefault(sa, {})['iso_claim'] = line
+                print(f"[cache] ISO Claim cached SA={sa}", flush=True)
+            elif pgn == 126996:   # Product Information — fast-packet reassembly
+                _cache_product_info_frame(sa, line)
+        except (ValueError, IndexError):
+            pass
 
     dead: set = set()
     with clients_lock:
@@ -122,35 +319,39 @@ def _broadcast(line: bytes) -> None:
         clients.difference_update(dead)
 
 
-def _replay_iso_claims(conn: socket.socket) -> None:
-    """Send all cached ISO Address Claim lines to a newly connected client.
+def _replay_device_frames(conn: socket.socket) -> None:
+    """Replay cached device identification frames to a newly connected client.
 
-    Called immediately after a new data client registers, before normal data
-    starts flowing. This primes HA's network map so that subsequent PGN decodes
-    return non-None and sensor states update.
-
-    ISO Address Claims are cached from:
-      1. YDNU-02 startup data (captured during serial init)
-      2. Live N2K traffic (devices send Claims on power-on or address conflict)
+    Sends ISO Address Claims and Product Info for all known N2K devices,
+    including the gateway's own synthetic virtual identity (SA=_GW_SA).
+    HA receives these and immediately builds its network map so sensor states
+    become available without waiting for a manual rescan or device power-cycle.
     """
-    with _iso_claim_lock:
-        claims = list(_iso_claim_cache.values())
-    if not claims:
-        print("[data] no cached ISO Claims to replay", flush=True)
+    with _device_frame_lock:
+        snapshot = {sa: dict(e) for sa, e in _device_frame_cache.items()}
+
+    if not snapshot:
+        print("[data] no cached device frames to replay", flush=True)
         return
+
     sent = 0
-    for claim in claims:
+    for sa, entry in sorted(snapshot.items()):
         try:
-            conn.sendall(claim)
-            sent += 1
+            if 'iso_claim' in entry:
+                conn.sendall(entry['iso_claim'])
+                sent += 1
+            for frame in entry.get('product_info', []):
+                conn.sendall(frame)
+                sent += 1
         except OSError:
             break
-    print(f"[data] replayed {sent}/{len(claims)} cached ISO Claim(s)", flush=True)
+
+    print(f"[data] replayed {sent} frame(s) for {len(snapshot)} device(s)", flush=True)
 
 
-_iso_request_lock = threading.Lock()
+_iso_request_lock      = threading.Lock()
 _iso_request_last_sent: float = 0.0
-_ISO_REQUEST_MIN_INTERVAL = 5.0  # seconds: don't flood bus with requests
+_ISO_REQUEST_MIN_INTERVAL = 5.0  # seconds: minimum interval between ISO Requests
 
 
 def _send_iso_request() -> None:
@@ -158,7 +359,7 @@ def _send_iso_request() -> None:
 
     Asks all N2K devices to broadcast their ISO Address Claim (PGN 60928).
     Effective only if YDNU-02 firmware supports TX in RAW mode.
-    Primary mechanism is _replay_iso_claims() which works unconditionally.
+    Primary mechanism is _replay_device_frames() which works unconditionally.
 
     YDNU-02 RAW TX format: "HH:MM:SS.mmm T CANID DD DD DD\r\n"
     CAN ID 18EAFFFE: prio=6, PF=0xEA (ISO Request), PS=0xFF, SA=0xFE (null)
@@ -193,11 +394,11 @@ def handle_data_client(conn: socket.socket, addr) -> None:
     with clients_lock:
         clients.add(conn)
 
-    # 1. Replay cached ISO Address Claims so HA can build its network map immediately.
-    #    Claims are cached from YDNU-02 startup data and live N2K traffic.
-    #    Without this, HA's decoder (build_network_map=True) returns None for all
-    #    messages and sensors stay Unavailable indefinitely.
-    _replay_iso_claims(conn)
+    # 1. Replay all cached device identification frames (ISO Claims + Product Info
+    #    for every known N2K device, including gateway's own virtual identity).
+    #    This primes HA's network map immediately so sensors become available
+    #    without a manual rescan or device power-cycle.
+    _replay_device_frames(conn)
 
     # 2. Best-effort ISO Request TX (works only if YDNU-02 supports RAW TX mode).
     #    Triggers fresh Claims from devices that came online after our startup.
@@ -317,6 +518,12 @@ def _exit_service_mode_on_device() -> None:
     No close/reopen needed: serial_reader resumes readline() on the same fd,
     which is now in RAW mode and will start receiving N2K frames again.
 
+    NOTE: we do NOT flush the serial input buffer after MODE RAW.
+    YDNU-02 sends ISO Address Claims shortly after re-entering RAW mode (N2K
+    re-enumeration).  Flushing would discard them before serial_reader can cache
+    them.  The mode-switch text response is discarded by _NMEA_LINE_RE in the
+    serial_reader loop, so it does not cause any harm.
+
     Must be called with service_mode.is_set() == True (before clear).
     """
     with serial_lock:
@@ -328,9 +535,9 @@ def _exit_service_mode_on_device() -> None:
             # is in service terminal mode and is reading serial input normally.
             _ser.write(b"MODE RAW\r\n")
             time.sleep(0.5)
-            if _ser.in_waiting:
-                _ser.read(_ser.in_waiting)   # flush mode-switch response
-            # Reset timeout from 2.0s (service terminal) to 0.1s (fast NMEA polling)
+            # Reset timeout from 2.0s (service terminal) to 0.1s (fast NMEA polling).
+            # Do NOT flush _ser.in_waiting here — ISO Claims from N2K re-enumeration
+            # arrive immediately after MODE RAW and must reach serial_reader for caching.
             _ser.timeout = 0.1
         except serial.SerialException as e:
             print(f"[ctrl] error during service exit: {e}", flush=True)
@@ -502,7 +709,7 @@ def serial_reader() -> None:
             print(f"[serial] opened {SERIAL_PORT} @ {SERIAL_BAUD}", flush=True)
 
             # Capture ALL bytes during init (don't discard) so we can extract
-            # any ISO Address Claims the YDNU-02 or other devices sent at startup.
+            # any device identification frames the YDNU-02 sent at startup.
             init_data = b""
 
             ser.write(b"YDNU MODE RAW\r\n")
@@ -515,22 +722,29 @@ def serial_reader() -> None:
                 init_data += ser.read(ser.in_waiting)
             print("[serial] YDNU-02 initialized in RAW mode", flush=True)
 
-            # Parse startup data for ISO Address Claims and cache them.
-            # YDNU-02 sends its own Claim (and may relay others) right after init.
-            # These are the only Claims we'll see without an explicit ISO Request.
+            # Cache any ISO Claims (PGN 60928) or Product Info (PGN 126996) that
+            # arrived during init.  YDNU-02 sends its own Claim right after init;
+            # other devices may do the same if they were already on the bus.
             for raw_line in init_data.split(b"\n"):
                 if not raw_line:
                     continue
                 line = raw_line.rstrip(b"\r") + b"\n"
-                if _NMEA_LINE_RE.match(line) and _ISO_CLAIM_RE.match(line):
-                    sa_key = line[21:23]
-                    with _iso_claim_lock:
-                        _iso_claim_cache[sa_key] = line
-                    print(f"[serial] cached startup ISO Claim: "
-                          f"{line.decode(errors='ignore').strip()}", flush=True)
+                if not _NMEA_LINE_RE.match(line):
+                    continue
+                try:
+                    pgn, sa = _get_pgn_sa(line[15:23])
+                    if pgn == 60928:
+                        with _device_frame_lock:
+                            _device_frame_cache.setdefault(sa, {})['iso_claim'] = line
+                        print(f"[serial] startup ISO Claim cached SA={sa}: "
+                              f"{line.decode(errors='ignore').strip()}", flush=True)
+                    elif pgn == 126996:
+                        _cache_product_info_frame(sa, line)
+                except (ValueError, IndexError):
+                    pass
 
-            claimed = len(_iso_claim_cache)
-            print(f"[serial] {claimed} ISO Claim(s) cached from startup data", flush=True)
+            non_gw = sum(1 for sa in _device_frame_cache if sa != _GW_SA)
+            print(f"[serial] {non_gw} real device(s) cached from startup data", flush=True)
 
             # Signal readiness and send initial ISO Request so all N2K devices
             # announce themselves. This primes HA's network map even if HA connected
@@ -604,6 +818,21 @@ def _accept_loop(srv: socket.socket, handler, label: str) -> None:
 
 
 def main() -> None:
+    # Seed device frame cache with synthetic gateway identity frames.
+    # Gateway presents itself as a virtual N2K device (SA=_GW_SA) so HA
+    # always has at least one device on connect, independent of whether a
+    # physical network scan has been performed.
+    _gw_version      = _read_version()
+    _gw_serial       = socket.gethostname()
+    _gw_iso_claim    = _make_gw_iso_claim()
+    _gw_product_info = _make_gw_product_info(_gw_version, _gw_serial)
+    with _device_frame_lock:
+        _device_frame_cache[_GW_SA] = {
+            'iso_claim':    _gw_iso_claim,
+            'product_info': _gw_product_info,
+        }
+    print(f"[gw] SA={_GW_SA}  version={_gw_version}  serial={_gw_serial}", flush=True)
+
     # Start serial reader thread
     t = threading.Thread(target=serial_reader, daemon=True)
     t.start()
