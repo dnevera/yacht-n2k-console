@@ -16,22 +16,24 @@ Standalone Python TCP proxy and device gateway. Manages the hardware serial inte
 │  │ Home Assistant /        │               │ ydnu02-web                  │  │
 │  │ Signal K / External     │               │ (FastAPI App)               │  │
 │  └────────────┬────────────┘               └──────────────┬──────────────┘  │
-│               │ DATA :4001                                │ DATA :4001 /│ CTRL :4002
-│               ▼                                           ▼             │   │
-│  ┌──────────────────────────────────────────────────────────────────┐   │   │
-│  │                ydnu02_tcp_gateway.py (Proxy Service)              │◄──┘   │
-│  │                (systemd: ydnu02-tcp-gateway.service)             │◄──────┘
-│  │                ├── DATA Hub :4001 / CTRL Server :4002            │
-│  │                └── Virtual Node Thread (ydnu02_gateway_device)   │
-│  └──────────────────────────────────┬───────────────────────────────┘
-│                                     │ Serial (/dev/ttyACM0 @ 115200 baud)
-│                                     ▼
-│                           ┌───────────────────┐
-│                           │ YDNU-02 USB CAN   │
-│                           └─────────┬─────────┘
-└─────────────────────────────────────┼───────────────────────────────────────┘
-                                      ▼
-                                NMEA 2000 CAN Bus
+│               │ DATA :4001                          DATA :4001 / CTRL :4002 │
+│               ▼                                           ▼                 │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                ydnu02_tcp_gateway.py (Proxy Service)                   │  │
+│  │                (systemd: ydnu02-tcp-gateway.service)                  │  │
+│  │                ├── DATA Hub :4001 (multi-client broadcast)            │  │
+│  │                ├── CTRL Server :4002 (exclusive session)              │  │
+│  │                ├── Device Frame Cache (ISO Claim + Product Info)      │  │
+│  │                └── Virtual Node Thread (ydnu02_gateway_device, SA=200)│  │
+│  └─────────────────────────────────┬─────────────────────────────────────┘  │
+│                                    │ Serial (/dev/ttyACM0 @ 115200 baud)    │
+│                                    ▼                                        │
+│                          ┌───────────────────┐                              │
+│                          │ YDNU-02 USB CAN   │                              │
+│                          └─────────┬─────────┘                              │
+└────────────────────────────────────┼────────────────────────────────────────┘
+                                     ▼
+                               NMEA 2000 CAN Bus
 ```
 
 ---
@@ -45,151 +47,212 @@ Standalone Python TCP proxy and device gateway. Manages the hardware serial inte
 
 ---
 
-### DATA Port (`4001`) — Broadcast & CAN Write
+### DATA Port (`4001`) — Broadcast, CAN Hub & Write
 
 - **Multi-Client Broadcast**: Concurrently streams `\n`-terminated ASCII CAN frames to all connected TCP clients.
-- **Frame Format**: Standard YDNU-02 RAW ASCII format:
+- **Frame format** (YDNU-02 RAW ASCII, serial→TCP direction):
   ```text
-  HH:MM:SS.mmm R|T CAN_ID_HEX DATA_BYTES_HEX
-  
+  HH:MM:SS.mmm R CAN_ID_HEX DD DD DD DD DD DD DD DD\n
+
   Example:
   16:42:15.123 R 0DF0042C FF 1A 00 00 00 00 00 00
   ```
-- **Bidirectional CAN Bus Writing**: Any TCP client can write a `\n`-terminated RAW ASCII frame to port `4001`. The proxy forwards the line directly to the serial port.
-- **Client Disconnect & EOF Handling**: When a client disconnects, socket read returns `b""` (EOF). The proxy closes the connection immediately, preventing infinite spin-loops across downstream clients.
+- **TX format** (no timestamp, TCP client→serial, e.g. `N2KDevice` output):
+  ```text
+  CAN_ID_HEX DD DD DD DD DD DD DD DD\r\n
+
+  Example:
+  18EAFFFE 00 EE 00\r\n
+  ```
+- **N2K Bus Hub (bidirectional TCP-only)**:
+  - Frames arriving from TCP clients are forwarded to all **other** TCP clients (not looped back to sender).
+  - Only **PGN 59904 (ISO Request)** frames are also forwarded to the serial port so physical devices on the CAN bus respond. All other TX frames (e.g. ISO Claims and Product Info from virtual `N2KDevice`) stay within the TCP hub.
+- **On Client Connect**:
+  1. Cached device frames (ISO Address Claims + Product Info) are **replayed** to the new client immediately — no hardware rescan required.
+  2. An **ISO Request** is sent to serial (rate-limited to ≥5s between requests) so any devices that came up after last scan announce themselves.
+- **Client Disconnect & EOF**: When `recv()` returns `b""`, the connection is closed immediately — no spin-loop.
 
 ---
 
 ### CTRL Port (`4002`) — Exclusive Remote Control
 
-- **Single-Client Exclusive Access**: Only one active control session is allowed at any time. A second concurrent connection receives `ERROR: another session active\n` and is disconnected.
-- **Line-Oriented UTF-8 Protocol**:
+- **Single-Client Exclusive Session**: Only one active control session allowed. A second connection receives `ERROR: another control session is active\n` and is disconnected.
+- **Line-Oriented UTF-8 Protocol** (100ms poll interval for serial→client data push):
 
-#### Service Terminal Sequence
+#### Service Terminal Sequence (`SERVICE_START` / `SERVICE_END`)
+
+Triggers full DTR-toggle mode switch from RAW CAN to interactive YDNU-02 terminal:
 
 ```text
 Client → Proxy:   SERVICE_START\n
 Proxy  → Client:  READY\n
 
-Client → Proxy:   <terminal command>\r\n   (e.g., HELP, SET, FILTER)
-Proxy  → Client:  <terminal response bytes pushed on each poll>
+Client → Proxy:   <terminal command>\r\n   (e.g., HELP, SET, FILTER, INFO)
+Proxy  → Client:  <terminal response bytes — pushed on each 100ms poll>
 
 Client → Proxy:   SERVICE_END\n
 Proxy  → Client:  OK\n
 ```
 
-#### Pause / Resume Sequence (for non-disruptive hardware operations)
+#### Firmware Passthrough Sequence (`FIRMWARE_START` / `FIRMWARE_END`)
+
+Raw serial passthrough without DTR toggle (used for firmware flashing). No mode switch is performed — serial input buffer is flushed and exclusive serial access is granted:
 
 ```text
-Client → Proxy:   PAUSE_IO\n
-Proxy  → Client:  PAUSED\n
+Client → Proxy:   FIRMWARE_START\n
+Proxy  → Client:  READY\n
 
-Client → Proxy:   RESUME_IO\n
-Proxy  → Client:  RESUMED\n
+<raw firmware data exchange>
+
+Client → Proxy:   FIRMWARE_END\n
+Proxy  → Client:  OK\n
 ```
+
+#### Error Responses
+
+| Situation | Response |
+|:---|:---|
+| Second client connects while session active | `ERROR: another control session is active` |
+| Command sent while not in service mode | `ERROR: not in service mode` |
+| Serial write fails | `ERROR: serial write: <exception>` |
+
+---
+
+## Device Frame Cache & New Client Replay
+
+The gateway maintains an in-memory cache of all N2K device identification frames seen in live traffic:
+
+```python
+_device_frame_cache: dict[int, dict] = {}
+# Structure: {sa_int: {'iso_claim': bytes, 'product_info': [bytes, ...]}}
+```
+
+- **PGN 60928 (ISO Address Claim)**: Cached as single frame per SA, overwritten on each new claim.
+- **PGN 126996 (Product Information)**: Reassembled from fast-packet multi-frame sequence, stored once complete.
+- **Pre-seeded at startup**: The gateway's own virtual identity (SA=200) is pre-seeded in the cache before any physical traffic arrives, ensuring HA always has at least one visible device.
+- **On new TCP client connect**: Full cache snapshot is replayed immediately, so Home Assistant builds its N2K network map without requiring a manual rescan or device power cycle.
 
 ---
 
 ## Virtual N2K Gateway Device (`ydnu02_gateway_device.py`)
 
-The proxy launches a background thread (`start_in_thread()`) that registers the Raspberry Pi 5 host as a first-class participant on the NMEA 2000 network (preferred SA=200).
+The proxy launches a background thread (`start_in_thread()`) that registers the Raspberry Pi 5 host as a first-class participant on the NMEA 2000 network using `N2KDevice.for_text_gateway()` — connecting back to the gateway's own port `4001` (5-second startup delay to ensure server is ready).
 
-### Gateway N2K Identity Parameters
+### Gateway N2K Identity
 
 | Parameter | Value | Description |
 |:---|:---|:---|
 | **Preferred SA** | `200` | Preferred NMEA 2000 Source Address |
-| **Manufacturer** | `717` | Yacht Devices (hardware manufacturer) |
+| **Manufacturer** | `717` | Yacht Devices (hardware manufacturer of YDNU-02) |
 | **Device Class** | `25` | Internetwork Device |
-| **Device Function**| `130` | PC Gateway |
+| **Device Function** | `130` | PC Gateway |
 | **Industry Group** | `4` | Marine Industry |
-| **Model ID** | `YDNU-02 TCP-GW` | Model identifier shown in HA / Signal K |
+| **Model ID** | `YDNU-02 TCP-GW` | Shown in HA / Signal K device list |
 
 ### Transmitted PGNs
 
-- **PGN 60928 (ISO Address Claim)**: Broadcasted on startup and on network address claim events.
-- **PGN 126996 (Product Information)**: Broadcasted on startup and responded to ISO Requests.
-- **PGN 126993 (Heartbeat)**: Transmitted every 10 seconds to maintain liveness status.
-- **PGN 130312 (Temperature)**: Broadcasts CPU temperature read from `/sys/class/thermal/thermal_zone*/temp` every 3 seconds as N2K Source `2` ("Inside Temperature").
+| PGN | Name | Interval | Notes |
+|:---|:---|:---|:---|
+| **60928** | ISO Address Claim | On startup, on request | Auto-handled by `N2KDevice` library |
+| **126996** | Product Information | On startup, on ISO Request | Sent once after address claim completes |
+| **126993** | Heartbeat | Every 10 seconds | Auto-handled by `N2KDevice` library |
+| **130312** | Temperature | Every 3 seconds | CPU temp from `/sys/class/thermal/thermal_zone*/temp`, Source=2 ("Inside Temperature") in Kelvin |
+
+The thread restarts automatically after any crash with a 15-second backoff.
 
 ---
 
 ## Hardware Service Terminal & DTR Toggle Logic
 
-The YDNU-02 USB gateway requires a physical **DTR line drop** to switch from RAW CAN mode into its interactive service configuration terminal. A standard `serial.write()` does NOT trigger this mode switch.
+The YDNU-02 USB gateway requires a physical **DTR line drop** to switch from RAW CAN mode into its interactive service terminal. `serial.write("YDNU MODE SERVICE")` is **silently ignored** while the port is held open — the mode switch only happens on a DTR low→high transition (port close → reopen, or OS `echo`).
 
-### `SERVICE_START` State Machine
+**The ctrl client (`ProxyControlClient` / `ydnu02.py`) does NOT send `"YDNU MODE SERVICE"` itself** — the gateway handles this entirely internally on `SERVICE_START`.
 
-When a client sends `SERVICE_START` to port `4002`:
+### `SERVICE_START` Internal Sequence
 
-1. `serial.close()` — Closes serial handle and drops DTR line.
-2. `stty -F /dev/ttyACM0 hupcl` — Sets OS terminal flag to force DTR hangup on close.
+1. `serial_instance = None` + `serial.close()` — Releases DTR line.
+2. `stty -F /dev/ttyACM0 hupcl` — Arms OS terminal hangup-on-close flag.
 3. `echo "YDNU MODE SERVICE" > /dev/ttyACM0` — Opens port (DTR↑), writes command, closes port (DTR↓).
-4. `sleep(1.5)` — Waits 1.5 seconds for YDNU-02 internal microcontroller to complete mode transition.
-5. `serial.Serial(port, timeout=2.0)` — Re-opens serial port at 115200 baud for terminal I/O.
-6. `Proxy → Client`: Sends `READY\n`.
+4. `sleep(1.5)` — Waits for YDNU-02 microcontroller mode transition.
+5. `serial.Serial(port, baud, timeout=2.0, dsrdtr=True)` + `dtr = True` — Re-opens in service terminal mode.
+6. Flush any pending bytes.
+7. `Proxy → Client`: Sends `READY\n`.
 
-### `SERVICE_END` State Machine
+### `SERVICE_END` Internal Sequence
 
-When a client sends `SERVICE_END` to port `4002`:
+1. `serial.write(b"MODE RAW\r\n")` — Sends terminal command to return to RAW CAN mode.
+2. `sleep(0.5)` — Waits for mode switch.
+3. `serial.timeout = 0.1` — Restores fast-polling timeout.
+4. `service_mode.clear()` — Resumes DATA port (`4001`) broadcast.
+5. `Proxy → Client`: Sends `OK\n`.
 
-1. Sends `MODE RAW\r\n` to the YDNU-02 terminal.
-2. `serial.timeout = 0.1` — Restores fast polling timeout.
-3. `service_mode.clear()` — Resumes DATA port (`4001`) broadcasting.
-4. `Proxy → Client`: Sends `OK\n`.
+### Thread Model
+
+| Thread | Role |
+|:---|:---|
+| `serial_reader` | Owns `serial_instance`, broadcasts to DATA clients, adopts new serial instance every 50ms during service mode |
+| `ctrl handler` | Takes over `serial_instance` exclusively during `SERVICE_START/END` |
+| `gateway-n2k-device` | Daemon thread for virtual N2K device (runs its own asyncio event loop) |
 
 ---
 
 ## Deployment & Systemd Configuration
 
-### Deployment Targets
+### Target Paths on `gateway.local`
 
-- **Host**: `gateway.local.local` (Raspberry Pi 5)
-- **User**: `denn`
-- **Script Path**: `/opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py`
-- **Device Identity Path**: `/opt/nmea2000/ydnu02-web/ydnu02_gateway_device.py`
-- **Systemd Service**: `/etc/systemd/system/ydnu02-tcp-gateway.service`
+| File | Remote Path |
+|:---|:---|
+| `ydnu02_tcp_gateway.py` | `/opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py` |
+| `ydnu02_gateway_device.py` | `/opt/nmea2000/ydnu02-web/ydnu02_gateway_device.py` |
+| Systemd service | `/etc/systemd/system/ydnu02-tcp-gateway.service` |
 
----
+The gateway service starts **before** `ydnu02-web.service` (declared in systemd unit).
 
-### Deploying via `deploy.sh`
-
-From project root:
+### Deploy via `deploy.sh`
 
 ```bash
-# Full deploy (web app + TCP gateway service)
+# Full deploy (web app + TCP gateway)
 ./deploy.sh
 
 # Proxy-only deploy
-./deploy.sh --proxy-only
+./deploy.sh user@<gateway-host> --proxy
 ```
 
----
-
-### Manual Deployment Commands
+### Manual Deployment
 
 ```bash
-# 1. Copy gateway scripts to gateway.local
+# 1. Copy scripts to gateway.local
 scp ydnu02_tcp_gateway/ydnu02_tcp_gateway.py user@<gateway-host>.local:/opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py
 scp ydnu02_tcp_gateway/ydnu02_gateway_device.py user@<gateway-host>.local:/opt/nmea2000/ydnu02-web/ydnu02_gateway_device.py
 
-# 2. Copy and activate systemd service unit
+# 2. Install and activate systemd service unit (first time only)
 scp ydnu02_tcp_gateway/ydnu02-tcp-gateway.service user@<gateway-host>.local:/tmp/ydnu02-tcp-gateway.service
 ssh user@<gateway-host>.local "sudo mv /tmp/ydnu02-tcp-gateway.service /etc/systemd/system/ydnu02-tcp-gateway.service \
   && sudo systemctl daemon-reload \
   && sudo systemctl enable ydnu02-tcp-gateway \
   && sudo systemctl restart ydnu02-tcp-gateway"
 
-# 3. Verify service health & logs
+# 3. Verify
 ssh user@<gateway-host>.local "systemctl status ydnu02-tcp-gateway --no-pager && \
   sudo journalctl -u ydnu02-tcp-gateway -n 20 --no-pager"
 ```
 
+### Service Management
+
+```bash
+# Restart
+ssh user@<gateway-host>.local "sudo systemctl restart ydnu02-tcp-gateway"
+
+# Status
+ssh user@<gateway-host>.local "systemctl status ydnu02-tcp-gateway --no-pager"
+
+# Logs
+ssh user@<gateway-host>.local "sudo journalctl -u ydnu02-tcp-gateway -n 50 --no-pager"
+```
+
 ---
 
-## Environment Variables & Configuration
-
-The proxy reads environment variables on startup (with sensible defaults for YDNU-02):
+## Environment Variables
 
 | Variable | Default | Description |
 |:---|:---|:---|
@@ -203,51 +266,48 @@ The proxy reads environment variables on startup (with sensible defaults for YDN
 
 ## YDNU-02 Initialization Sequence
 
-On daemon startup or USB reconnect, `ydnu02_tcp_gateway.py` initializes the hardware:
+On startup or USB reconnect, the serial reader initializes the hardware:
 
 ```python
-ser.write(b"YDNU MODE RAW\r\n")   # Ensure gateway is in RAW CAN ASCII mode
+ser.write(b"YDNU MODE RAW\r\n")   # Switch to RAW CAN ASCII mode
 time.sleep(2.0)
-ser.read(ser.in_waiting)           # Flush startup banner
-ser.write(b"0\n")                  # Set pass-all CAN message filter
+ser.read(ser.in_waiting)           # Flush startup banner / echo
+ser.write(b"0\n")                  # Set pass-all CAN frame filter
 time.sleep(0.5)
 ser.read(ser.in_waiting)           # Flush filter response
+# → _serial_ready.set() — unlocks ISO Request sending
 ```
+
+Any valid NMEA frames received during init are pre-loaded into the device cache before `_serial_ready` is set.
 
 ---
 
 ## Testing & Diagnostics
 
-### Automated Tests (Pytest)
-
-Run unit tests locally before deployment:
+### Automated Tests
 
 ```bash
 cd /Users/denn/Develop/yacht/yacht-n2k-console
 python3 -m pytest tests/test_ydnu02_tcp_gateway.py tests/test_service_mode.py -v
 ```
 
-### Manual Control Port Diagnostic Script
+### Manual CTRL Port Diagnostic
 
 ```python
-import socket
-import time
+import socket, time
 
 s = socket.socket()
 s.connect(('gateway.local.local', 4002))
 s.settimeout(5.0)
 
-# Enter service mode
 s.sendall(b'SERVICE_START\n')
-print("CTRL Response:", s.recv(1024).decode())   # Expect: READY\n
+print(s.recv(1024).decode())   # → READY
 
-# Send HELP command to YDNU-02 terminal
 s.sendall(b'HELP\r\n')
 time.sleep(2.0)
-print("Terminal Help:\n", s.recv(4096).decode())
+print(s.recv(4096).decode())   # → YDNU-02 terminal help output
 
-# Return to RAW CAN mode
 s.sendall(b'SERVICE_END\n')
-print("CTRL Response:", s.recv(1024).decode())   # Expect: OK\n
+print(s.recv(1024).decode())   # → OK
 s.close()
 ```
