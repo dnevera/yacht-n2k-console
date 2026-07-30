@@ -145,8 +145,9 @@ if $DEPLOY_PROXY; then
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02_gateway_device.py" "${HOST}:${REMOTE_DIR}/ydnu02_gateway_device.py"
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02-tcp-gateway.service" "${HOST}:/tmp/ydnu02-tcp-gateway.service"
 
-    # Note: py file is uploaded via scp (line above) directly as denn → denn-owned, no sudo needed.
-    # Service unit goes via /tmp because /etc/systemd/system/ requires sudo.
+    # Note: py files uploaded via scp are denn-owned. If the file was previously
+    # created by "sudo cp" it becomes root-owned and next scp fails. Auto-fix:
+    ${SSH} ${HOST} "sudo chown denn:denn ${REMOTE_DIR}/ydnu02_tcp_gateway.py ${REMOTE_DIR}/ydnu02_gateway_device.py 2>/dev/null || true"
     log "Installing ydnu02-tcp-gateway service..."
     ${SSH} ${HOST} "sudo mv /tmp/ydnu02-tcp-gateway.service /etc/systemd/system/${PROXY_SERVICE}.service \
       && sudo systemctl daemon-reload \
