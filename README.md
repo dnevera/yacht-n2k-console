@@ -39,17 +39,17 @@ A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
 ┌────────────────────────────────────────────────────────────────────────┐
 │                          Raspberry Pi 5                                │
 │                                                                        │
-│  ┌─────────────┐   ┌──────────────┐   ┌──────────────┐                 │
-│  │  FastAPI     │   │  Device      │   │  BLE         │                 │
-│  │  + WebSocket │◄──│  Manager     │◄──│  Poller /    │                 │
-│  │  (app.py)    │   │  (bus_worker)│   │  Scanner     │                 │
-│  └──────┬───────┘   └──────┬───────┘   │  (Mopeka/    │                 │
-│         │                  │           │   Gobius)    │                 │
-│         │      TCP :4001 / │ :4002     └──────────────┘                 │
+│  ┌────────────-─┐   ┌──────────────┐   ┌──────────────┐                │
+│  │  FastAPI     │   │  Device      │   │  BLE         │                │
+│  │  + WebSocket │◄──│  Manager     │◄──│  Poller /    │                │
+│  │  (app.py)    │   │  (bus_worker)│   │  Scanner     │                │
+│  └──────┬───────┘   └──────┬───────┘   │  (Mopeka/    │                │
+│         │                  │           │   Gobius)    │                │
+│         │      TCP :4001 / │ :4002     └──────────────┘                │
 │         │           ┌──────┴─────────────────────┐                     │
 │         │           │  TCP Proxy / Gateway       │                     │
 │         │           │  (ydnu02_tcp_gateway.py)   │                     │
-│         │           │  Holds /dev/ttyACM0 exclusively                    │
+│         │           │  Holds /dev/ttyACM0 exclusively                  │
 │         │           └─────────────┬──────────────┘                     │
 └─────────┼─────────────────────────┼────────────────────────────────────┘
           │                         │
@@ -59,10 +59,10 @@ A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
     │ Web UI   │             │  CAN Bus    │
     └──────────┘             └──┬──────┬───┘
                                 │      │
-                           ┌────┴┐  ┌──┴─────┐
-                           │Tank │  │Battery │
-                           │Sensor│  │Monitor │
-                           └─────┘  └────────┘
+                          ┌─────┴┐  ┌──┴─────┐
+                          │Tank  │  │Battery │
+                          │Sensor│  │Monitor │
+                          └──────┘  └────────┘
 ```
 
 ### TCP Gateway Architecture
