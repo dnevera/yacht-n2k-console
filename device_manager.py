@@ -1275,6 +1275,13 @@ class DeviceManager:
                     if src is not None:
                         if src not in devices:
                             devices[src] = {"src": src}
+                            # Pre-seed from known device info (from previous bus traffic or replayed cache)
+                            with self._sensors_lock:
+                                known = self._discovered_bus_devices.get(src, {})
+                                for k in ("manufacturer", "model", "serial", "firmware",
+                                          "function_name", "device_class_name", "unique_id", "mfg_code"):
+                                    if k in known:
+                                        devices[src][k] = known[k]
                         if pgn in (60928, 126996):
                             # Re-parse from raw for full device info fields
                             raw_line = frame.get("raw", "")

@@ -331,13 +331,25 @@ def handle_data_client(conn: socket.socket, addr) -> None:
                     _broadcast(line, exclude=conn)   # cache + forward to others
 
                 elif _TX_LINE_RE.match(raw):
-                    # YDNU-02 TX format from virtual N2KDevice (no timestamp).
-                    # Convert to RX format so it can be cached and forwarded.
+                    # YDNU-02 TX format from virtual N2KDevice or bus monitor (no timestamp).
+                    # Convert to RX format so it can be cached and forwarded to TCP clients.
                     parts = raw.rstrip(b'\r\n').split(b' ')
-                    can_id  = parts[0].decode()
+                    can_id  = parts[0]
                     data_bz = bytes(int(b, 16) for b in parts[1:] if b)
-                    rx_line = _fmt_frame(can_id, data_bz)
+                    rx_line = _fmt_frame(can_id.decode(), data_bz)
                     _broadcast(rx_line, exclude=conn)
+
+                    # ISO Request (PGN 59904): forward to serial so physical devices respond.
+                    # Other TX frames (ISO Claims, Product Info) are virtual-only — stay in hub.
+                    try:
+                        pgn, _ = _get_pgn_sa(can_id)
+                        if pgn == 59904 and not service_mode.is_set():
+                            with serial_lock:
+                                if serial_instance and serial_instance.is_open:
+                                    serial_instance.write(raw)
+                            print(f"[data] ISO Request forwarded to serial", flush=True)
+                    except (ValueError, IndexError):
+                        pass
 
     except OSError:
         pass
