@@ -154,7 +154,7 @@ async def _run_device() -> None:
                    GW_PREFERRED_SA)
 
     try:
-        await device.wait_until_ready(timeout=15.0)
+        await device.wait_ready(timeout=15.0)
     except asyncio.TimeoutError:
         logger.warning('[gwdev] Address claim timed out — will retry on reconnect')
         return
