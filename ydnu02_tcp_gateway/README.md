@@ -19,7 +19,7 @@ Standalone Python TCP proxy and device gateway. Manages the hardware serial inte
 │               │ DATA :4001                          DATA :4001 / CTRL :4002 │
 │               ▼                                           ▼                 │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                ydnu02_tcp_gateway.py (Proxy Service)                   │  │
+│  │                ydnu02_tcp_gateway.py (Proxy Service)                  │  │
 │  │                (systemd: ydnu02-tcp-gateway.service)                  │  │
 │  │                ├── DATA Hub :4001 (multi-client broadcast)            │  │
 │  │                ├── CTRL Server :4002 (exclusive session)              │  │
