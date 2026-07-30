@@ -47,12 +47,14 @@ A FastAPI + WebSocket application that runs on a Raspberry Pi 5 and provides:
 
 ### TCP Gateway Architecture
 
-The hardware serial port (`/dev/ttyACM0`) is managed **exclusively** by the TCP Proxy (`nmea_tcp_proxy.py` / `ydnu02-tcp-gateway.service`).
+The hardware serial port (`/dev/ttyACM0`) is managed **exclusively** by the standalone TCP Proxy (`ydnu02_tcp_gateway.py` / `ydnu02-tcp-gateway.service`).
 
 | Port | Mode | Description |
 |------|------|-------------|
 | **`4001`** | **DATA** | Broadcasts `\n`-terminated NMEA 2000 ASCII frames to all connected TCP clients (`ydnu02-web`, Home Assistant, Signal K). Supports bidirectional writing for N2K bus commands. |
 | **`4002`** | **CTRL** | Exclusive control channel for YDNU-02 service mode, serial passthrough, and firmware upload via `ProxyControlClient`. |
+
+For complete documentation, DTR state machine details, and standalone deployment options, see [ydnu02_tcp_gateway/README.md](ydnu02_tcp_gateway/README.md).
 
 ## Hardware
 

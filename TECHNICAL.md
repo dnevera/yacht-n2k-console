@@ -103,12 +103,14 @@ The heart of the dynamic configuration system. Extracts field metadata for **any
 }
 ```
 
-### nmea_tcp_proxy.py — Standalone TCP Gateway Proxy
+### ydnu02_tcp_gateway.py — Standalone TCP Gateway Proxy
 
 - **Exclusive Serial Ownership**: Holds `/dev/ttyACM0` at 115200 baud. No other application opens the USB serial device directly.
 - **Port 4001 (DATA)**: Multi-client broadcast server. Any frame read from serial is immediately broadcasted to all connected TCP clients. Writes from clients are multiplexed down to the serial port.
 - **Port 4002 (CTRL)**: Exclusive control channel (`ProxyControlClient`). Used to pause serial I/O and switch YDNU-02 to service mode for diagnostics, configuration, or firmware flashing.
 - **TCP Disconnect / EOF Protection**: Client sockets raise `ConnectionError` on `b""` (EOF) instead of busy-spinning. Upstream `TextNmea2000Gateway` in `nmea2000` library handles TCP disconnects cleanly without CPU lockup.
+
+For full technical specifications, DTR state machines, and systemd service setup, see [ydnu02_tcp_gateway/README.md](ydnu02_tcp_gateway/README.md).
 
 ### device_manager.py — Bus Worker & TCP Connection
 
