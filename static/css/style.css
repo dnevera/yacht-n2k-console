@@ -528,3 +528,14 @@ h3.section-label {
     justify-content: flex-end;
 }
 .ble-confirm-footer .btn { min-width: 88px; }
+
+/* Registry channel: secondary/metadata styling — reduced font size & muted color */
+.registry-channel {
+    font-size: 0.78rem;
+    opacity: 0.65;
+}
+.registry-channel table td {
+    padding: 3px 6px;
+    font-weight: 400;
+    color: var(--muted, #888) !important;
+}

@@ -187,8 +187,9 @@ Object.assign(App, {
         // Render each data channel as a section
         const channels = s.channels || [];
         channels.forEach(ch => {
-            const chAge = ch.live ? 'live' : (ch.age_sec != null ? ch.age_sec.toFixed(0) + 's ago' : 'last read');
-            const chIcon = ch.name === 'NMEA 2000' ? '📡' : '📶';
+            const isReg = ch.name === 'Registry';
+            const chAge = isReg ? 'config' : (ch.live ? 'live' : (ch.age_sec != null ? ch.age_sec.toFixed(0) + 's ago' : 'last read'));
+            const chIcon = ch.name === 'NMEA 2000' ? '📡' : (isReg ? '📋' : '📶');
             const liveClass = ch.live ? 'channel-live' : 'channel-stale';
 
             html += `<div class="channel-header ${liveClass}">
@@ -197,17 +198,19 @@ Object.assign(App, {
             </div>`;
 
             if (ch.fields && ch.fields.length) {
-                const rows = ch.fields.map(f => [f[0], f[1] || '--', f[2] ? 'accent' : undefined]);
-                html += this.renderInfoTable(rows);
+                const rows = ch.fields.map(f => [f[0], f[1] || '--', isReg ? undefined : (f[2] ? 'accent' : undefined)]);
+                const tableHtml = this.renderInfoTable(rows);
+                if (isReg) {
+                    html += `<div class="registry-channel">${tableHtml}</div>`;
+                } else {
+                    html += tableHtml;
+                }
             }
         });
 
         if (!channels.length) {
             html += `<div class="channel-header channel-stale"><span>⚠️ No data</span></div>`;
         }
-
-        // Footer: registry fluid_type (user config, NOT sensor data)
-        html += `<div class="sensor-source">${s.fluid_type || '--'} <span style="opacity:.5;font-size:.75em">(registry)</span></div>`;
 
         return html;
     },

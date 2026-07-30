@@ -156,13 +156,30 @@ async def api_dashboard_sensors():
                 online = live.get("source") != "OFFLINE"
                 age_sec = mop_age
 
+        # Registry channel (user config / service registry settings)
+        reg_fields = []
+        if entry.get("fluid_type"):
+            reg_fields.append(["Fluid Type", entry["fluid_type"]])
+        if entry.get("capacity_l") is not None:
+            reg_fields.append(["Capacity", _fmt(entry["capacity_l"], "L")])
+        if entry.get("tank_depth_mm") is not None:
+            reg_fields.append(["Tank Depth", _fmt(entry["tank_depth_mm"], "mm", 0)])
+
+        if reg_fields:
+            channels.append({
+                "name": "Registry",
+                "age_sec": None,
+                "live": False,
+                "fields": reg_fields,
+            })
+
         card = {
             "mac": mac,
             "name": entry.get("name", "Sensor"),
             "type": sensor_type,
             "online": online,
             "age_sec": age_sec,
-            "fluid_type": "",  # physical data only — shown in channel fields from NMEA/BLE
+            "fluid_type": entry.get("fluid_type") or entry.get("fluid_type_name") or "",
             "channels": channels,
         }
         result.append(card)
