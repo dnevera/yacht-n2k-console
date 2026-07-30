@@ -53,18 +53,18 @@ DEVICE FRAME CACHE
   startup.  This ensures HA always has at least the gateway device visible,
   independent of whether a physical rescan has ever been performed.
 
-GATEWAY VIRTUAL IDENTITY — NMEA 2000 NAME bit layout (64-bit, little-endian):
-  [0:20]  Unique Number (21 bits)
-  [21:31] Manufacturer Code (11 bits) — 741 = sum(ord(c) for c in "dnevera") % 2048
-  [32:35] Device Instance Lower (4 bits)
-  [36:39] Device Instance Upper (4 bits)
-  [40:46] Device Function  (7 bits)  — 130 = PC Gateway
-  [47]    Reserved = 0
-  [48:54] Device Class     (7 bits)  — 25  = Internetwork device
-  [55:57] System Instance  (3 bits)
-  [58:61] Industry Group   (4 bits)  — 4   = Marine Industry
-  [62]    Reserved = 0
-  [63]    Arbitrary Address Capable = 1
+GATEWAY VIRTUAL IDENTITY — NMEA 2000 NAME bit layout (64-bit, little-endian)
+  as decoded by the nmea2000 Python library (device.py / message.py):
+  bits  0-20: Unique Number (21 bits)
+  bits 21-31: Manufacturer Code (11 bits) — 999 = unregistered/Unknown
+  bits 32-34: Device Instance Lower (3 bits) = 0
+  bits 35-39: Device Instance Upper (5 bits) = 0
+  bits 40-47: Device Function (8 bits)       — 130 = PC Gateway
+  bit     48: Spare = 0
+  bits 49-55: Device Class (7 bits)          — 25  = Internetwork device
+  bits 56-59: System Instance (4 bits) = 0
+  bits 60-62: Industry Group (3 bits)        — 4   = Marine Industry
+  bit     63: Arbitrary Address Capable = 1
 """
 import os
 import re
@@ -116,10 +116,10 @@ _serial_ready = threading.Event()
 
 _GW_SA                = 200   # virtual source address (0xC8) for this process
 _GW_UNIQUE_NUMBER     = 12345 # 21-bit (arbitrary, non-colliding with real devices)
-_GW_MANUFACTURER_CODE = 741   # 11-bit: sum(ord(c) for c in "dnevera") % 2048
+_GW_MANUFACTURER_CODE = 999   # 11-bit: unregistered → displays as "Unknown"
 _GW_DEVICE_FUNCTION   = 130   # PC Gateway
 _GW_DEVICE_CLASS      = 25    # Internetwork device
-_GW_INDUSTRY_GROUP    = 4     # Marine Industry
+_GW_INDUSTRY_GROUP    = 4     # Marine Industry (3-bit field, fits 0-7)
 _GW_AAC               = 1     # Arbitrary Address Capable
 
 
@@ -142,14 +142,27 @@ def _fmt_frame(can_id_hex: str, data: bytes) -> bytes:
 
 
 def _make_gw_iso_claim() -> bytes:
-    """Construct synthetic ISO Address Claim line (PGN 60928) for the gateway."""
+    """Construct synthetic ISO Address Claim line (PGN 60928) for the gateway.
+
+    NAME bit layout matches the nmea2000 Python library exactly (message.py):
+      bits  0-20: unique_number      (21 bits)
+      bits 21-31: manufacturer_code  (11 bits)
+      bits 32-34: device_instance_lower (3 bits) = 0
+      bits 35-39: device_instance_upper (5 bits) = 0
+      bits 40-47: device_function    (8 bits)  ← full byte, NOT 7 bits
+      bit     48: spare = 0
+      bits 49-55: device_class       (7 bits)  ← starts at 49, NOT 48
+      bits 56-59: system_instance    (4 bits) = 0
+      bits 60-62: industry_group     (3 bits)  ← 3-bit field at 60, NOT 4-bit at 58
+      bit     63: arbitrary_address_capable = 1
+    """
     name_int = (
-        (_GW_UNIQUE_NUMBER     & 0x1FFFFF)       |
-        ((_GW_MANUFACTURER_CODE & 0x7FF)  << 21) |
-        ((_GW_DEVICE_FUNCTION   & 0x7F)   << 40) |
-        ((_GW_DEVICE_CLASS      & 0x7F)   << 48) |
-        ((_GW_INDUSTRY_GROUP    & 0x0F)   << 58) |
-        ((_GW_AAC & 0x01) << 63)
+        (_GW_UNIQUE_NUMBER     & 0x1FFFFF)       |   # bits  0-20
+        ((_GW_MANUFACTURER_CODE & 0x7FF) << 21)  |   # bits 21-31
+        ((_GW_DEVICE_FUNCTION   & 0xFF)  << 40)  |   # bits 40-47 (8-bit field!)
+        ((_GW_DEVICE_CLASS      & 0x7F)  << 49)  |   # bits 49-55 (spare at 48)
+        ((_GW_INDUSTRY_GROUP    & 0x07)  << 60)  |   # bits 60-62 (3-bit field!)
+        ((_GW_AAC & 0x01) << 63)                     # bit  63
     )
     name_bytes = name_int.to_bytes(8, 'little')
     # CAN ID: priority=6, DP=0, PF=0xEE, PS=0xFF (broadcast), SA=_GW_SA
@@ -820,12 +833,21 @@ def _accept_loop(srv: socket.socket, handler, label: str) -> None:
 # ── Gateway telemetry ─────────────────────────────────────────────────────────
 
 def _read_cpu_temp() -> float | None:
-    """Read Raspberry Pi CPU temperature in Celsius from sysfs thermal zone."""
-    try:
-        with open('/sys/class/thermal/thermal_zone0/temp') as fh:
-            return int(fh.read().strip()) / 1000.0
-    except (OSError, ValueError):
-        return None
+    """Read CPU temperature in Celsius from sysfs thermal zone.
+
+    Linux always stores the value in millidegrees Celsius (e.g. 55000 = 55 °C).
+    Tries thermal_zone0 first (Pi5 SoC), falls back to zone1 if unavailable.
+    """
+    for path in (
+        '/sys/class/thermal/thermal_zone0/temp',
+        '/sys/class/thermal/thermal_zone1/temp',
+    ):
+        try:
+            with open(path) as fh:
+                return int(fh.read().strip()) / 1000.0   # millidegrees → Celsius
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def _make_heartbeat(seq: int, interval_ms: int = 10000) -> bytes:
@@ -845,34 +867,24 @@ def _make_heartbeat(seq: int, interval_ms: int = 10000) -> bytes:
     return _fmt_frame(f'{can_id:08X}', data)
 
 
-def _make_cpu_temp_frames(temp_c: float, seq: int) -> list[bytes]:
-    """Construct Temperature Extended Range fast-packet (PGN 130316).
+def _make_cpu_temp(temp_c: float, seq: int) -> bytes:
+    """Construct a Temperature frame (PGN 130312) for the gateway virtual device.
 
-    PGN 130316 — fast-packet, 9 payload bytes → 2 CAN frames:
-      [0]   SID (uint8, rolling sequence)
+    PGN 130312 — single CAN frame, 8 payload bytes (universally supported by HA):
+      [0]   SID (uint8, rolling sequence identifier)
       [1]   Temperature Instance (uint8, 0 = first sensor on this device)
       [2]   Temperature Source  (uint8, 3 = Engine Room — closest to CPU/board temp)
-      [3:6] Actual Temperature  (uint24 LE, units 0.001 K, e.g. 318150 = 318.15 K = 45 °C)
-      [6:9] Set Temperature     (uint24 LE, 0xFFFFFF = N/A)
+      [3:5] Actual Temperature  (uint16 LE, resolution 0.01 K)
+              e.g. 55 °C → (55 + 273.15) × 100 = 32815 → LE bytes 2F 80
+      [5:7] Set Temperature     (uint16 LE, 0xFFFF = N/A)
+      [7]   Reserved (0xFF)
 
-    CAN ID: priority=6, DP=1, PF=0xFD, PS=0x0C, SA=_GW_SA
+    CAN ID: priority=6, DP=1, PF=0xFD, PS=0x08, SA=_GW_SA  →  0x19FD08C8
     """
-    can_id  = (6 << 26) | (1 << 24) | (0xFD << 16) | (0x0C << 8) | _GW_SA
-    cid_hex = f'{can_id:08X}'
-
-    temp_raw   = int((temp_c + 273.15) * 1000)    # Celsius → 0.001 K units
-    temp_bytes = temp_raw.to_bytes(3, 'little')
-
-    # payload: SID=seq, instance=0, source=3, actual_temp, set_temp=N/A
-    payload = bytes([seq & 0xFF, 0, 3]) + temp_bytes + b'\xff\xff\xff'  # 9 bytes
-
-    fp_seq  = 0
-    # Frame 0: [fp_seq<<5|0] [total=9] [payload[0:6]]
-    frame0  = bytes([(fp_seq << 5) | 0, len(payload)]) + payload[:6]
-    # Frame 1: [fp_seq<<5|1] [payload[6:9]] [0xFF × 4 padding]
-    frame1  = bytes([(fp_seq << 5) | 1]) + payload[6:] + b'\xff' * 4
-
-    return [_fmt_frame(cid_hex, frame0), _fmt_frame(cid_hex, frame1)]
+    can_id   = (6 << 26) | (1 << 24) | (0xFD << 16) | (0x08 << 8) | _GW_SA
+    temp_raw = int((temp_c + 273.15) * 100)     # Celsius → 0.01 K units (uint16)
+    data = bytes([seq & 0xFF, 0, 3]) + struct.pack('<H', temp_raw) + b'\xff\xff\xff'
+    return _fmt_frame(f'{can_id:08X}', data)
 
 
 def _telemetry_sender() -> None:
@@ -896,8 +908,7 @@ def _telemetry_sender() -> None:
         # CPU temperature — every 3 seconds
         temp = _read_cpu_temp()
         if temp is not None:
-            for frame in _make_cpu_temp_frames(temp, temp_seq):
-                _broadcast(frame)
+            _broadcast(_make_cpu_temp(temp, temp_seq))
             temp_seq = (temp_seq + 1) & 0xFF
         else:
             print("[gw] CPU temp unavailable (non-Pi platform?)", flush=True)
