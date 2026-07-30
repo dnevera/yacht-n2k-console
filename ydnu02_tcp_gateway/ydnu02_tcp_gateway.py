@@ -53,18 +53,16 @@ DEVICE FRAME CACHE
   startup.  This ensures HA always has at least the gateway device visible,
   independent of whether a physical rescan has ever been performed.
 
-GATEWAY VIRTUAL IDENTITY — NMEA 2000 NAME bit layout (64-bit, little-endian)
-  as decoded by the nmea2000 Python library (device.py / message.py):
-  bits  0-20: Unique Number (21 bits)
-  bits 21-31: Manufacturer Code (11 bits) — 999 = unregistered/Unknown
-  bits 32-34: Device Instance Lower (3 bits) = 0
-  bits 35-39: Device Instance Upper (5 bits) = 0
-  bits 40-47: Device Function (8 bits)       — 130 = PC Gateway
-  bit     48: Spare = 0
-  bits 49-55: Device Class (7 bits)          — 25  = Internetwork device
-  bits 56-59: System Instance (4 bits) = 0
-  bits 60-62: Industry Group (3 bits)        — 4   = Marine Industry
-  bit     63: Arbitrary Address Capable = 1
+GATEWAY VIRTUAL IDENTITY
+  The gateway registers itself as a virtual N2K device (SA=200) so Home Assistant
+  and Signal K can track its liveness.  All identity and telemetry is handled by
+  ydnu02_gateway_device.py which uses the nmea2000 Python library's N2KDevice,
+  connecting back to our own port 4001 (CAN_FRAME_ASCII, bidirectional hub).
+
+  Port 4001 is a bidirectional N2K bus hub:
+    serial reader → broadcast to all TCP clients
+    TCP client frame → broadcast to all OTHER TCP clients (not to serial)
+  This lets the N2KDevice's frames (ISO Claim, Product Info, HB, Temp) reach HA.
 """
 import os
 import re
@@ -112,111 +110,11 @@ service_conn_lock = threading.Lock()
 # ISO Requests must NOT be sent before this is set — YDNU-02 will ignore them.
 _serial_ready = threading.Event()
 
-# ── Gateway virtual identity constants ────────────────────────────────────────
-
-_GW_SA                = 200   # virtual source address (0xC8) for this process
-_GW_UNIQUE_NUMBER     = 12345 # 21-bit (arbitrary, non-colliding with real devices)
-_GW_MANUFACTURER_CODE = 999   # 11-bit: unregistered → displays as "Unknown"
-_GW_DEVICE_FUNCTION   = 130   # PC Gateway
-_GW_DEVICE_CLASS      = 25    # Internetwork device
-_GW_INDUSTRY_GROUP    = 4     # Marine Industry (3-bit field, fits 0-7)
-_GW_AAC               = 1     # Arbitrary Address Capable
-
-
-def _read_version() -> str:
-    """Read software version from VERSION file in project root."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    for path in (os.path.join(here, '..', 'VERSION'),
-                 os.path.join(here, 'VERSION')):
-        try:
-            with open(path) as fh:
-                return fh.read().strip()
-        except OSError:
-            pass
-    return '0.0.0'
-
 
 def _fmt_frame(can_id_hex: str, data: bytes) -> bytes:
     """Format raw CAN data as a YDNU-02 ASCII text line."""
     return f'00:00:00.000 R {can_id_hex} {" ".join(f"{b:02X}" for b in data)}\n'.encode()
 
-
-def _make_gw_iso_claim() -> bytes:
-    """Construct synthetic ISO Address Claim line (PGN 60928) for the gateway.
-
-    NAME bit layout matches the nmea2000 Python library exactly (message.py):
-      bits  0-20: unique_number      (21 bits)
-      bits 21-31: manufacturer_code  (11 bits)
-      bits 32-34: device_instance_lower (3 bits) = 0
-      bits 35-39: device_instance_upper (5 bits) = 0
-      bits 40-47: device_function    (8 bits)  ← full byte, NOT 7 bits
-      bit     48: spare = 0
-      bits 49-55: device_class       (7 bits)  ← starts at 49, NOT 48
-      bits 56-59: system_instance    (4 bits) = 0
-      bits 60-62: industry_group     (3 bits)  ← 3-bit field at 60, NOT 4-bit at 58
-      bit     63: arbitrary_address_capable = 1
-    """
-    name_int = (
-        (_GW_UNIQUE_NUMBER     & 0x1FFFFF)       |   # bits  0-20
-        ((_GW_MANUFACTURER_CODE & 0x7FF) << 21)  |   # bits 21-31
-        ((_GW_DEVICE_FUNCTION   & 0xFF)  << 40)  |   # bits 40-47 (8-bit field!)
-        ((_GW_DEVICE_CLASS      & 0x7F)  << 49)  |   # bits 49-55 (spare at 48)
-        ((_GW_INDUSTRY_GROUP    & 0x07)  << 60)  |   # bits 60-62 (3-bit field!)
-        ((_GW_AAC & 0x01) << 63)                     # bit  63
-    )
-    name_bytes = name_int.to_bytes(8, 'little')
-    # CAN ID: priority=6, DP=0, PF=0xEE, PS=0xFF (broadcast), SA=_GW_SA
-    can_id = (6 << 26) | (0xEE << 16) | (0xFF << 8) | _GW_SA
-    return _fmt_frame(f'{can_id:08X}', name_bytes)
-
-
-def _make_gw_product_info(version: str, serial_code: str) -> list[bytes]:
-    """Construct synthetic Product Information fast-packet lines (PGN 126996).
-
-    PGN 126996 payload (134 bytes):
-      [0:2]    N2K Version (uint16, units 0.001 → 1301 = 1.301)
-      [2:4]    Product Code (uint16)
-      [4:36]   Model ID (strfix32)
-      [36:68]  Software Version Code (strfix32)
-      [68:100] Model Version (strfix32)
-      [100:132] Model Serial Code (strfix32)
-      [132]    Certification Level (uint8, 2=Level B)
-      [133]    Load Equivalency (uint8)
-    """
-    def pad(s: str, n: int = 32) -> bytes:
-        b = s.encode('ascii', errors='replace')[:n]
-        return b + b'\xff' * (n - len(b))
-
-    payload = bytearray()
-    payload += struct.pack('<H', 1301)               # N2K Version (1.301)
-    payload += struct.pack('<H', 1)                  # Product Code
-    payload += pad('YDNU-02 TCP-GW')                 # Model ID
-    payload += pad(version)                           # Software Version Code
-    payload += pad('yacht-n2k-console')               # Model Version
-    payload += pad(serial_code[:32])                  # Model Serial Code
-    payload += bytes([2, 1])                          # Cert Level B=2, Load Equiv=1
-
-    # CAN ID: priority=6, DP=1, PF=0xF0, PS=0x14, SA=_GW_SA
-    can_id = (6 << 26) | (1 << 24) | (0xF0 << 16) | (0x14 << 8) | _GW_SA
-    cid_hex = f'{can_id:08X}'
-
-    total = len(payload)    # 134
-    seq   = 0
-    frames: list[bytes] = []
-
-    # Frame 0: [seq<<5|0] [total_bytes] [first 6 payload bytes]
-    frames.append(_fmt_frame(cid_hex,
-                             bytes([(seq << 5) | 0, total]) + bytes(payload[:6])))
-
-    # Frames 1..N: [seq<<5|fn] [7 payload bytes, 0xFF-padded on last frame]
-    offset, fn = 6, 1
-    while offset < total:
-        chunk = bytes(payload[offset:offset + 7]).ljust(7, b'\xff')
-        frames.append(_fmt_frame(cid_hex, bytes([(seq << 5) | fn]) + chunk))
-        offset += 7
-        fn += 1
-
-    return frames
 
 
 # ── Device frame cache ────────────────────────────────────────────────────────
@@ -300,16 +198,20 @@ def _cache_product_info_frame(sa: int, line: bytes) -> None:
 
 # ── Data port helpers ─────────────────────────────────────────────────────────
 
-def _broadcast(line: bytes) -> None:
-    """Send a line to all data clients, removing dead ones.
+def _broadcast(line: bytes, exclude: socket.socket | None = None) -> None:
+    """Send a line to all data clients (optionally excluding one sender).
 
     Also updates the device frame cache for:
       PGN 60928  — ISO Address Claim (single frame, keyed by SA)
       PGN 126996 — Product Information (fast-packet, reassembled per SA)
     Cached frames are replayed to every new client on connect so HA can build
     its N2K network map without requiring a rescan.
+
+    exclude: when set (e.g. the client that sent this frame), skip sending to it.
+    Serial reader calls _broadcast(line) with exclude=None (send to all clients).
+    handle_data_client calls _broadcast(line, exclude=conn) to avoid self-echo.
     """
-    # Update device frame cache from live N2K traffic
+    # Update device frame cache from live N2K traffic (serial OR virtual device)
     if len(line) >= 24:
         try:
             pgn, sa = _get_pgn_sa(line[15:23])
@@ -325,6 +227,8 @@ def _broadcast(line: bytes) -> None:
     dead: set = set()
     with clients_lock:
         for conn in list(clients):
+            if conn is exclude:
+                continue
             try:
                 conn.sendall(line)
             except OSError:
@@ -335,10 +239,7 @@ def _broadcast(line: bytes) -> None:
 def _replay_device_frames(conn: socket.socket) -> None:
     """Replay cached device identification frames to a newly connected client.
 
-    Sends ISO Address Claims and Product Info for all known N2K devices,
-    including the gateway's own synthetic virtual identity (SA=_GW_SA).
-    HA receives these and immediately builds its network map so sensor states
-    become available without waiting for a manual rescan or device power-cycle.
+    Sends ISO Address Claims and Product Info for all known N2K devices.
     """
     with _device_frame_lock:
         snapshot = {sa: dict(e) for sa, e in _device_frame_cache.items()}
@@ -368,16 +269,7 @@ _ISO_REQUEST_MIN_INTERVAL = 5.0  # seconds: minimum interval between ISO Request
 
 
 def _send_iso_request() -> None:
-    """Best-effort: transmit ISO Request (PGN 59904) via YDNU-02 RAW TX.
-
-    Asks all N2K devices to broadcast their ISO Address Claim (PGN 60928).
-    Effective only if YDNU-02 firmware supports TX in RAW mode.
-    Primary mechanism is _replay_device_frames() which works unconditionally.
-
-    YDNU-02 RAW TX format: "HH:MM:SS.mmm T CANID DD DD DD\r\n"
-    CAN ID 18EAFFFE: prio=6, PF=0xEA (ISO Request), PS=0xFF, SA=0xFE (null)
-    Data: 00 EE 00  (PGN 60928 in little-endian, 3 bytes)
-    """
+    """Best-effort: transmit ISO Request (PGN 59904) via YDNU-02 RAW TX."""
     global _iso_request_last_sent
     with _iso_request_lock:
         now = time.time()
@@ -402,34 +294,26 @@ def _send_iso_request() -> None:
 
 
 def handle_data_client(conn: socket.socket, addr) -> None:
-    """Data port client: register for Serial→TCP broadcast, forward TCP→Serial."""
+    """Data port client: N2K bus hub (bidirectional TCP only, no serial forwarding)."""
     print(f"[data] client connected: {addr}", flush=True)
     with clients_lock:
         clients.add(conn)
 
-    # 1. Replay all cached device identification frames (ISO Claims + Product Info
-    #    for every known N2K device, including gateway's own virtual identity).
-    #    This primes HA's network map immediately so sensors become available
-    #    without a manual rescan or device power-cycle.
     _replay_device_frames(conn)
-
-    # 2. Best-effort ISO Request TX (works only if YDNU-02 supports RAW TX mode).
-    #    Triggers fresh Claims from devices that came online after our startup.
     _send_iso_request()
 
+    buf = b''
     try:
         while True:
-            data = conn.recv(4096)
-            if not data:
+            chunk = conn.recv(4096)
+            if not chunk:
                 break
-            # Forward TCP→Serial only when NOT in exclusive mode
-            if not service_mode.is_set():
-                with serial_lock:
-                    if serial_instance and serial_instance.is_open:
-                        try:
-                            serial_instance.write(data)
-                        except serial.SerialException as e:
-                            print(f"[serial] write error from data client: {e}", flush=True)
+            buf += chunk
+            while b'\n' in buf:
+                line, buf = buf.split(b'\n', 1)
+                line += b'\n'
+                if _NMEA_LINE_RE.match(line):
+                    _broadcast(line, exclude=conn)   # cache + forward to others
     except OSError:
         pass
     finally:
@@ -452,28 +336,9 @@ def _ctrl_send(conn: socket.socket, msg: str) -> None:
 
 
 def _enter_service_mode_on_device() -> None:
-    """
-    Switch YDNU-02 from RAW mode to interactive service terminal mode.
-
-    The YDNU-02 ONLY processes OS-level mode commands (YDNU MODE SERVICE) when
-    the serial port is NOT held open in terminal mode. The mechanism requires a
-    DTR transition: the port must be CLOSED first, then the command is written
-    via echo (which opens, writes, and closes — toggling DTR), then the port is
-    REOPENED for the service terminal session.
-
-    serial.write("YDNU MODE SERVICE\\r\\n") does NOT work while port is open
-    because the DTR line stays high and YDNU-02 never sees the transition.
-
-    This function is called by the ctrl handler after service_mode.set() and
-    after serial_reader has exited its readline() cycle. It replaces serial_instance
-    with a new Serial object configured for service terminal use (timeout=2.0s).
-    serial_reader will adopt the new instance via its sleep-loop adoption check.
-
-    Must be called with service_mode.is_set() == True.
-    """
+    """Switch YDNU-02 from RAW mode to interactive service terminal mode."""
     global serial_instance
 
-    # Step 1: close the proxy's serial connection to release the DTR line
     with serial_lock:
         _ser = serial_instance
         serial_instance = None
@@ -485,10 +350,6 @@ def _enter_service_mode_on_device() -> None:
             pass
     print("[ctrl] serial closed for service mode entry", flush=True)
 
-    # Step 2: OS-level mode switch.
-    # stty hupcl: make the port lower DTR on close (ensures clean DTR toggle).
-    # echo: opens the port (DTR high), writes the command, closes (DTR low).
-    # YDNU-02 sees DTR transition → high → low and processes the command.
     subprocess.run(
         ["stty", "-F", SERIAL_PORT, "hupcl"],
         capture_output=True, timeout=5
@@ -497,19 +358,14 @@ def _enter_service_mode_on_device() -> None:
         f'echo "YDNU MODE SERVICE" > {SERIAL_PORT}',
         shell=True, capture_output=True, timeout=5
     )
-    # Wait for YDNU-02 to switch modes and output its welcome screen
     time.sleep(1.5)
     print("[ctrl] YDNU MODE SERVICE sent via OS echo", flush=True)
 
-    # Step 3: reopen the serial port for service terminal I/O.
-    # timeout=2.0: service terminal responses can be slow (DIAG, PRINT filters).
     new_ser = serial.Serial(
         SERIAL_PORT, SERIAL_BAUD, timeout=2.0, dsrdtr=True, rtscts=False
     )
     new_ser.dtr = True
     time.sleep(0.2)
-    # Flush the welcome screen printed by YDNU-02 after mode switch.
-    # The ctrl client reads terminal output via passthrough; the welcome is not needed.
     if new_ser.in_waiting:
         new_ser.read(new_ser.in_waiting)
 
@@ -520,37 +376,14 @@ def _enter_service_mode_on_device() -> None:
 
 
 def _exit_service_mode_on_device() -> None:
-    """
-    Switch YDNU-02 from service terminal back to RAW mode.
-
-    Unlike entry (which requires OS-level echo), EXIT works via a normal serial
-    write because YDNU-02 is actively listening on the serial line in service
-    terminal mode. Sending 'MODE RAW\\r\\n' causes it to switch back immediately.
-
-    After the mode switch, serial.timeout is reset to 0.1s for fast NMEA polling.
-    No close/reopen needed: serial_reader resumes readline() on the same fd,
-    which is now in RAW mode and will start receiving N2K frames again.
-
-    NOTE: we do NOT flush the serial input buffer after MODE RAW.
-    YDNU-02 sends ISO Address Claims shortly after re-entering RAW mode (N2K
-    re-enumeration).  Flushing would discard them before serial_reader can cache
-    them.  The mode-switch text response is discarded by _NMEA_LINE_RE in the
-    serial_reader loop, so it does not cause any harm.
-
-    Must be called with service_mode.is_set() == True (before clear).
-    """
+    """Switch YDNU-02 from service terminal back to RAW mode."""
     with serial_lock:
         _ser = serial_instance
 
     if _ser and _ser.is_open:
         try:
-            # Exit YDNU-02 service terminal: MODE RAW works here because the device
-            # is in service terminal mode and is reading serial input normally.
             _ser.write(b"MODE RAW\r\n")
             time.sleep(0.5)
-            # Reset timeout from 2.0s (service terminal) to 0.1s (fast NMEA polling).
-            # Do NOT flush _ser.in_waiting here — ISO Claims from N2K re-enumeration
-            # arrive immediately after MODE RAW and must reach serial_reader for caching.
             _ser.timeout = 0.1
         except serial.SerialException as e:
             print(f"[ctrl] error during service exit: {e}", flush=True)
@@ -559,22 +392,7 @@ def _exit_service_mode_on_device() -> None:
 
 
 def handle_ctrl_client(conn: socket.socket, addr) -> None:
-    """
-    Control port client: single session for service/firmware mode.
-
-    SERVICE flow (proxy as gateway):
-      1. SERVICE_START  → proxy: service_mode.set(), serial close, OS mode switch,
-                          serial reopen → YDNU-02 is in service terminal → READY
-      2. passthrough    → client sends terminal commands; proxy reads serial responses
-      3. SERVICE_END    → proxy: MODE RAW to device, reset timeout → OK, service_mode.clear()
-
-    FIRMWARE flow (raw passthrough, no mode switch):
-      1. FIRMWARE_START → service_mode.set(), flush buffer → READY
-      2. passthrough    → raw binary data forwarded to/from serial
-      3. FIRMWARE_END   → service_mode.clear() → OK
-
-    The ctrl_mode variable tracks which flow is active for the finally-block cleanup.
-    """
+    """Control port client: single session for service/firmware mode."""
     global service_conn
     print(f"[ctrl] client connected: {addr}", flush=True)
 
@@ -585,7 +403,6 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
             return
         service_conn = conn
 
-    # Track session type so the finally block knows whether to do a device mode exit
     ctrl_mode: str | None = None   # "SERVICE" | "FIRMWARE"
 
     try:
@@ -593,12 +410,9 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
         buf = b""
 
         while True:
-            # Poll loop: read ctrl commands, push serial data to client
             try:
                 chunk = conn.recv(256)
             except socket.timeout:
-                # In passthrough: push any available serial data to client.
-                # This is the main data path for reading service terminal responses.
                 if service_mode.is_set():
                     with serial_lock:
                         ser = serial_instance
@@ -623,17 +437,11 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
                     service_mode.set()
                     print(f"[ctrl] {cmd} — broadcast paused", flush=True)
 
-                    # Wait: serial_reader exits its current readline() in ≤100ms
-                    # (serial timeout=0.1s), then enters the service_mode sleep loop.
                     time.sleep(0.15)
 
                     if cmd == "SERVICE_START":
-                        # Full gateway mode switch: close → echo → reopen.
-                        # After this call, YDNU-02 is in service terminal mode and
-                        # serial_instance points to the reopened service terminal fd.
                         _enter_service_mode_on_device()
                     else:
-                        # FIRMWARE_START: no mode switch, just flush stale data.
                         with serial_lock:
                             _ser = serial_instance
                         if _ser and _ser.is_open:
@@ -643,9 +451,6 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
 
                 elif cmd in ("SERVICE_END", "FIRMWARE_END"):
                     if ctrl_mode == "SERVICE":
-                        # Send MODE RAW to device and reset serial timeout.
-                        # This must happen BEFORE service_mode.clear() so that
-                        # serial_reader does not race with the mode-switch write.
                         _exit_service_mode_on_device()
 
                     service_mode.clear()
@@ -654,9 +459,6 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
                     _ctrl_send(conn, "OK")
 
                 elif service_mode.is_set():
-                    # Passthrough: forward raw terminal command bytes to serial.
-                    # cmd_bytes still has \r if client sent \r\n, so raw = cmd_bytes + \n
-                    # reconstructs the original \r\n terminator for the device.
                     raw = cmd_bytes + b"\n"
                     with serial_lock:
                         if serial_instance and serial_instance.is_open:
@@ -671,14 +473,10 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
     except OSError:
         pass
     finally:
-        # Safety cleanup: if session ended without SERVICE_END (client crash, timeout),
-        # ensure YDNU-02 is returned to RAW mode and broadcast is resumed.
-        # Race-safe: only the session that registered as service_conn cleans up.
         with service_conn_lock:
             if service_conn is conn:
                 if service_mode.is_set():
                     if ctrl_mode == "SERVICE":
-                        # Best-effort: device may already have timed out of service mode
                         try:
                             _exit_service_mode_on_device()
                         except Exception:
@@ -696,21 +494,7 @@ def handle_ctrl_client(conn: socket.socket, addr) -> None:
 # ── Serial reader ─────────────────────────────────────────────────────────────
 
 def serial_reader() -> None:
-    """
-    Serial→TCP: own the serial port, read lines, broadcast to data clients.
-
-    In service_mode: stop reading, enter a 50ms sleep loop. The ctrl handler
-    may replace serial_instance (close for mode switch → reopen in service
-    terminal mode). The sleep loop adopts the new serial_instance so that when
-    service_mode clears, readline() uses the correct (already-reopen) fd.
-
-    Adoption logic:
-        while service_mode.is_set():
-            sleep(0.05)
-            if serial_instance changed → adopt it
-            continue
-        ser.readline()   ← uses adopted ser (service terminal or new RAW fd)
-    """
+    """Serial→TCP: own the serial port, read lines, broadcast to data clients."""
     global serial_instance
     while True:
         try:
@@ -721,8 +505,6 @@ def serial_reader() -> None:
                 serial_instance = ser
             print(f"[serial] opened {SERIAL_PORT} @ {SERIAL_BAUD}", flush=True)
 
-            # Capture ALL bytes during init (don't discard) so we can extract
-            # any device identification frames the YDNU-02 sent at startup.
             init_data = b""
 
             ser.write(b"YDNU MODE RAW\r\n")
@@ -735,9 +517,6 @@ def serial_reader() -> None:
                 init_data += ser.read(ser.in_waiting)
             print("[serial] YDNU-02 initialized in RAW mode", flush=True)
 
-            # Cache any ISO Claims (PGN 60928) or Product Info (PGN 126996) that
-            # arrived during init.  YDNU-02 sends its own Claim right after init;
-            # other devices may do the same if they were already on the bus.
             for raw_line in init_data.split(b"\n"):
                 if not raw_line:
                     continue
@@ -749,44 +528,28 @@ def serial_reader() -> None:
                     if pgn == 60928:
                         with _device_frame_lock:
                             _device_frame_cache.setdefault(sa, {})['iso_claim'] = line
-                        print(f"[serial] startup ISO Claim cached SA={sa}: "
-                              f"{line.decode(errors='ignore').strip()}", flush=True)
                     elif pgn == 126996:
                         _cache_product_info_frame(sa, line)
                 except (ValueError, IndexError):
                     pass
 
-            non_gw = sum(1 for sa in _device_frame_cache if sa != _GW_SA)
-            print(f"[serial] {non_gw} real device(s) cached from startup data", flush=True)
-
-            # Signal readiness and send initial ISO Request so all N2K devices
-            # announce themselves. This primes HA's network map even if HA connected
-            # before init completed (the _serial_ready.wait() in _send_iso_request
-            # ensures the on-connect call also runs after this point).
             _serial_ready.set()
             _send_iso_request()
 
             while True:
                 if service_mode.is_set():
-                    # Exclusive mode: ctrl handler owns the serial.
-                    # The ctrl handler may replace serial_instance (close → reopen)
-                    # during the SERVICE_START mode switch. Adopt the new fd so that
-                    # when service_mode clears, readline() uses the correct object.
                     time.sleep(0.05)
                     with serial_lock:
                         current = serial_instance
                     if current is not None and current is not ser:
-                        ser = current   # adopt: ctrl handler replaced serial_instance
+                        ser = current
                     continue
 
                 raw = ser.readline()
                 if not raw:
                     continue
 
-                # Strip \r\n, re-terminate with \n only for clean TCP stream
                 line = raw.rstrip(b"\r\n") + b"\n"
-
-                # Discard non-NMEA lines (init echoes, mode-switch text, etc.)
                 if not _NMEA_LINE_RE.match(line):
                     continue
 
@@ -794,10 +557,10 @@ def serial_reader() -> None:
 
         except serial.SerialException as e:
             print(f"[serial] error: {e} — retrying in 5s", flush=True)
-            _serial_ready.clear()  # not ready until re-initialized
+            _serial_ready.clear()
             with serial_lock:
                 serial_instance = None
-            service_mode.clear()   # safety: exit service mode on serial error
+            service_mode.clear()
             time.sleep(5)
         except Exception as e:
             print(f"[serial] unexpected error: {e} — retrying in 5s", flush=True)
@@ -830,119 +593,20 @@ def _accept_loop(srv: socket.socket, handler, label: str) -> None:
             break
 
 
-# ── Gateway telemetry ─────────────────────────────────────────────────────────
-
-def _read_cpu_temp() -> float | None:
-    """Read CPU temperature in Celsius from sysfs thermal zone.
-
-    Linux always stores the value in millidegrees Celsius (e.g. 55000 = 55 °C).
-    Tries thermal_zone0 first (Pi5 SoC), falls back to zone1 if unavailable.
-    """
-    for path in (
-        '/sys/class/thermal/thermal_zone0/temp',
-        '/sys/class/thermal/thermal_zone1/temp',
-    ):
-        try:
-            with open(path) as fh:
-                return int(fh.read().strip()) / 1000.0   # millidegrees → Celsius
-        except (OSError, ValueError):
-            continue
-    return None
-
-
-def _make_heartbeat(seq: int, interval_ms: int = 10000) -> bytes:
-    """Construct a Heartbeat frame (PGN 126993) for the gateway virtual device.
-
-    PGN 126993 — single CAN frame, 8 payload bytes:
-      [0:2] Data transmit interval (uint16 LE, ms)
-      [2]   Sequence counter (uint8, bits[7:2] = counter, bits[1:0] = comm state=0)
-      [3:8] Reserved (0xFF)
-
-    CAN ID: priority=7, DP=1, PF=0xF0, PS=0x11, SA=_GW_SA
-    """
-    can_id = (7 << 26) | (1 << 24) | (0xF0 << 16) | (0x11 << 8) | _GW_SA
-    # seq counter: bits[7:2] increment each heartbeat, bits[1:0] = comm state (0=OK)
-    seq_byte = ((seq & 0x3F) << 2) & 0xFC
-    data = struct.pack('<H', interval_ms) + bytes([seq_byte]) + b'\xff' * 5
-    return _fmt_frame(f'{can_id:08X}', data)
-
-
-def _make_cpu_temp(temp_c: float, seq: int) -> bytes:
-    """Construct a Temperature frame (PGN 130312) for the gateway virtual device.
-
-    PGN 130312 — single CAN frame, 8 payload bytes (universally supported by HA):
-      [0]   SID (uint8, rolling sequence identifier)
-      [1]   Temperature Instance (uint8, 0 = first sensor on this device)
-      [2]   Temperature Source  (uint8, 3 = Engine Room — closest to CPU/board temp)
-      [3:5] Actual Temperature  (uint16 LE, resolution 0.01 K)
-              e.g. 55 °C → (55 + 273.15) × 100 = 32815 → LE bytes 2F 80
-      [5:7] Set Temperature     (uint16 LE, 0xFFFF = N/A)
-      [7]   Reserved (0xFF)
-
-    CAN ID: priority=6, DP=1, PF=0xFD, PS=0x08, SA=_GW_SA  →  0x19FD08C8
-    """
-    can_id   = (6 << 26) | (1 << 24) | (0xFD << 16) | (0x08 << 8) | _GW_SA
-    temp_raw = int((temp_c + 273.15) * 100)     # Celsius → 0.01 K units (uint16)
-    data = bytes([seq & 0xFF, 0, 3]) + struct.pack('<H', temp_raw) + b'\xff\xff\xff'
-    return _fmt_frame(f'{can_id:08X}', data)
-
-
-def _telemetry_sender() -> None:
-    """Periodic telemetry broadcaster for the gateway's virtual N2K identity (SA=_GW_SA).
-
-    CPU Temperature (PGN 130316): every 3 seconds — keeps device alive, real Pi metric
-    Heartbeat       (PGN 126993): every 10 seconds — explicit N2K liveness signal
-
-    Frames are sent via _broadcast() to all connected DATA clients (HA, Signal K, etc.).
-    They are NOT cached in _device_frame_cache — telemetry is always live data.
-    The ISO Claim + Product Info for SA=_GW_SA remain cached for new-client replay.
-    """
-    hb_seq   = 0
-    temp_seq = 0
-    last_hb  = 0.0
-
-    while True:
-        time.sleep(3.0)
-        now = time.time()
-
-        # CPU temperature — every 3 seconds
-        temp = _read_cpu_temp()
-        if temp is not None:
-            _broadcast(_make_cpu_temp(temp, temp_seq))
-            temp_seq = (temp_seq + 1) & 0xFF
-        else:
-            print("[gw] CPU temp unavailable (non-Pi platform?)", flush=True)
-
-        # Heartbeat — every 10 seconds (roughly every 3rd temp cycle)
-        if now - last_hb >= 10.0:
-            _broadcast(_make_heartbeat(hb_seq, interval_ms=10000))
-            hb_seq  = (hb_seq + 1) % 64
-            last_hb = now
-
 
 def main() -> None:
-    # Seed device frame cache with synthetic gateway identity frames.
-    # Gateway presents itself as a virtual N2K device (SA=_GW_SA) so HA
-    # always has at least one device on connect, independent of whether a
-    # physical network scan has been performed.
-    _gw_version      = _read_version()
-    _gw_serial       = socket.gethostname()
-    _gw_iso_claim    = _make_gw_iso_claim()
-    _gw_product_info = _make_gw_product_info(_gw_version, _gw_serial)
-    with _device_frame_lock:
-        _device_frame_cache[_GW_SA] = {
-            'iso_claim':    _gw_iso_claim,
-            'product_info': _gw_product_info,
-        }
-    print(f"[gw] SA={_GW_SA}  version={_gw_version}  serial={_gw_serial}", flush=True)
+    # Import gateway device module (uses nmea2000 library's N2KDevice).
+    # Deferred import so gateway can start without the library on non-target platforms.
+    from ydnu02_gateway_device import start_in_thread as start_gw_device
 
     # Start serial reader thread
     t = threading.Thread(target=serial_reader, daemon=True)
     t.start()
 
-    # Start gateway telemetry sender (CPU temp every 3s, Heartbeat every 10s)
-    tt = threading.Thread(target=_telemetry_sender, daemon=True)
-    tt.start()
+    # Start virtual N2K device (SA=200: ISO Claim, Product Info, Heartbeat, CPU Temp).
+    # Connects back to our own port 4001 after a 5s startup delay.
+    # The library handles all frame encoding correctly via N2KDevice.for_text_gateway().
+    start_gw_device()
 
     # Data server
     data_srv = _make_server(DATA_PORT)
