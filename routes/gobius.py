@@ -329,5 +329,21 @@ async def gobius_write_info(body: dict):
 
 # ─── WRITE: NMEA 2000 Command PGN 126208 (CAN Bus) ───
 
-# N2K command endpoint moved to routes/n2k.py — POST /api/n2k/command
+@router.post("/gobius/n2k_command")
+async def gobius_n2k_command(body: dict):
+    """Write NMEA 2000 PGN 126208 command to active Gobius C sensor."""
+    from routes.n2k import n2k_command
+    sensor = _get_active_gobius_sensor()
+    src = sensor.nmea.src if (sensor and hasattr(sensor, "nmea") and sensor.nmea.src is not None) else 92
+
+    n2k_body = {
+        "target_address": body.get("target_address", src),
+        "target_pgn": 127505,
+        "fields": {
+            "instance": body.get("instance", 0),
+            "fluid_type": body.get("fluid_type_code", body.get("fluid_type", 0)),
+            "capacity": body.get("capacity_l", body.get("capacity", 10.0)),
+        },
+    }
+    return await n2k_command(n2k_body)
 

@@ -57,7 +57,7 @@ const App = {
         const section = document.getElementById('tab-' + name);
         if (!section) return;
         try {
-            const resp = await fetch(`/static/tabs/${name}.html?v=900`);
+            const resp = await fetch(`/static/tabs/${name}.html?v=1001`);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             section.innerHTML = await resp.text();
             this._loadedTabs[name] = true;

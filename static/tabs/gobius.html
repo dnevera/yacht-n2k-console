@@ -8,7 +8,7 @@
                             <button class="btn sm" onclick="App.bleRemoveSensor(App._gobiusAddr || '')" title="Remove sensor">🗑</button>
                         </div>
                     </div>
-                    <div id="gobius-ble-status" class="muted">Click Refresh to connect via BLE...</div>
+                    <div id="gobius-ble-status" class="muted">Connecting via BLE...</div>
                     <table class="info-table">
                         <tr><td>Serial number</td><td id="gob-serial">--</td></tr>
                         <tr><td>Sensor software revision</td><td id="gob-fw">--</td></tr>
@@ -34,76 +34,105 @@
                         <span id="gob-n2k-badge" class="badge badge-off">N2K: --</span>
                     </div>
 
-                    <h3 style="margin:0 0 8px;color:#4fc3f7">NMEA 2000 (0xFFF2)</h3>
+                    <h3 class="section-label">NMEA 2000 Config <span class="char-ref">0xFFF2</span></h3>
                     <table class="info-table">
                         <tr>
                             <td>N2K Output</td>
-                            <td><label class="switch"><input type="checkbox" id="gob-n2k-enabled"><span class="slider"></span></label></td>
+                            <td><label class="switch">
+                                <input type="checkbox" id="gob-n2k-enabled"
+                                       onchange="App.onGobiusInputChange()">
+                                <span class="slider"></span>
+                            </label></td>
                         </tr>
                         <tr>
                             <td>Fluid Type</td>
-                            <td><select id="gob-fluid-type" class="input">
+                            <td><select id="gob-fluid-type" class="input" onchange="App.onGobiusInputChange()">
                                 <option value="0">Fuel</option>
                                 <option value="1">Fresh Water</option>
-                                <option value="2">Waste Water</option>
+                                <option value="2">Gray Water</option>
                                 <option value="3">Live Well</option>
                                 <option value="4">Oil</option>
                                 <option value="5">Black Water</option>
+                                <option value="6">Gasoline</option>
                             </select></td>
                         </tr>
                         <tr>
                             <td>Volume (L)</td>
-                            <td><input type="number" id="gob-volume-l" class="input" min="1" max="255" value="10" style="width:80px"></td>
+                            <td><input type="number" id="gob-volume-l" class="input"
+                                       min="1" max="255" value="10" style="width:80px"
+                                       oninput="App.onGobiusInputChange()"></td>
                         </tr>
                         <tr>
                             <td>Instance ID</td>
-                            <td><input type="number" id="gob-n2k-instance" class="input" min="0" max="15" value="0" style="width:60px"></td>
+                            <td><input type="number" id="gob-n2k-instance" class="input"
+                                       min="0" max="15" value="0" style="width:60px"
+                                       oninput="App.onGobiusInputChange()"></td>
                         </tr>
                     </table>
 
-                    <h3 style="margin:16px 0 8px;color:#4fc3f7">Sensor Geometry (0xFFE6)</h3>
+                    <h3 class="section-label">Sensor Geometry <span class="char-ref">0xFFE6</span></h3>
                     <table class="info-table">
                         <tr>
                             <td>Distance Empty (mm)</td>
-                            <td><input type="number" id="gob-dist-empty" class="input" min="20" max="2000" value="300" style="width:80px"></td>
+                            <td><input type="number" id="gob-dist-empty" class="input"
+                                       min="20" max="2000" value="300" style="width:80px"
+                                       oninput="App.onGobiusInputChange()"></td>
                         </tr>
                         <tr>
                             <td>Distance Full (mm)</td>
-                            <td><input type="number" id="gob-dist-full" class="input" min="20" max="2000" value="50" style="width:80px"></td>
+                            <td><input type="number" id="gob-dist-full" class="input"
+                                       min="20" max="2000" value="50" style="width:80px"
+                                       oninput="App.onGobiusInputChange()"></td>
                         </tr>
                         <tr>
                             <td>LP Filter N</td>
-                            <td><input type="number" id="gob-lp-n" class="input" min="0" max="100" value="3" style="width:60px"></td>
+                            <td><input type="number" id="gob-lp-n" class="input"
+                                       min="0" max="100" value="3" style="width:60px"
+                                       oninput="App.onGobiusInputChange()"></td>
                         </tr>
                         <tr>
                             <td>LP Filter K (%)</td>
-                            <td><input type="number" id="gob-lp-k" class="input" min="1" max="100" value="10" style="width:60px"></td>
+                            <td><input type="number" id="gob-lp-k" class="input"
+                                       min="1" max="100" value="10" style="width:60px"
+                                       oninput="App.onGobiusInputChange()"></td>
                         </tr>
                     </table>
 
-                    <h3 style="margin:16px 0 8px;color:#4fc3f7">Tank Info</h3>
+                    <h3 class="section-label">Tank Info <span class="char-ref">0xFFEB/EC</span></h3>
                     <table class="info-table">
-                        <tr><td>Name</td><td><input type="text" id="gob-info1" class="input" maxlength="20"></td></tr>
-                        <tr><td>Comment</td><td><input type="text" id="gob-info2" class="input" maxlength="20"></td></tr>
+                        <tr><td>Name</td><td>
+                            <input type="text" id="gob-info1" class="input" maxlength="20"
+                                   oninput="App.onGobiusInputChange()">
+                        </td></tr>
+                        <tr><td>Comment</td><td>
+                            <input type="text" id="gob-info2" class="input" maxlength="20"
+                                   oninput="App.onGobiusInputChange()">
+                        </td></tr>
                     </table>
 
                     <div class="spacer"></div>
-                    <button class="btn accent" id="btn-save-all" onclick="App.saveAllConfig(this)" style="width:100%">💾 Save All Configuration</button>
+                    <button class="btn accent" id="btn-save-all"
+                            onclick="App.saveAllConfig(this)"
+                            style="width:100%"
+                            disabled
+                            title="Change a setting above to enable">
+                        💾 Save to Sensor (BLE)
+                    </button>
                 </div>
 
                 <div class="card">
-                    <div class="card-head"><h2>🔧 Commands</h2></div>
+                    <div class="card-head"><h2>🔧 Commands <span class="char-ref">0xFFE7</span></h2></div>
                     <div style="display:flex;flex-direction:column;gap:8px">
                         <button class="btn" onclick="App.gobiusCmd('calibrate', this)">📐 Calibrate</button>
                         <button class="btn" onclick="App.gobiusCmd('start', this)">▶️ Start Measuring</button>
                         <button class="btn" onclick="App.gobiusCmd('stop', this)">⏹️ Stop Measuring</button>
                         <button class="btn" onclick="App.gobiusCmd('adv_normal', this)">📡 Advertise Normal</button>
                         <button class="btn" onclick="App.gobiusCmd('adv_off', this)">📴 Advertise Off</button>
-                        <button class="btn danger" onclick="if(confirm('Factory reset ALL sensor settings?')) App.gobiusCmd('initialize', this)">⚠️ Initialize (Factory Reset)</button>
+                        <button class="btn danger" onclick="App.gobiusCmd('initialize', this)">⚠️ Initialize (Factory Reset)</button>
                     </div>
 
                     <div class="spacer"></div>
-                    <h3 style="color:#4fc3f7">Live Data (NMEA)</h3>
+                    <h3 class="section-label">Live Data (NMEA)</h3>
                     <table class="info-table">
                         <tr><td>Fill</td><td id="gob-nmea-fill">--</td></tr>
                         <tr><td>Capacity</td><td id="gob-nmea-cap">--</td></tr>
@@ -111,4 +140,21 @@
                     </table>
                 </div>
             </div>
-        
+
+            <!-- BLE Confirm Dialog -->
+            <div id="ble-confirm-modal" class="ble-confirm-overlay" style="display:none"
+                 role="dialog" aria-modal="true" aria-labelledby="ble-confirm-title">
+                <div class="ble-confirm-dialog">
+                    <div class="ble-confirm-header" id="ble-confirm-header">
+                        <span id="ble-confirm-icon">📡</span>
+                        <span id="ble-confirm-title">Confirm BLE Write</span>
+                    </div>
+                    <div class="ble-confirm-body">
+                        <table class="ble-confirm-params" id="ble-confirm-params"></table>
+                    </div>
+                    <div class="ble-confirm-footer">
+                        <button id="ble-confirm-cancel" class="btn">Cancel</button>
+                        <button id="ble-confirm-ok" class="btn accent">OK — Write to Sensor</button>
+                    </div>
+                </div>
+            </div>

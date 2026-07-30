@@ -413,3 +413,118 @@ select.input {
 .val-green { color: #00e676; font-weight: 600; }
 .val-red { color: #ff5252; font-weight: 600; }
 .val-amber { color: #ffab40; font-weight: 600; }
+
+/* ── Gobius: section labels with GATT UUID reference ─────────────────────── */
+h3.section-label {
+    margin: 16px 0 8px;
+    color: var(--teal, #4fc3f7);
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.char-ref {
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--muted);
+    font-family: var(--font-mono, monospace);
+    background: rgba(255,255,255,0.06);
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+
+/* Save button: pulsing highlight when there are unsaved changes */
+#btn-save-all.btn-has-changes {
+    background: rgba(79,195,247,0.18);
+    border-color: rgba(79,195,247,0.5);
+    animation: pulse-save 2s ease-in-out infinite;
+}
+@keyframes pulse-save {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(79,195,247,0.15); }
+    50%       { box-shadow: 0 0 0 6px rgba(79,195,247,0.06); }
+}
+#btn-save-all:disabled:not(.btn-has-changes) { opacity: 0.32; cursor: not-allowed; }
+
+/* ── BLE Confirm Dialog ───────────────────────────────────────────────────── */
+.ble-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: overlay-in 0.15s ease;
+}
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+
+.ble-confirm-dialog {
+    background: var(--surface, #1e2330);
+    border: 1px solid var(--border, rgba(255,255,255,0.1));
+    border-radius: 12px;
+    width: min(420px, 92vw);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05);
+    overflow: hidden;
+    animation: dialog-in 0.2s cubic-bezier(.34,1.4,.64,1);
+}
+@keyframes dialog-in {
+    from { transform: scale(0.92) translateY(12px); opacity: 0; }
+    to   { transform: scale(1)    translateY(0);    opacity: 1; }
+}
+
+/* Normal header (BLE write) */
+.ble-confirm-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 20px;
+    background: rgba(79,195,247,0.10);
+    border-bottom: 1px solid rgba(79,195,247,0.15);
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--teal, #4fc3f7);
+}
+.ble-confirm-header #ble-confirm-icon { font-size: 1.25rem; flex-shrink: 0; }
+
+/* Dangerous operation — red header */
+.ble-confirm-header.danger {
+    background: rgba(239,68,68,0.18);
+    border-bottom-color: rgba(239,68,68,0.30);
+    color: #ff6b6b;
+}
+
+.ble-confirm-body { padding: 16px 20px; }
+
+.ble-confirm-params {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+.ble-confirm-params td {
+    padding: 7px 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.ble-confirm-params td:first-child {
+    color: var(--muted, #888);
+    white-space: nowrap;
+    padding-right: 16px;
+    font-size: 0.82rem;
+}
+.ble-confirm-params td:last-child { color: var(--text, #eee); font-weight: 600; }
+.ble-confirm-params tr:last-child td { border-bottom: none; }
+
+/* Dangerous value (e.g. N2K → OFF) */
+.confirm-value-danger { color: #ff6b6b !important; font-weight: 700 !important; }
+
+.ble-confirm-footer {
+    display: flex;
+    gap: 10px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border, rgba(255,255,255,0.08));
+    justify-content: flex-end;
+}
+.ble-confirm-footer .btn { min-width: 88px; }
