@@ -81,6 +81,12 @@ _NMEA_LINE_RE = re.compile(
     rb"^\d{2}:\d{2}:\d{2}\.\d{3} [RT] [0-9A-Fa-f]{8}( [0-9A-Fa-f]{2})+\n$"
 )
 
+# YDNU-02 TX (outgoing) format: "XXXXXXXX XX XX ...\r\n" (no timestamp, no direction).
+# Used by nmea2000 lib N2KDevice when sending frames to port :4001.
+_TX_LINE_RE = re.compile(
+    rb"^[0-9A-Fa-f]{8}( [0-9A-Fa-f]{2})+\r?\n$"
+)
+
 # ── Configuration (env vars) ──────────────────────────────────────────────────
 
 SERIAL_PORT = os.getenv("NMEA_SERIAL_PORT", "/dev/ttyACM0")
@@ -316,10 +322,23 @@ def handle_data_client(conn: socket.socket, addr) -> None:
                 break
             buf += chunk
             while b'\n' in buf:
-                line, buf = buf.split(b'\n', 1)
-                line += b'\n'
+                raw, buf = buf.split(b'\n', 1)
+                raw += b'\n'
+                line = raw.rstrip(b'\r\n') + b'\n'
+
                 if _NMEA_LINE_RE.match(line):
+                    # Already full RX format (HH:MM:SS.mmm R CANID ...)
                     _broadcast(line, exclude=conn)   # cache + forward to others
+
+                elif _TX_LINE_RE.match(raw):
+                    # YDNU-02 TX format from virtual N2KDevice (no timestamp).
+                    # Convert to RX format so it can be cached and forwarded.
+                    parts = raw.rstrip(b'\r\n').split(b' ')
+                    can_id  = parts[0].decode()
+                    data_bz = bytes(int(b, 16) for b in parts[1:] if b)
+                    rx_line = _fmt_frame(can_id, data_bz)
+                    _broadcast(rx_line, exclude=conn)
+
     except OSError:
         pass
     finally:

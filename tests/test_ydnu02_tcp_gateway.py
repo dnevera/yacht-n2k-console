@@ -171,6 +171,42 @@ class TestNMEARegex(unittest.TestCase):
         line = b'00:00:01.000 R 18EEFF5C 39 30 A0 5C 74 21 A7 2C\n'
         self.assertIsNotNone(self.re.match(line))
 
+    def test_tx_format_rejected_by_rx_regex(self):
+        """TX format (no timestamp) must NOT match _NMEA_LINE_RE."""
+        tx = b'18EEFFC8 39 30 A0 5C 74 21 A7 2C\r\n'
+        self.assertIsNone(self.re.match(tx))
+
+
+# ── _TX_LINE_RE regex ─────────────────────────────────────────────────────────
+
+class TestTXLineRegex(unittest.TestCase):
+    """_TX_LINE_RE must match YDNU-02 TX (outgoing) frames from nmea2000 N2KDevice."""
+
+    def setUp(self):
+        self.mod = _load_gateway()
+        self.re = self.mod._TX_LINE_RE
+
+    def test_tx_frame_crlf_matches(self):
+        self.assertIsNotNone(self.re.match(b'18EEFFC8 39 30 A0 5C 74 21 A7 2C\r\n'))
+
+    def test_tx_frame_lf_only_matches(self):
+        self.assertIsNotNone(self.re.match(b'18EEFFC8 39 30 A0 5C\n'))
+
+    def test_tx_single_byte_matches(self):
+        self.assertIsNotNone(self.re.match(b'18EAFFFE 00\r\n'))
+
+    def test_rx_format_rejected(self):
+        self.assertIsNone(self.re.match(b'01:43:22.648 R 19F2115C 00 30\n'))
+
+    def test_text_rejected(self):
+        self.assertIsNone(self.re.match(b'YDNU MODE OK\r\n'))
+
+    def test_truncated_can_id_rejected(self):
+        self.assertIsNone(self.re.match(b'18EEFFC 39 30\r\n'))  # 7 hex chars
+
+    def test_iso_claim_tx_format(self):
+        self.assertIsNotNone(self.re.match(b'18EEFFC8 39 30 A0 5C 74 21 A7 2C\r\n'))
+
 
 # ── _get_pgn_sa ────────────────────────────────────────────────────────────────
 
@@ -366,6 +402,55 @@ class TestBidirectionalHub(unittest.TestCase):
         t.join(timeout=1.0)
 
         self.assertEqual(received, [], 'Invalid frames must not be forwarded')
+
+    @NEEDS_NETWORK
+    def test_tx_format_converted_to_rx_and_forwarded(self):
+        """TX frame from N2KDevice (no timestamp) must be converted to RX and forwarded."""
+        received = []
+
+        class ObserverConn:
+            def sendall(self, data):
+                received.append(data)
+
+        self.mod.clients = {ObserverConn()}
+        conn, client = self._make_pipe()
+        t = threading.Thread(
+            target=self.mod.handle_data_client,
+            args=(conn, ('127.0.0.1', 9999)),
+            daemon=True,
+        )
+        t.start()
+        # TX format: CANID BYTES\r\n — as sent by nmea2000 lib N2KDevice
+        client.sendall(b'18EEFFC8 39 30 A0 5C 74 21 A7 2C\r\n')
+        time.sleep(0.2)
+        client.close()
+        t.join(timeout=1.0)
+
+        self.assertEqual(len(received), 1, 'TX frame must be forwarded once')
+        # Forwarded frame must be in full RX format
+        self.assertIsNotNone(self.mod._NMEA_LINE_RE.match(received[0]))
+        self.assertIn(b'18EEFFC8', received[0])
+
+    @NEEDS_NETWORK
+    def test_tx_iso_claim_cached(self):
+        """ISO Claim in TX format from N2KDevice must land in _device_frame_cache."""
+        self.mod.clients = set()
+        conn, client = self._make_pipe()
+        t = threading.Thread(
+            target=self.mod.handle_data_client,
+            args=(conn, ('127.0.0.1', 9999)),
+            daemon=True,
+        )
+        t.start()
+        # ISO Claim TX: CAN ID 18EEFFC8 = PGN 60928, SA=0xC8=200
+        client.sendall(b'18EEFFC8 39 30 A0 5C 74 21 A7 2C\r\n')
+        time.sleep(0.2)
+        client.close()
+        t.join(timeout=1.0)
+
+        cache = self.mod._device_frame_cache
+        self.assertIn(200, cache, 'SA=200 must be in cache after TX ISO Claim')
+        self.assertIn('iso_claim', cache[200])
 
 
 # ── _send_iso_request ─────────────────────────────────────────────────────────
