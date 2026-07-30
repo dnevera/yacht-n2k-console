@@ -817,6 +817,98 @@ def _accept_loop(srv: socket.socket, handler, label: str) -> None:
             break
 
 
+# ── Gateway telemetry ─────────────────────────────────────────────────────────
+
+def _read_cpu_temp() -> float | None:
+    """Read Raspberry Pi CPU temperature in Celsius from sysfs thermal zone."""
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp') as fh:
+            return int(fh.read().strip()) / 1000.0
+    except (OSError, ValueError):
+        return None
+
+
+def _make_heartbeat(seq: int, interval_ms: int = 10000) -> bytes:
+    """Construct a Heartbeat frame (PGN 126993) for the gateway virtual device.
+
+    PGN 126993 — single CAN frame, 8 payload bytes:
+      [0:2] Data transmit interval (uint16 LE, ms)
+      [2]   Sequence counter (uint8, bits[7:2] = counter, bits[1:0] = comm state=0)
+      [3:8] Reserved (0xFF)
+
+    CAN ID: priority=7, DP=1, PF=0xF0, PS=0x11, SA=_GW_SA
+    """
+    can_id = (7 << 26) | (1 << 24) | (0xF0 << 16) | (0x11 << 8) | _GW_SA
+    # seq counter: bits[7:2] increment each heartbeat, bits[1:0] = comm state (0=OK)
+    seq_byte = ((seq & 0x3F) << 2) & 0xFC
+    data = struct.pack('<H', interval_ms) + bytes([seq_byte]) + b'\xff' * 5
+    return _fmt_frame(f'{can_id:08X}', data)
+
+
+def _make_cpu_temp_frames(temp_c: float, seq: int) -> list[bytes]:
+    """Construct Temperature Extended Range fast-packet (PGN 130316).
+
+    PGN 130316 — fast-packet, 9 payload bytes → 2 CAN frames:
+      [0]   SID (uint8, rolling sequence)
+      [1]   Temperature Instance (uint8, 0 = first sensor on this device)
+      [2]   Temperature Source  (uint8, 3 = Engine Room — closest to CPU/board temp)
+      [3:6] Actual Temperature  (uint24 LE, units 0.001 K, e.g. 318150 = 318.15 K = 45 °C)
+      [6:9] Set Temperature     (uint24 LE, 0xFFFFFF = N/A)
+
+    CAN ID: priority=6, DP=1, PF=0xFD, PS=0x0C, SA=_GW_SA
+    """
+    can_id  = (6 << 26) | (1 << 24) | (0xFD << 16) | (0x0C << 8) | _GW_SA
+    cid_hex = f'{can_id:08X}'
+
+    temp_raw   = int((temp_c + 273.15) * 1000)    # Celsius → 0.001 K units
+    temp_bytes = temp_raw.to_bytes(3, 'little')
+
+    # payload: SID=seq, instance=0, source=3, actual_temp, set_temp=N/A
+    payload = bytes([seq & 0xFF, 0, 3]) + temp_bytes + b'\xff\xff\xff'  # 9 bytes
+
+    fp_seq  = 0
+    # Frame 0: [fp_seq<<5|0] [total=9] [payload[0:6]]
+    frame0  = bytes([(fp_seq << 5) | 0, len(payload)]) + payload[:6]
+    # Frame 1: [fp_seq<<5|1] [payload[6:9]] [0xFF × 4 padding]
+    frame1  = bytes([(fp_seq << 5) | 1]) + payload[6:] + b'\xff' * 4
+
+    return [_fmt_frame(cid_hex, frame0), _fmt_frame(cid_hex, frame1)]
+
+
+def _telemetry_sender() -> None:
+    """Periodic telemetry broadcaster for the gateway's virtual N2K identity (SA=_GW_SA).
+
+    CPU Temperature (PGN 130316): every 3 seconds — keeps device alive, real Pi metric
+    Heartbeat       (PGN 126993): every 10 seconds — explicit N2K liveness signal
+
+    Frames are sent via _broadcast() to all connected DATA clients (HA, Signal K, etc.).
+    They are NOT cached in _device_frame_cache — telemetry is always live data.
+    The ISO Claim + Product Info for SA=_GW_SA remain cached for new-client replay.
+    """
+    hb_seq   = 0
+    temp_seq = 0
+    last_hb  = 0.0
+
+    while True:
+        time.sleep(3.0)
+        now = time.time()
+
+        # CPU temperature — every 3 seconds
+        temp = _read_cpu_temp()
+        if temp is not None:
+            for frame in _make_cpu_temp_frames(temp, temp_seq):
+                _broadcast(frame)
+            temp_seq = (temp_seq + 1) & 0xFF
+        else:
+            print("[gw] CPU temp unavailable (non-Pi platform?)", flush=True)
+
+        # Heartbeat — every 10 seconds (roughly every 3rd temp cycle)
+        if now - last_hb >= 10.0:
+            _broadcast(_make_heartbeat(hb_seq, interval_ms=10000))
+            hb_seq  = (hb_seq + 1) % 64
+            last_hb = now
+
+
 def main() -> None:
     # Seed device frame cache with synthetic gateway identity frames.
     # Gateway presents itself as a virtual N2K device (SA=_GW_SA) so HA
@@ -836,6 +928,10 @@ def main() -> None:
     # Start serial reader thread
     t = threading.Thread(target=serial_reader, daemon=True)
     t.start()
+
+    # Start gateway telemetry sender (CPU temp every 3s, Heartbeat every 10s)
+    tt = threading.Thread(target=_telemetry_sender, daemon=True)
+    tt.start()
 
     # Data server
     data_srv = _make_server(DATA_PORT)
