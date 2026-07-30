@@ -22,6 +22,7 @@
 #   ./deploy.sh [host] --proxy      — gateway only + patch HA (no web restart)
 #   ./deploy.sh [host] --web        — web only (gateway/HA untouched)
 #   ./deploy.sh [host] --patch-ha   — re-apply HA patches only (after HA update)
+#   ./deploy.sh [host] --clean-ha   — delete 259 garbage NMEA devices + restart HA
 #
 # FILE OWNERSHIP RULE
 #   ydnu02_tcp_gateway.py is uploaded via scp directly to REMOTE_DIR.
@@ -91,9 +92,11 @@ SCP="scp -o ConnectTimeout=10"
 
 DEPLOY_PROXY=true
 DEPLOY_WEB=true
+CLEAN_HA=false
 [[ "$MODE" == "--proxy"    ]] && DEPLOY_WEB=false
 [[ "$MODE" == "--web"      ]] && DEPLOY_PROXY=false
 [[ "$MODE" == "--patch-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false
+[[ "$MODE" == "--clean-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && CLEAN_HA=true
 
 # ── patch_ha() ───────────────────────────────────────────────────────────────
 # Applies local patches/ fixes to third-party libs inside the HA docker container.
@@ -137,8 +140,9 @@ ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}"
 
 if $DEPLOY_PROXY; then
     section "ydnu02-tcp-gateway"
-    log "Uploading ydnu02_tcp_gateway.py to ${HOST}:${REMOTE_DIR}"
-    ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02_tcp_gateway.py" "${HOST}:${REMOTE_DIR}/ydnu02_tcp_gateway.py"
+    log "Uploading ydnu02_tcp_gateway.py + ydnu02_gateway_device.py to ${HOST}:${REMOTE_DIR}"
+    ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02_tcp_gateway.py"   "${HOST}:${REMOTE_DIR}/ydnu02_tcp_gateway.py"
+    ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02_gateway_device.py" "${HOST}:${REMOTE_DIR}/ydnu02_gateway_device.py"
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02-tcp-gateway.service" "${HOST}:/tmp/ydnu02-tcp-gateway.service"
 
     # Note: py file is uploaded via scp (line above) directly as denn → denn-owned, no sudo needed.
@@ -162,6 +166,25 @@ fi
 # ── Standalone --patch-ha ────────────────────────────────────────────────────
 if [[ "$MODE" == "--patch-ha" ]]; then
     patch_ha
+fi
+
+# ── --clean-ha: remove garbage NMEA 2000 devices from HA registry ────────────
+
+clean_ha() {
+    section "HA NMEA 2000 device cleanup"
+    local script="${LOCAL_DIR}/homeassistant/cleanup_nmea_devices.py"
+    log "Copying cleanup script into HA container..."
+    ${SCP} "${script}" "${HOST}:/tmp/cleanup_nmea_devices.py"
+    ${SSH} ${HOST} "sudo docker cp /tmp/cleanup_nmea_devices.py ${HA_CONTAINER}:/tmp/cleanup_nmea_devices.py"
+    log "Running cleanup (--all: remove ALL nmea2000 devices)..."
+    ${SSH} ${HOST} "sudo docker exec ${HA_CONTAINER} python3 /tmp/cleanup_nmea_devices.py --all"
+    log "Restarting HA..."
+    ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
+    log "HA restarted ✓  devices will rebuild from live N2K data"
+}
+
+if $CLEAN_HA; then
+    clean_ha
 fi
 
 # ── Web Service ───────────────────────────────────────────────────────────────
