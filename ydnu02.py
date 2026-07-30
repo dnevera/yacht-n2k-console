@@ -225,6 +225,31 @@ class N2KPGNDecoder:
             return None
 
     @classmethod
+    def feed_to_lib(cls, parsed: Dict[str, Any]) -> Any:
+        """Feed any CAN frame to the library decoder (enables fast-packet reassembly).
+
+        The nmea2000 library internally tracks fast-packet state per (SA, sequence).
+        Call this for EVERY incoming frame; it returns:
+          - None  for single-frame PGNs it doesn't recognise yet, or
+                  for incomplete fast-packet frames (still accumulating)
+          - NMEA2000Message  when a complete message is ready (single-frame or
+                             reassembled fast-packet).
+
+        Used to receive Product Information (PGN 126996) which is fast-packet
+        and spans ~19 CAN frames before the full model/serial/firmware is available.
+        """
+        if not _HAS_N2K_LIB or not _n2k_decoder:
+            return None
+        try:
+            info = parsed.get("info", {})
+            data = parsed.get("data", b"")
+            can_id = info.get("can_id", 0)
+            raw_str = f"{can_id:08X} " + " ".join(f"{b:02X}" for b in data)
+            return _n2k_decoder.decode(raw_str)
+        except Exception:
+            return None
+
+    @classmethod
     def parse_raw_line(cls, line: str) -> Optional[Dict[str, Any]]:
         """Парсинг одной RAW-строки от YDNU-02. Возвращает None при ошибке."""
         # Format: hh:mm:ss.ddd R|T CANID b0 b1 b2 ...

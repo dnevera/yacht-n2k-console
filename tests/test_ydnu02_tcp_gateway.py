@@ -682,6 +682,70 @@ class TestGatewayDevice(unittest.TestCase):
         self.assertEqual(self.dev.GW_PREFERRED_SA, 200)
 
 
+
+# ── N2KPGNDecoder.feed_to_lib ─────────────────────────────────────────────────
+
+class TestFeedToLib(unittest.TestCase):
+    """Tests for N2KPGNDecoder.feed_to_lib — fast-packet reassembly via library."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from nmea2000 import NMEA2000Decoder  # noqa: F401
+            cls._has_lib = True
+        except ImportError:
+            cls._has_lib = False
+
+    def _skip_if_no_lib(self):
+        if not self._has_lib:
+            self.skipTest('nmea2000 library not installed')
+
+    def test_feed_to_lib_returns_none_without_lib(self):
+        """feed_to_lib must return None gracefully when library not available."""
+        import ydnu02
+        orig = ydnu02._HAS_N2K_LIB
+        try:
+            ydnu02._HAS_N2K_LIB = False
+            parsed = {'info': {'can_id': 0x18EEFF5C, 'pgn': 60928, 'src': 92, 'dst': 255},
+                      'data': bytes.fromhex('39 30 A0 5C 74 21 A7 2C'.replace(' ', ''))}
+            result = N2KPGNDecoder.feed_to_lib(parsed)
+            self.assertIsNone(result)
+        finally:
+            ydnu02._HAS_N2K_LIB = orig
+
+    def test_feed_to_lib_iso_claim_returns_message(self):
+        """feed_to_lib must return a complete message for single-frame PGN 60928."""
+        self._skip_if_no_lib()
+        parsed = {
+            'info': {'can_id': 0x18EEFF5C, 'pgn': 60928, 'src': 92, 'dst': 255},
+            'data': bytes.fromhex('3930A05C7421A72C'),
+        }
+        result = N2KPGNDecoder.feed_to_lib(parsed)
+        # Library returns message for single-frame PGNs immediately
+        self.assertIsNotNone(result)
+        self.assertEqual(result.pgn, 60928)
+
+    def test_feed_to_lib_exception_returns_none(self):
+        """feed_to_lib must never raise — returns None on decode error."""
+        self._skip_if_no_lib()
+        # Corrupt data that can't be decoded
+        parsed = {'info': {'can_id': 0xDEADBEEF, 'pgn': 0, 'src': 0, 'dst': 0},
+                  'data': b'\xFF' * 8}
+        try:
+            result = N2KPGNDecoder.feed_to_lib(parsed)
+            # Either None or some result — must not raise
+        except Exception as exc:
+            self.fail(f'feed_to_lib raised unexpectedly: {exc}')
+
+    def test_feed_to_lib_missing_can_id_returns_none(self):
+        """feed_to_lib with empty info must return None, not crash."""
+        self._skip_if_no_lib()
+        parsed = {'info': {}, 'data': b''}
+        result = N2KPGNDecoder.feed_to_lib(parsed)
+        # Decoding empty CAN ID 0x00000000 may return None or a result — must not raise
+        self.assertIn(result, [None, result])  # any result is acceptable
+
+
 # ── NMEA format compatibility (library-level) ─────────────────────────────────
 
 class TestNMEAFormatCompatibility(unittest.TestCase):

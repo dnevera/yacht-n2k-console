@@ -636,22 +636,42 @@ class DeviceManager:
                 if pgn and pgn not in self._discovered_bus_devices[src]["active_pgns"]:
                     self._discovered_bus_devices[src]["active_pgns"].append(pgn)
 
-                # ── PGN 60928 (Address Claim) / 126996 (Product Info) ─────────
-                # These PGNs carry manufacturer/model/serial/firmware info.
-                # We use the library decoder for these — richer field mapping.
-                if pgn in (60928, 126996):
+                # ── PGN 60928 (Address Claim) — single-frame, parse directly ──
+                if pgn == 60928:
                     dev_info = N2KPGNDecoder.parse_device_info(parsed)
                     if dev_info:
                         dev = self._discovered_bus_devices[src]
-                        for key in ("manufacturer", "model", "serial", "firmware",
-                                    "function_name", "device_class_name", "model_version",
-                                    "unique_id"):
+                        for key in ("manufacturer", "function_name", "device_class_name",
+                                    "model_version", "unique_id"):
                             if key in dev_info:
                                 dev[key] = dev_info[key]
                         if "device_class" in dev_info:
-                            # Prefer human-readable name over numeric code
                             dev["device_class"] = dev_info.get("device_class_name",
                                                                str(dev_info["device_class"]))
+
+                # ── All frames → library decoder (handles fast-packet reassembly) ──
+                # PGN 126996 (Product Info) is fast-packet (~19 CAN frames).
+                # feed_to_lib() buffers frames internally; returns complete message
+                # only when the last frame arrives. Non-fast PGNs (like 60928) return
+                # immediately and we ignore them here (already handled above).
+                lib_msg = N2KPGNDecoder.feed_to_lib(parsed)
+                if lib_msg is not None and lib_msg.pgn == 126996:
+                    fields = {f.id: f for f in lib_msg.fields}
+                    dev = self._discovered_bus_devices.get(lib_msg.src)
+                    if dev is None and lib_msg.src is not None:
+                        dev = self._discovered_bus_devices.setdefault(
+                            lib_msg.src, {"src": lib_msg.src}
+                        )
+                    if dev is not None:
+                        for field_id, attr in (
+                            ("modelId",            "model"),
+                            ("softwareVersionCode", "firmware"),
+                            ("modelSerialCode",     "serial"),
+                            ("modelVersion",        "model_version"),
+                        ):
+                            fld = fields.get(field_id)
+                            if fld and fld.value:
+                                dev[attr] = str(fld.value).strip()
 
             # ── PGN 127505: Fluid Level ───────────────────────────────────────
             # Gobius C sends this every ~2.5s with fill level, capacity, fluid type.
