@@ -162,8 +162,15 @@ async def _run_device() -> None:
     logger.warning('[gwdev] Address claimed: SA=%d  model="%s"  version=%s',
                    device.address, GW_MODEL_ID, version)
 
-    # Broadcast CPU temperature every GW_TEMP_INTERVAL_S seconds.
-    # Heartbeat is handled automatically by the library at GW_HEARTBEAT_S intervals.
+    # Broadcast Product Information (PGN 126996) on startup once address claim completes
+    try:
+        prod_msg = device._build_product_information_message()
+        prod_msg.source = device.address
+        await device.send(prod_msg)
+        logger.warning('[gwdev] Broadcast Product Info (PGN 126996) for SA=%d', device.address)
+    except Exception as exc:
+        logger.warning('[gwdev] Failed to broadcast Product Info on startup: %s', exc)
+
     sid = 0
     while True:
         await asyncio.sleep(GW_TEMP_INTERVAL_S)
