@@ -29,6 +29,8 @@ from unittest.mock import MagicMock, patch, call
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from ydnu02 import N2KPGNDecoder  # for TestFeedToLib
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 GATEWAY_PATH = os.path.join(
