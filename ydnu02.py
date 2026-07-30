@@ -234,13 +234,13 @@ class N2KPGNDecoder:
                   for incomplete fast-packet frames (still accumulating)
           - NMEA2000Message  when a complete message is ready (single-frame or
                              reassembled fast-packet).
-
-        Used to receive Product Information (PGN 126996) which is fast-packet
-        and spans ~19 CAN frames before the full model/serial/firmware is available.
         """
         if not _HAS_N2K_LIB or not _n2k_decoder:
             return None
         try:
+            raw_line = parsed.get("raw")
+            if raw_line:
+                return _n2k_decoder.decode(raw_line)
             info = parsed.get("info", {})
             data = parsed.get("data", b"")
             can_id = info.get("can_id", 0)

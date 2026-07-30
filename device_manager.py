@@ -14,6 +14,11 @@ from fastapi import WebSocket, WebSocketDisconnect
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ydnu02 import YDNU02Controller, N2KPGNDecoder
 
+try:
+    from nmea2000 import NMEA2000Decoder
+except ImportError:
+    NMEA2000Decoder = None
+
 from sensors import GobiusCSensor
 
 # ── Proxy connection configuration ────────────────────────────────────────────
@@ -1239,27 +1244,31 @@ class DeviceManager:
 
     async def scan_bus(self, websocket: WebSocket, duration: float = 10.0):
         """
-        Scan the N2K CAN bus for devices and stream results to WebSocket.
+        Scan the N2K CAN bus for devices and stream results live to WebSocket.
 
-        Opens its OWN independent asyncio TCP connection to the proxy DATA port (:4001).
-        This mirrors exactly how the HA integration reads from the bus: a fresh reader
-        that receives every frame from the moment it connects.
+        ARCHITECTURAL INVARIANTS & RESEARCH LESSONS:
+          1. OWN TCP CONNECTION:
+             Opens an independent asyncio TCP connection to proxy DATA port (:4001).
+             Never pauses the background bus worker thread. On connect, the proxy
+             immediately replays 63 cached device identification frames, ensuring
+             instant device discovery without losing fast-packet streams.
 
-        Why NOT use the bus worker broadcast queue:
-          The bus worker reconnects to :4001 after every pause/resume. If we pause the
-          worker, send ISO Request, then resume, the worker opens a NEW socket and the
-          device responses that arrived on the OLD socket are lost. Our own connection
-          avoids this: we see ALL frames including responses to our ISO Request.
+          2. BROADCAST ISO REQUESTS (SA=254 / 0xFE):
+             Sends ISO Request (PGN 59904) using CAN ID 18EAFFFE:
+               - 18EAFFFE 00 EE 00 -> Request PGN 60928 (ISO Address Claim)
+               - 18EAFFFE 14 F0 01 -> Request PGN 126996 (Product Info)
+             Using SA=FE (254 null address) ensures all devices (physical USB-GW SA=64,
+             Gobius SA=92, virtual TCP-GW SA=200) respond to the broadcast.
 
-        Sequence:
-          1. Open own asyncio TCP reader to :4001
-          2. Send ISO Request (Address Claim PGN 60928 + Product Info PGN 126996)
-             The proxy forwards DATA client writes to serial (TX path).
-          3. Read and decode all frames for `duration` seconds
-          4. Merge with _discovered_bus_devices (bus worker accumulated knowledge)
-          5. Send final summary; close own TCP connection
+          3. LOCAL NMEA2000Decoder PER SCAN SESSION:
+             A dedicated NMEA2000Decoder() instance is instantiated locally for each
+             scan session. This isolates multi-frame fast-packet reassembly (PGN 126996
+             spans ~20 CAN frames per device) from the background bus worker, avoiding
+             interleaved sequence counter resets.
 
-        Bus worker runs concurrently and is NOT paused.
+          4. DICT KEY STRUCTURE:
+             N2KPGNDecoder.parse_raw_line(line) returns dict {"info": {"pgn": ..., "src": ...}}.
+             Always extract pgn and src via parsed.get("info", {}).get("pgn/src").
         """
         # ── Step 1: Open own TCP connection to proxy DATA port ─────────────────
         try:
@@ -1274,15 +1283,14 @@ class DeviceManager:
         await websocket.send_json({"type": "status", "message": f"Scanning for {duration}s..."})
 
         try:
-            # ── Step 2: Send ISO Request frames ────────────────────────────────
-            # PGN 59904 (ISO Request) asks all N2K devices to broadcast:
-            #   PGN 60928:  ISO Address Claim  (manufacturer, unique_id, device class)
-            #   PGN 126996: Product Info       (model ID, serial, firmware) — fast-packet
-            writer.write(b"18EAFF10 00 EE 00\r\n")  # ISO Request -> Address Claim (60928)
-            writer.write(b"18EAFF10 14 F0 01\r\n")  # ISO Request -> Product Info  (126996)
+            # ── Step 2: Send ISO Request frames (Address Claim 60928 + Product Info 126996) ──
+            # SA=FE (254 = null address)
+            writer.write(b"18EAFFFE 00 EE 00\r\n")  # ISO Request -> Address Claim (60928)
+            writer.write(b"18EAFFFE 14 F0 01\r\n")  # ISO Request -> Product Info  (126996)
             await writer.drain()
 
             # ── Step 3: Read and decode all frames ─────────────────────────────
+            decoder = NMEA2000Decoder() if NMEA2000Decoder else None
             devices: Dict[int, Dict[str, Any]] = {}
             frame_count = 0
             t0 = asyncio.get_event_loop().time()
@@ -1306,8 +1314,9 @@ class DeviceManager:
                 if not parsed:
                     continue    # not a NMEA frame (init echo etc.)
 
-                pgn = parsed.get("pgn")
-                src = parsed.get("src")
+                info_dict = parsed.get("info", {})
+                pgn = info_dict.get("pgn")
+                src = info_dict.get("src")
                 frame_count += 1
 
                 # Stream each frame live to the WebSocket
@@ -1336,9 +1345,7 @@ class DeviceManager:
                         })
 
                 # ── PGN 126996: Product Info (fast-packet, ~19 CAN frames) ─────
-                # feed_to_lib() buffers frames internally; returns a complete
-                # NMEA2000Message only when the last frame arrives.
-                lib_msg = N2KPGNDecoder.feed_to_lib(parsed)
+                lib_msg = decoder.decode(line)
                 if lib_msg is not None and lib_msg.PGN == 126996:
                     fields = {f.id: f for f in lib_msg.fields}
                     dev = devices.setdefault(lib_msg.source, {"src": lib_msg.source})
@@ -1357,8 +1364,6 @@ class DeviceManager:
                     })
 
             # ── Step 4: Merge with bus worker accumulated knowledge ─────────────
-            # Worker has been reading continuously and may have Product Info data
-            # from before this scan. Fill gaps in our scan results from its cache.
             with self._sensors_lock:
                 for src in list(devices):
                     known = self._discovered_bus_devices.get(src, {})
@@ -1367,7 +1372,6 @@ class DeviceManager:
                               "unique_id", "mfg_code", "product_code", "model_version"):
                         if known.get(k) and not devices[src].get(k):
                             devices[src][k] = known[k]
-                # Add devices seen by worker but missed by this scan window
                 for src, known in self._discovered_bus_devices.items():
                     if src not in devices:
                         devices[src] = dict(known)
@@ -1388,7 +1392,6 @@ class DeviceManager:
         except WebSocketDisconnect:
             pass
         finally:
-            # Close our own TCP connection — bus worker is completely unaffected
             try:
                 writer.close()
                 await writer.wait_closed()

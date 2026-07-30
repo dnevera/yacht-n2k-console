@@ -69,7 +69,8 @@ Object.assign(App, {
         }
 
         let html = '';
-        for (const [src, dev] of entries) {
+        for (const [srcStr, dev] of entries) {
+            const src = parseInt(srcStr);
             const mfr = dev.manufacturer || 'Unknown';
             const model = dev.model || '';
             const serial = dev.serial || '';
@@ -78,12 +79,15 @@ Object.assign(App, {
             const uniqueId = dev.unique_id || 0;
             const devClassName = dev.device_class_name || '';
 
-            // Icon and badge by function/manufacturer
             const mfrLower = mfr.toLowerCase();
             const funcLower = funcName.toLowerCase();
+
             let icon = '⚓', badgeClass = '', badgeText = 'N2K';
-            if (funcLower.includes('gateway')) {
-                icon = '🔌'; badgeText = 'Gateway';
+
+            if (src === 200 || (model && model.includes('TCP'))) {
+                icon = '🔌'; badgeText = 'TCP GW'; badgeClass = 'accent';
+            } else if (src === 64 || funcLower.includes('gateway')) {
+                icon = '🔌'; badgeText = 'USB GW';
             } else if (funcLower.includes('fluid')) {
                 icon = '🌊'; badgeText = 'Fluid Level';
             } else if (funcLower.includes('battery')) {
@@ -95,14 +99,13 @@ Object.assign(App, {
             } else if (funcLower.includes('gps')) {
                 icon = '📍'; badgeText = 'GPS';
             }
-            // Override badge for known vendors
+
             if (mfrLower.includes('gobius')) badgeText = 'Gobius';
-            if (mfrLower.includes('victron')) { badgeClass = 'accent'; }
+            if (mfrLower.includes('victron')) badgeClass = 'accent';
 
-            const displayName = model || mfr;
-            const nameEscaped = displayName.replace(/'/g, "\\'");
+            const displayName = model ? model : (mfr !== 'Unknown' ? mfr : `Device (${src})`);
+            const nameEscaped = displayName.replace(/'/g, "\'");
 
-            // Build info rows
             let rows = '';
             rows += `<tr><td>Manufacturer</td><td>${mfr}</td></tr>`;
             if (model) rows += `<tr><td>Model</td><td>${model}</td></tr>`;
@@ -118,7 +121,7 @@ Object.assign(App, {
             html += `
                 <div class="card">
                     <div class="card-head">
-                        <h2>${icon} ${displayName || 'SRC ' + src}</h2>
+                        <h2>${icon} ${displayName}</h2>
                         <span class="badge ${badgeClass}">${badgeText}</span>
                     </div>
                     <table class="info-table">
@@ -135,8 +138,6 @@ Object.assign(App, {
         }
         container.innerHTML = html;
     },
-
-    // N2K Config: openN2KConfigModal and sendN2KCommand are in n2k_config.js
 
     bindDiscoveredDevice(src, name) {
         const customName = prompt(`Enter custom name for ${name} (SRC ${src}):`, name);
