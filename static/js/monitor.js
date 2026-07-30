@@ -77,16 +77,41 @@ Object.assign(App, {
         else if (msg.pgn === 126993) el.classList.add('pgn-126993');
         else if (msg.pgn === 126996) el.classList.add('pgn-126996');
 
-        // Line 1: timestamp + raw CAN frame
+        // Line 1: raw CAN frame (small font)
         const raw = document.createElement('div');
+        raw.className = 'log-raw';
         raw.textContent = msg.raw;
         el.appendChild(raw);
 
-        // Line 2: parsed fields (if available)
+        // Line 2: parsed fields (large font + bold values)
         if (msg.decoded) {
             const dec = document.createElement('div');
             dec.className = 'log-decoded';
-            dec.textContent = `  ↳ PGN:${msg.pgn} [${msg.pgn_name}] Src:${msg.src} ${msg.decoded}`;
+
+            // Clean up leading redundant PGN prefix if present in msg.decoded
+            let decStr = msg.decoded.replace(/^\[PGN \d+ [^\]]+\]\s*(Src:\d+\s*)?/, '').trim();
+            decStr = decStr.replace(/^PGN:\d+\s*\[[^\]]+\]\s*(Src:\d+\s*)?/, '').trim();
+
+            let html = `  ↳ PGN:${msg.pgn} [${msg.pgn_name || ''}] Src:${msg.src}`;
+
+            if (decStr) {
+                const regex = /(?:^|\s+)([\w\s-]+?):([^\s:]+(?:\s+[^\s:]+)*(?=\s+[\w\s-]+?:|$))/g;
+                let match;
+                let hasPairs = false;
+
+                while ((match = regex.exec(decStr)) !== null) {
+                    hasPairs = true;
+                    const key = match[1].trim();
+                    const val = match[2].trim();
+                    html += ` ${key}:<strong class="log-val">${val}</strong>`;
+                }
+
+                if (!hasPairs && decStr) {
+                    html += ` <strong class="log-val">${decStr}</strong>`;
+                }
+            }
+
+            dec.innerHTML = html;
             el.appendChild(dec);
         }
 
@@ -106,7 +131,7 @@ Object.assign(App, {
     addMonitorRaw(text) {
         const log = document.getElementById('monitor-log');
         const el = document.createElement('div');
-        el.className = 'log-line';
+        el.className = 'log-line log-raw';
         el.textContent = text;
         log.appendChild(el);
         while (log.children.length > 500) log.removeChild(log.firstChild);
