@@ -1,6 +1,6 @@
 # ydnu02_tcp_gateway — NMEA 2000 TCP Gateway for YDNU-02
 
-Standalone Python TCP proxy and device gateway. Manages the hardware serial interface to the Yacht Devices YDNU-02 USB gateway (`/dev/ttyACM0`) and exposes TCP ports for multi-client NMEA 2000 data streaming and remote hardware management.
+Standalone Python TCP proxy and device gateway. Manages the hardware serial interface to the Yacht Devices YDNU-02 USB gateway (`/dev/ttyACM0`) and exposes TCP ports for multi-client NMEA 2000 data streaming, remote hardware management, and virtual N2K node identity.
 
 ---
 
@@ -21,6 +21,8 @@ Standalone Python TCP proxy and device gateway. Manages the hardware serial inte
 │  ┌──────────────────────────────────────────────────────────────────┐   │   │
 │  │                ydnu02_tcp_gateway.py (Proxy Service)              │◄──┘   │
 │  │                (systemd: ydnu02-tcp-gateway.service)             │◄──────┘
+│  │                ├── DATA Hub :4001 / CTRL Server :4002            │
+│  │                └── Virtual Node Thread (ydnu02_gateway_device)   │
 │  └──────────────────────────────────┬───────────────────────────────┘
 │                                     │ Serial (/dev/ttyACM0 @ 115200 baud)
 │                                     ▼
@@ -88,6 +90,30 @@ Proxy  → Client:  RESUMED\n
 
 ---
 
+## Virtual N2K Gateway Device (`ydnu02_gateway_device.py`)
+
+The proxy launches a background thread (`start_in_thread()`) that registers the Raspberry Pi 5 host as a first-class participant on the NMEA 2000 network (preferred SA=200).
+
+### Gateway N2K Identity Parameters
+
+| Parameter | Value | Description |
+|:---|:---|:---|
+| **Preferred SA** | `200` | Preferred NMEA 2000 Source Address |
+| **Manufacturer** | `717` | Yacht Devices (hardware manufacturer) |
+| **Device Class** | `25` | Internetwork Device |
+| **Device Function**| `130` | PC Gateway |
+| **Industry Group** | `4` | Marine Industry |
+| **Model ID** | `YDNU-02 TCP-GW` | Model identifier shown in HA / Signal K |
+
+### Transmitted PGNs
+
+- **PGN 60928 (ISO Address Claim)**: Broadcasted on startup and on network address claim events.
+- **PGN 126996 (Product Information)**: Broadcasted on startup and responded to ISO Requests.
+- **PGN 126993 (Heartbeat)**: Transmitted every 10 seconds to maintain liveness status.
+- **PGN 130312 (Temperature)**: Broadcasts CPU temperature read from `/sys/class/thermal/thermal_zone*/temp` every 3 seconds as N2K Source `2` ("Inside Temperature").
+
+---
+
 ## Hardware Service Terminal & DTR Toggle Logic
 
 The YDNU-02 USB gateway requires a physical **DTR line drop** to switch from RAW CAN mode into its interactive service configuration terminal. A standard `serial.write()` does NOT trigger this mode switch.
@@ -121,6 +147,7 @@ When a client sends `SERVICE_END` to port `4002`:
 - **Host**: `gateway.local.local` (Raspberry Pi 5)
 - **User**: `denn`
 - **Script Path**: `/opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py`
+- **Device Identity Path**: `/opt/nmea2000/ydnu02-web/ydnu02_gateway_device.py`
 - **Systemd Service**: `/etc/systemd/system/ydnu02-tcp-gateway.service`
 
 ---
@@ -142,8 +169,9 @@ From project root:
 ### Manual Deployment Commands
 
 ```bash
-# 1. Copy script to gateway.local
+# 1. Copy gateway scripts to gateway.local
 scp ydnu02_tcp_gateway/ydnu02_tcp_gateway.py user@<gateway-host>.local:/opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py
+scp ydnu02_tcp_gateway/ydnu02_gateway_device.py user@<gateway-host>.local:/opt/nmea2000/ydnu02-web/ydnu02_gateway_device.py
 
 # 2. Copy and activate systemd service unit
 scp ydnu02_tcp_gateway/ydnu02-tcp-gateway.service user@<gateway-host>.local:/tmp/ydnu02-tcp-gateway.service
