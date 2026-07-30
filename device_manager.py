@@ -458,23 +458,6 @@ class DeviceManager:
             return
         self._worker_running = True
 
-        # Pre-seed our virtual TCP-GW device (SA=200) so the scanner shows a real name
-        # immediately — regardless of whether Product Info fast-packet arrives in time.
-        _GW_SA = 200  # matches ydnu02_gateway_device.GW_PREFERRED_SA
-        with self._sensors_lock:
-            self._discovered_bus_devices[_GW_SA] = {
-                "src":               _GW_SA,
-                "manufacturer":      "Yacht Devices",
-                "model":             "YDNU-02 TCP-GW",
-                "serial":            "",
-                "firmware":          "",
-                "device_class":      "Gateway",
-                "function_name":     "PC Gateway",
-                "device_class_name": "Internetwork device",
-                "unique_id":         12345,
-                "active_pgns":       [],
-            }
-
         self._worker_thread = threading.Thread(target=self._bus_worker, daemon=True)
         self._worker_thread.start()
         print("[Gateway] Bus Worker started (TCP proxy mode)")
@@ -1335,7 +1318,18 @@ class DeviceManager:
                 except asyncio.TimeoutError:
                     continue    # no frames — bus is quiet, keep waiting
 
-            # Final summary: re-send all discovered devices after scan window
+            # Final summary: merge bus-worker state into local devices dict so that
+            # fast-packet Product Info (PGN 126996) collected during the scan window
+            # via feed_to_lib → _discovered_bus_devices is reflected in the result.
+            with self._sensors_lock:
+                for src in list(devices):
+                    known = self._discovered_bus_devices.get(src, {})
+                    for k in ("manufacturer", "model", "serial", "firmware",
+                               "function_name", "device_class_name",
+                               "unique_id", "mfg_code", "product_code"):
+                        if known.get(k):   # prefer real bus data over empty/stale
+                            devices[src][k] = known[k]
+
             for src, info in sorted(devices.items()):
                 await websocket.send_json({
                     "type": "device",
