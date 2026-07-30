@@ -291,18 +291,21 @@ def _send_iso_request() -> None:
         ser = serial_instance
     if ser is None or not ser.is_open or service_mode.is_set():
         return
-    frame = b"00:00:00.000 T 18EAFFFE 00 EE 00\r\n"
+    frame_claim = b"00:00:00.000 T 18EAFFFE 00 EE 00\r\n"
+    frame_prod  = b"00:00:00.000 T 18EAFFFE 14 F0 01\r\n"
     try:
-        ser.write(frame)
-        print("[data] ISO Request TX sent to serial (best-effort)", flush=True)
+        ser.write(frame_claim)
+        ser.write(frame_prod)
+        print("[data] ISO Requests (Address Claim + Product Info) TX sent to serial", flush=True)
     except serial.SerialException as e:
         print(f"[data] ISO Request TX error: {e}", flush=True)
 
-    # Also broadcast ISO Request to TCP data clients so virtual devices
-    # (e.g. N2KDevice at SA=200) receive it and respond with their ISO Claim.
-    # Format: R-type frame (incoming), SA=0xFE (null address, from gateway itself)
-    tcp_iso_req = _fmt_frame('18EAFFFE', b'\x00\xee\x00')
-    _broadcast(tcp_iso_req)
+    # Broadcast ISO Requests to TCP data clients so virtual devices (SA=200)
+    # receive them and respond with their Address Claim (60928) & Product Info (126996).
+    tcp_iso_req_claim = _fmt_frame('18EAFFFE', b'\x00\xee\x00')
+    tcp_iso_req_prod  = _fmt_frame('18EAFFFE', b'\x14\xf0\x01')
+    _broadcast(tcp_iso_req_claim)
+    _broadcast(tcp_iso_req_prod)
 
 
 def handle_data_client(conn: socket.socket, addr) -> None:
