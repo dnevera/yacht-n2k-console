@@ -91,6 +91,19 @@ class DataHub:
 
         # Unified N2K Device Registry: tracks physical + virtual devices
         self.device_registry = N2KDeviceRegistry()
+        # Pre-register physical YDNU-02 USB Gateway (SA=64)
+        self.device_registry.register_device(N2KDeviceInfo(
+            sa=64,
+            unique_id=402047,
+            mfg_code=717,
+            device_class=25,
+            device_function=130,
+            industry_group=4,
+            model_id="YDNU-02",
+            software_version="1.75 07/08/2025",
+            model_serial="00402047",
+            model_version="NMEA 2000 USB Gateway",
+        ))
         # Pre-register virtual TCP Gateway (SA=200) so announce_all_devices() immediately includes it
         self.device_registry.register_device(N2KDeviceInfo(
             sa=200,

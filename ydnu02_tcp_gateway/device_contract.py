@@ -132,6 +132,9 @@ class N2KDeviceRegistry:
     def update_from_frame(self, line: bytes) -> Optional[int]:
         """Decode a broadcast R-frame line and update device registry."""
         try:
+            # Normalize T-frames to R-frames for NMEA2000Decoder compatibility
+            if b" T " in line:
+                line = line.replace(b" T ", b" R ", 1)
             text = line.decode("ascii", errors="ignore").rstrip()
             msg = self._decoder.decode(text)
         except Exception:
