@@ -677,9 +677,9 @@ class TestGatewayDevice(unittest.TestCase):
             fields = {f.id: f.value for f in msg.fields}
             self.assertEqual(fields['sid'], sid)
 
-    def test_manufacturer_is_yacht_devices(self):
-        """GW_MANUFACTURER must be 717 (Yacht Devices), not 999 (Unknown)."""
-        self.assertEqual(self.dev.GW_MANUFACTURER, 717)
+    def test_manufacturer_is_custom(self):
+        """GW_MANUFACTURER must be 2047 (Custom/Experimental)."""
+        self.assertEqual(self.dev.GW_MANUFACTURER, 2047)
 
     def test_preferred_sa(self):
         """Gateway preferred SA must be 200."""

@@ -136,15 +136,14 @@ GW_PREFERRED_SA    = 200
 physical devices which typically use SA 0–99. If another device claims SA=200,
 the N2KDevice library performs ISO address claim arbitration per J1939-81."""
 
-GW_UNIQUE_NUMBER   = 12345
-"""Arbitrary 21-bit unique number within the manufacturer's address space.
-Used as part of the ISO NAME for address claim arbitration priority."""
+GW_UNIQUE_NUMBER   = 402047
+"""21-bit unique number for ISO NAME address claim arbitration."""
 
-GW_MANUFACTURER    = 717
-"""Manufacturer code: 717 = Yacht Devices (maker of the YDNU-02 USB gateway).
-Shown in HA device info as the manufacturer name."""
-# TODO(registration): Consider using 999 (unregistered) if the gateway identity
-# should be distinct from the physical YDNU-02 hardware.
+GW_MANUFACTURER    = 2047
+"""Manufacturer code: 2047 = Custom / Experimental (NMEA 2000 reserved for virtual/custom software devices)."""
+
+GW_PRODUCT_CODE    = 200
+"""Product code assigned to YDNU-02 TCP Gateway (200)."""
 
 GW_DEVICE_CLASS    = 25
 """N2K device class: 25 = Internetwork Device (ISO 11783-5 Table B.4)."""
@@ -156,11 +155,10 @@ GW_INDUSTRY_GROUP  = 4
 """Industry group: 4 = Marine Industry."""
 
 GW_MODEL_ID        = 'YDNU-02 TCP-GW'
-"""Model ID string broadcast in PGN 126996 Product Information.
-Max 32 chars per NMEA 2000 spec."""
+"""Model ID string broadcast in PGN 126996 Product Information (max 16 chars)."""
 
-GW_MODEL_VERSION   = 'yacht-n2k-console'
-"""Model version string broadcast in PGN 126996. Identifies the software stack."""
+GW_MODEL_VERSION   = 'yacht-n2k-console @dnevera'
+"""Model version string broadcast in PGN 126996 (max 32 chars)."""
 
 GW_HEARTBEAT_S     = 10.0
 """Heartbeat interval in seconds. The N2KDevice library automatically broadcasts
@@ -418,13 +416,14 @@ async def _run_device() -> None:
         preferred_address=GW_PREFERRED_SA,
         unique_number=GW_UNIQUE_NUMBER,
         manufacturer_code=GW_MANUFACTURER,
+        product_code=GW_PRODUCT_CODE,
         device_class=GW_DEVICE_CLASS,
         device_function=GW_DEVICE_FUNCTION,
         industry_group=GW_INDUSTRY_GROUP,
         model_id=GW_MODEL_ID,
         model_version=GW_MODEL_VERSION,
         software_version_code=version,
-        model_serial_code=str(GW_UNIQUE_NUMBER),
+        model_serial_code=f"SW-GW-{GW_UNIQUE_NUMBER:08d}",
         heartbeat_interval=GW_HEARTBEAT_S,
     )
 

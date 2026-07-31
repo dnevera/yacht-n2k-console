@@ -54,11 +54,18 @@ class ServiceManager:
             info["state"] = "online"
             return info
 
-        result = self._ops.service_operation(_do)
-        if result and result.get("firmware_version"):
-            self._info_cache = result
-            self._info_cache_time = time.time()
-        return result
+        try:
+            result = self._ops.service_operation(_do)
+            if result and result.get("firmware_version"):
+                self._info_cache = result
+                self._info_cache_time = time.time()
+            return result
+        except Exception as e:
+            if self._info_cache:
+                info = dict(self._info_cache)
+                info["busy_warning"] = str(e)
+                return info
+            raise
 
     def get_filters(self) -> Dict[str, Any]:
         """Read all 8 YDNU-02 filter tables via service terminal (PRINT commands)."""

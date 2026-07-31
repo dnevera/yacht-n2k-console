@@ -140,10 +140,16 @@ SCP="scp -o ConnectTimeout=10"
 DEPLOY_PROXY=true
 DEPLOY_WEB=true
 CLEAN_HA=false
+RESTART_HA=false
+
+for arg in "$@"; do
+    [[ "$arg" == "--restart-ha" ]] && RESTART_HA=true
+done
+
 [[ "$MODE" == "--proxy"    ]] && DEPLOY_WEB=false
 [[ "$MODE" == "--web"      ]] && DEPLOY_PROXY=false
-[[ "$MODE" == "--patch-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false
-[[ "$MODE" == "--clean-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && CLEAN_HA=true
+[[ "$MODE" == "--patch-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && RESTART_HA=true
+[[ "$MODE" == "--clean-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && CLEAN_HA=true && RESTART_HA=true
 
 # ── pre_deploy_diff() ────────────────────────────────────────────────────────
 # Shows current remote state and what will change BEFORE uploading anything.
@@ -158,11 +164,13 @@ CLEAN_HA=false
 
 # Files per deploy mode (local path → remote path)
 PROXY_FILES=(
+    "VERSION:VERSION"
     "ydnu02_tcp_gateway/ydnu02_tcp_gateway.py:ydnu02_tcp_gateway.py"
     "ydnu02_tcp_gateway/ydnu02_gateway_device.py:ydnu02_gateway_device.py"
 )
 
 WEB_FILES=(
+    "VERSION:VERSION"
     "device_manager.py:device_manager.py"
     "ydnu02.py:ydnu02.py"
     "app.py:app.py"
@@ -288,6 +296,7 @@ if $DEPLOY_PROXY; then
     ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}/ydnu02_tcp_gateway ${REMOTE_DIR}/ydnu02 ${REMOTE_DIR}/device_manager"
 
     # Upload gateway package files
+    ${SCP} "${LOCAL_DIR}/VERSION"                  "${HOST}:${REMOTE_DIR}/VERSION"
     ${SCP} -r "${LOCAL_DIR}/ydnu02_tcp_gateway/"* "${HOST}:${REMOTE_DIR}/ydnu02_tcp_gateway/"
     ${SCP} -r "${LOCAL_DIR}/ydnu02/"*             "${HOST}:${REMOTE_DIR}/ydnu02/"
     ${SCP} -r "${LOCAL_DIR}/device_manager/"*      "${HOST}:${REMOTE_DIR}/device_manager/"
@@ -304,9 +313,11 @@ if $DEPLOY_PROXY; then
       && echo 'ydnu02-tcp-gateway: RUNNING ✓' || echo 'ydnu02-tcp-gateway: FAILED ✗'"
     log "ydnu02-tcp-gateway deploy complete ✓"
 
-    # Patch HA and restart — gateway restart sends EOF to HA's TCP connection.
-    # HA must have the patched nmea2000 lib to reconnect cleanly (not spin).
-    patch_ha
+    if $RESTART_HA; then
+        patch_ha
+    else
+        log "Skipping Home Assistant restart (pass --restart-ha to restart HA container)"
+    fi
 fi
 
 # ── Standalone --patch-ha ────────────────────────────────────────────────────
@@ -343,7 +354,7 @@ if $DEPLOY_WEB; then
       ${REMOTE_DIR}/sensors ${REMOTE_DIR}/routes"
 
     # Core Python modules
-    for f in ydnu02.py app.py device_manager.py models.py \
+    for f in VERSION ydnu02.py app.py device_manager.py models.py \
               gobius_parsers.py mopeka_parsers.py mopeka_scanner.py \
               ble_registry.py gobius_ble_poller.py \
               n2k_command_builder.py n2k_meta.py; do

@@ -45,7 +45,8 @@ Object.assign(App, {
         if (ld) ld.style.display = 'block';
 
         try {
-            const data = await this.api('/api/info?force=true');
+            const url = btnEl ? '/api/info?force=true' : '/api/info';
+            const data = await this.api(url);
             if (data.state === 'offline') throw new Error(data.error || 'offline');
 
             document.getElementById('v-fw').textContent = data.firmware_version || '--';

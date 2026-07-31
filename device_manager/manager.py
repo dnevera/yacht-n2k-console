@@ -19,7 +19,23 @@ except ImportError:
 # systemd/launchd unit file) or by running from the project root.
 # Do NOT use sys.path.insert() here — modifying sys.path in library
 # code breaks test isolation and masks missing-package errors.
+import os
 from ydnu02 import YDNU02Controller
+
+
+def get_app_version() -> str:
+    """Read software version from VERSION file in the project root."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, '..', 'VERSION'),
+                 os.path.join(here, 'VERSION')):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                ver = f.read().strip()
+                if ver:
+                    return ver
+        except OSError:
+            pass
+    return '0.0.0'
 
 from device_manager.error_logger import ErrorLogger
 from device_manager.sensor_registry import SensorRegistry
@@ -211,6 +227,9 @@ class DeviceManager:
 
     def get_state(self) -> str:
         return self._state
+
+    def get_app_version(self) -> str:
+        return get_app_version()
 
     @property
     def _fw_progress(self) -> Dict[str, Any]:

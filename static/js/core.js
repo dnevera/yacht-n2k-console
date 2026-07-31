@@ -21,6 +21,7 @@ const App = {
     // ---- Init ----
     init() {
         this.initTabs();
+        this.fetchAppVersion();
         // Eagerly load the default active tab (dashboard)
         this.loadTab('dashboard').then(() => {
             this.initTabActions();
@@ -31,6 +32,17 @@ const App = {
             this.startSensorPolling();
             this.startMopekaPolling();
         });
+    },
+
+    async fetchAppVersion() {
+        try {
+            const data = await this.api('/api/version');
+            if (data && data.version) {
+                const el = document.getElementById('app-version');
+                if (el) el.textContent = 'v' + data.version;
+                document.title = `YDNU-02 NMEA 2000 Console v${data.version}`;
+            }
+        } catch (e) {}
     },
 
     /** Generate ➕ Add Sensor buttons for all tabs with data-sensor-type attribute */

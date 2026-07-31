@@ -11,9 +11,20 @@ async def api_info(force: bool = False):
     if is_io_paused():
         return {"state": "offline", "error": "I/O is stopped. Resume from Dashboard first."}
     try:
-        return await asyncio.to_thread(get_device_mgr().get_info, force)
+        mgr = get_device_mgr()
+        info = await asyncio.to_thread(mgr.get_info, force)
+        if isinstance(info, dict):
+            info["app_version"] = mgr.get_app_version()
+        return info
     except Exception as e:
         return {"state": "offline", "error": str(e)}
+
+
+@router.get("/version")
+async def api_version():
+    """Get console application version from VERSION file."""
+    mgr = get_device_mgr()
+    return {"version": mgr.get_app_version() if mgr else "0.0.0"}
 
 
 @router.post("/mode/{mode}")
