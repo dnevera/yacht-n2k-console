@@ -45,6 +45,12 @@ class TCPProxyConnection:
     This class replaces the old direct serial.Serial access pattern.
     The proxy exclusively owns /dev/ttyACM0; no one else should open it.
 
+    Architecture & Threading:
+        - Designed to be used by a single dedicated worker thread (`_bus_worker`).
+        - Uses raw `recv()` with an internal byte buffer to avoid Python's `makefile()`
+          socket timeout state corruption bugs.
+        - Non-thread-safe on its own; all operations must occur in the owning thread.
+
     Lifecycle:
         connect() → readline() × N → close()
 
@@ -53,6 +59,12 @@ class TCPProxyConnection:
         - Returns ""  on socket timeout (bus can be slow — ~1 frame per 2.5s)
         - Raises ConnectionResetError when the proxy closed the connection
           (e.g. proxy restarted — caller must reconnect)
+
+    Skill — Read NMEA broadcast via netcat:
+        ```bash
+        nc <gateway-host> 4001
+        # Output: 16:21:40.123 R 09F11233 11 22 33 44 55 66 77 88
+        ```
     """
 
     def __init__(self, host: str = _PROXY_HOST, port: int = _PROXY_DATA_PORT):
@@ -155,8 +167,8 @@ class ProxyControlClient:
       - OS shell commands (YDNU MODE RAW, YDNU SILENT ON, ...)
 
     Protocol (line-oriented UTF-8):
-        Client → Proxy:  command line (e.g. "SERVICE_START\\n")
-        Proxy  → Client: response line (e.g. "READY\\n")
+        Client → Proxy:  command line (e.g. "SERVICE_START\n")
+        Proxy  → Client: response line (e.g. "READY\n")
         After READY:     bidirectional raw serial passthrough until *_END command
 
     Control commands:
@@ -167,9 +179,11 @@ class ProxyControlClient:
       - Pauses broadcast to all :4001 DATA clients (sets service_mode flag)
       - Routes all serial I/O exclusively to this control client
 
-    IMPORTANT: Only ONE control client at a time. The proxy serialises access
-    via a mutex. Concurrent control connections will block until the previous
-    one exits.
+    Architecture & Threading:
+        IMPORTANT: Only ONE control client at a time. The proxy serialises access
+        via a mutex. Concurrent control connections will block until the previous
+        one exits.
+        In DeviceManager, access is protected by `_service_lock` to avoid proxy timeouts.
 
     Passthrough adapter:
         enter_service() / enter_firmware() opens the connection.
@@ -375,6 +389,17 @@ class DeviceManager:
         1. _service_operation(func)   — full service mode: enter → func → exit service
         2. _locked_operation(func)    — service mode but exits to RAW after (OS commands)
         3. _raw_locked_operation(func)— service mode, no auto-exit (MCU reset, firmware)
+
+    Threading Model:
+        - `_bus_worker` runs continuously on a daemon thread.
+        - REST API requests run on FastAPI's threadpool.
+        - Shared states (sensors, WS queues, error logs) are protected by dedicated `threading.Lock`s.
+        - `_service_lock` guarantees sequential execution of service commands.
+
+    Skill — Fetch overall gateway state:
+        ```bash
+        curl http://<gateway-host>:8080/api/state
+        ```
     """
 
     def __init__(self, port: Optional[str] = None, debug: bool = False):
@@ -463,6 +488,13 @@ class DeviceManager:
         """
         Start the bus worker thread (called once from app.py lifespan on startup).
         The worker connects to the proxy DATA port and continuously reads NMEA frames.
+
+        WHY: Ensures NMEA data is passively recorded without locking up the main async loop.
+
+        Skill — Trigger worker startup implicitly via systemctl restart:
+            ```bash
+            ssh user@gateway-host 'sudo systemctl restart yacht-console'
+            ```
         """
         if self._worker_running:
             return
@@ -476,6 +508,9 @@ class DeviceManager:
         """
         Stop the bus worker thread (called from app.py lifespan on shutdown).
         Closes the TCP connection to unblock any pending readline().
+
+        WHY: Graceful shutdown prevents hanging threads and dirty socket closes.
+        TODO(denn): Consider sending an explicit shutdown event instead of relying on `close()`.
         """
         self._worker_running = False
         if self._tcp:
@@ -514,6 +549,8 @@ class DeviceManager:
         NOTE: The inner loop exits when _pause_event is set mid-read (e.g.
         service op started while we were waiting for readline). The outer loop
         then immediately re-checks the pause flag and sleeps until cleared.
+
+        ISSUE(denn): Tight `time.sleep(0.1)` on pause could be replaced by `_pause_event.wait()` for better CPU efficiency.
         """
         _retry_delay = 1.0
         while self._worker_running:
@@ -764,7 +801,19 @@ class DeviceManager:
                 self._error_log.pop(0)
 
     def get_error_log(self, limit: int = 100, src: Optional[int] = None) -> Dict[str, Any]:
-        """Return recorded CAN error events (most recent first)."""
+        """
+        Return recorded CAN error events (most recent first).
+        WHY: Exposes in-memory ring buffer of CAN bus errors via REST API.
+
+        Args:
+            limit: Max number of records to return.
+            src: Optional source address to filter by.
+
+        Skill — Fetch recent CAN bus errors via curl:
+            ```bash
+            curl http://<gateway-host>:8080/api/errors?limit=10
+            ```
+        """
         with self._error_log_lock:
             logs = list(self._error_log)
         if src is not None:
@@ -773,7 +822,15 @@ class DeviceManager:
         return {"count": len(self._error_log), "errors": logs}
 
     def clear_error_log(self) -> Dict[str, Any]:
-        """Clear the error history buffer."""
+        """
+        Clear the error history buffer.
+        WHY: Allows the user to acknowledge and flush the error log via REST API.
+
+        Skill — Clear CAN bus error log via curl:
+            ```bash
+            curl -X POST http://<gateway-host>:8080/api/errors/clear
+            ```
+        """
         with self._error_log_lock:
             self._error_log.clear()
         return {"status": "cleared", "count": 0}
@@ -798,6 +855,16 @@ class DeviceManager:
         """
         Non-blocking snapshot of all known sensors (thread-safe).
         Called by REST endpoint GET /api/sensors.
+
+        WHY: Provides instantaneous view of fluid levels without interrupting the bus.
+
+        Returns:
+            Dict containing status, fluid_levels array, and count.
+
+        Skill — Fetch sensor state via curl:
+            ```bash
+            curl -s http://<gateway-host>:8080/api/sensors | jq '.fluid_levels[] | {name, level_pct}'
+            ```
         """
         with self._sensors_lock:
             fluid_levels = [sensor.to_dict() for sensor in self.sensors.values()]
@@ -847,6 +914,14 @@ class DeviceManager:
         Thread-safety: _service_lock ensures only ONE service operation runs at a
         time. Concurrent API calls (e.g. user spamming HELP) will queue up and
         execute sequentially — no racing into pcc.enter_service().
+
+        WHY: Safely orchestrates transitions in and out of the YDNU service terminal.
+
+        Skill — Example internal usage snippet:
+            ```python
+            # Get internal info safely wrapped in service operation
+            info = dm._service_operation(lambda c: c._send_terminal_command("HELP"))
+            ```
         """
         with self._service_lock:    # Serialize: only ONE service op at a time
             self._pause_event.set()     # Stop: signal bus worker to pause
@@ -894,6 +969,14 @@ class DeviceManager:
         and set_silent() route their serial writes through the proxy.
 
         Used by: set_mode, set_silent.
+
+        WHY: Safely changes device configuration at the OS level while suspending bus monitoring.
+
+        Skill — Set YDNU mode via shell:
+            ```bash
+            # NOTE: this uses REST API internally which calls this method
+            curl -X POST -H "Content-Type: application/json" -d '{"mode":"RAW"}' http://<gateway-host>:8080/api/settings/mode
+            ```
         """
         with self._service_lock:
             self._pause_event.set()
@@ -930,6 +1013,13 @@ class DeviceManager:
 
         Used by: reset_mcu, reset_hardware, flash_firmware, enter_service,
                  exit_service (manual control endpoints).
+
+        WHY: Handles operations that cause the device to reboot or disconnect.
+
+        Skill — Manual reboot:
+            ```bash
+            curl -X POST http://<gateway-host>:8080/api/system/reset_mcu
+            ```
         """
         with self._service_lock:
             self._pause_event.set()
@@ -959,6 +1049,13 @@ class DeviceManager:
         """
         Read device info from YDNU-02 service terminal (HELP command).
         Results are cached for 60s (cache_ttl). Pass force=True to bypass cache.
+
+        WHY: Provides basic firmware and operational stats.
+
+        Skill — Fetch device info:
+            ```bash
+            curl http://<gateway-host>:8080/api/info
+            ```
         """
         if not force and self._info_cache and (time.time() - self._info_cache_time) < self._cache_ttl:
             return self._info_cache
@@ -978,6 +1075,13 @@ class DeviceManager:
         """
         Read all 8 YDNU-02 filter tables via service terminal (PRINT <NAME> commands).
         Returns records count and filter type (BLACK/WHITE) for each table.
+
+        WHY: Exposes current NMEA packet filtering rules.
+
+        Skill — Fetch filter stats:
+            ```bash
+            curl http://<gateway-host>:8080/api/filters
+            ```
         """
         FILTER_NAMES = ["GLOBAL_RX", "GLOBAL_TX", "RAW_RX", "RAW_TX",
                         "N2K_RX", "N2K_TX", "0183_RX", "0183_TX"]
@@ -998,7 +1102,15 @@ class DeviceManager:
         return self._service_operation(_do)
 
     def get_settings(self) -> Dict[str, str]:
-        """Read current YDNU-02 settings via service terminal (HELP SET)."""
+        """
+        Read current YDNU-02 settings via service terminal (HELP SET).
+        WHY: Exposes current device settings configuration.
+
+        Skill — Fetch settings:
+            ```bash
+            curl http://<gateway-host>:8080/api/settings
+            ```
+        """
         return self._service_operation(
             lambda c: {"settings_raw": c._send_terminal_command("HELP SET", wait=2.0)})
 
@@ -1176,6 +1288,13 @@ class DeviceManager:
         progress_cb updates _fw_progress which is polled by the UI.
         Invalidates info cache after flash (firmware version has changed).
         Device reboots after flash — uses _raw_locked_operation.
+
+        WHY: Allows remote OTA updates of the gateway MCU.
+
+        Skill — Flash via curl (assuming uupdate.bin is available):
+            ```bash
+            curl -F "file=@uupdate.bin" http://<gateway-host>:8080/api/firmware/flash
+            ```
         """
         def _progress(stage, pct):
             self._fw_progress = {"stage": stage, "percent": pct}
@@ -1261,6 +1380,17 @@ class DeviceManager:
 
         The bus worker does NOT pause during monitoring — both NMEA reading and
         WebSocket streaming run concurrently.
+
+        WHY: Allows live debugging of the N2K bus without disrupting normal recording.
+
+        Skill — Connect to WS using Python websockets:
+            ```python
+            import asyncio, websockets
+            async def listen():
+                async with websockets.connect("ws://<gateway-host>:8080/api/monitor") as ws:
+                    print(await ws.recv())
+            asyncio.run(listen())
+            ```
         """
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
         with self._queues_lock:
@@ -1334,6 +1464,17 @@ class DeviceManager:
           4. DICT KEY STRUCTURE:
              N2KPGNDecoder.parse_raw_line(line) returns dict {"info": {"pgn": ..., "src": ...}}.
              Always extract pgn and src via parsed.get("info", {}).get("pgn/src").
+
+        WHY: Identifies all active endpoints on the NMEA 2000 network.
+
+        Skill — Trigger scan via Python websockets:
+            ```python
+            import asyncio, websockets
+            async def scan():
+                async with websockets.connect("ws://<gateway-host>:8080/api/scan") as ws:
+                    print(await ws.recv())
+            asyncio.run(scan())
+            ```
         """
         # ── Step 1: Open own TCP connection to proxy DATA port ─────────────────
         try:

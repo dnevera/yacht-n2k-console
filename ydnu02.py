@@ -49,18 +49,51 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 class N2KPGNDecoder:
-    """Декодер 29-bit CAN ID и PGN пакетов NMEA 2000.
-    
-    Uses the nmea2000 library (tomer-w/nmea2000) for full PGN decoding,
-    device class/function name resolution, and manufacturer lookup.
-    Falls back to raw hex display if library is unavailable.
+    """Static PGN decoder for CAN frames.
+
+    Provides utility methods to parse and interpret raw NMEA 2000 CAN frames.
+    It leverages the `nmea2000` library when available for deep PGN decoding
+    and device manufacturer resolution, falling back to manual bitwise extraction
+    otherwise.
+
+    WHY:
+    Raw CAN logs are difficult to interpret. This decoder maps 29-bit CAN IDs
+    to PGNs (Parameter Group Numbers) and extracts human-readable device metadata
+    (like Manufacturer and Device Class).
+
+    Skills & Examples:
+    ------------------
+    **Python Example**: Parse a raw CAN frame line:
+    ```python
+    from ydnu02 import N2KPGNDecoder
+
+    line = "12:34:56.789 R 09F80115 00 00 00 00 00 00 00 00"
+    parsed = N2KPGNDecoder.parse_raw_line(line)
+    if parsed:
+        print(f"PGN: {parsed['info']['pgn']}, Decoded: {parsed['decoded']}")
+    ```
     """
 
     @classmethod
     def parse_device_info(cls, parsed: Dict[str, Any]) -> Dict[str, Any]:
         """Parse PGN 60928 / 126996 from parse_raw_line() result into structured device info.
         
-        Uses nmea2000 library for correct (device_class, function) → name resolution.
+        WHY:
+        Device metadata is transmitted in ISO Address Claim (60928) and Product Information (126996).
+        This method normalizes the raw byte payload into standard dictionary fields (e.g. unique_id,
+        mfg_code, device_class) to simplify bus discovery.
+        
+        ISSUE(denn): Hardcoded manual extraction blocks for fallback are brittle if the PGN payload format changes.
+        TODO(denn): Add caching for manufacturer lookups if device claims repeatedly send the same data.
+
+        Skills & Examples:
+        ------------------
+        **Python Example**: Extract device info from a parsed Address Claim frame:
+        ```python
+        parsed_frame = N2KPGNDecoder.parse_raw_line("00:00:00.000 R 18EEFF10 00 00 00 00 00 00 00 00")
+        info = N2KPGNDecoder.parse_device_info(parsed_frame)
+        print(f"Manufacturer: {info.get('manufacturer')}")
+        ```
         """
         pgn = parsed.get("info", {}).get("pgn", 0)
         data = parsed.get("data", b"")
@@ -150,7 +183,25 @@ class N2KPGNDecoder:
 
     @staticmethod
     def parse_can_id(can_id_hex: str) -> Dict[str, int]:
-        """Разбор 29-битного CAN ID в компоненты NMEA 2000."""
+        """Parse a 29-bit CAN ID into NMEA 2000 components (PGN, Source, Destination, Priority).
+
+        WHY:
+        NMEA 2000 uses J1939-based 29-bit CAN IDs. This method isolates the priority,
+        raw PGN, and source/destination addresses from the raw hex string, which is crucial
+        for routing and filtering messages.
+
+        ISSUE(denn): Doesn't currently validate if the CAN ID is actually 29-bit.
+        TODO(denn): Add validation to ensure the input hex string represents a valid NMEA 2000 CAN ID.
+
+        Skills & Examples:
+        ------------------
+        **Python Example**: Parse a hex CAN ID:
+        ```python
+        from ydnu02 import N2KPGNDecoder
+        info = N2KPGNDecoder.parse_can_id("09F80115")
+        print(f"PGN: {info['pgn']}, Source: {info['src']}, Dest: {info['dst']}")
+        ```
+        """
         can_id = int(can_id_hex, 16)
         priority = (can_id >> 26) & 0x7
         pgn_raw = (can_id >> 8) & 0x3FFFF
@@ -184,7 +235,26 @@ class N2KPGNDecoder:
 
     @classmethod
     def decode_pgn(cls, pgn: int, src: int, data: bytes) -> str:
-        """Декодирование PGN в читаемую строку. Использует nmea2000 библиотеку."""
+        """Decode a PGN payload into a human-readable string.
+
+        WHY:
+        Converts the raw byte array of a PGN into structured fields (e.g., Temperature,
+        Speed, Status) using the underlying `nmea2000` library. If the library isn't available,
+        it falls back to a basic hex representation, ensuring the system still logs *something*.
+
+        ISSUE(denn): Currently suppresses all library exceptions silently, masking potential decoder bugs.
+        TODO(denn): Add a fast-packet reassembly step inside here for multi-frame PGNs.
+
+        Skills & Examples:
+        ------------------
+        **Python Example**: Decode a specific PGN payload:
+        ```python
+        from ydnu02 import N2KPGNDecoder
+        payload = bytes.fromhex("01 02 03 04 05 06 07 08")
+        human_readable = N2KPGNDecoder.decode_pgn(127250, 15, payload)
+        print(human_readable)
+        ```
+        """
         # Try library decode via raw CAN frame format
         if _HAS_N2K_LIB and _n2k_decoder:
             try:
@@ -251,7 +321,26 @@ class N2KPGNDecoder:
 
     @classmethod
     def parse_raw_line(cls, line: str) -> Optional[Dict[str, Any]]:
-        """Парсинг одной RAW-строки от YDNU-02. Возвращает None при ошибке."""
+        """Parse a single RAW CAN line from the YDNU-02 device.
+
+        WHY:
+        The YDNU-02 outputs raw traffic in the format `hh:mm:ss.ddd R|T CANID b0 b1 ...`.
+        This method parses this standard output, splits timestamps, identifies direction,
+        and decodes the payload, serving as the primary ingestion point for the monitoring CLI.
+
+        ISSUE(denn): Split by space might fail if the timestamp format changes or includes spaces.
+        TODO(denn): Use regex for more robust parsing of the YDNU-02 serial line format.
+
+        Skills & Examples:
+        ------------------
+        **Python Example**: Read and parse a line from the serial port output:
+        ```python
+        line = "14:25:33.123 R 0DF80103 11 22 33 44 55 66 77 88"
+        parsed = N2KPGNDecoder.parse_raw_line(line)
+        if parsed:
+            print(f"{parsed['time']} - PGN: {parsed['info']['pgn']}")
+        ```
+        """
         # Format: hh:mm:ss.ddd R|T CANID b0 b1 b2 ...
         parts = line.strip().split()
         if len(parts) < 4:
@@ -272,11 +361,33 @@ class N2KPGNDecoder:
 # ---------------------------------------------------------------------------
 
 class YDNU02Controller:
-    """
-    Контроллер Yacht Devices YDNU-02 с двухуровневой архитектурой команд.
+    """YDNU-02 serial port controller for diagnostics, mode switching, and monitoring.
 
-    Level 1 (OS Shell):  _send_shell_command() — порт ЗАКРЫТ, echo > port.
-    Level 2 (Terminal):  _send_terminal_command() — порт ОТКРЫТ, serial session.
+    Implements a two-level command architecture based on the YDNU-02 specification:
+    Level 1: OS Shell (echo directly to the closed port) for mode switching.
+    Level 2: Service Menu (interactive serial session) for diagnostics and configuration.
+
+    WHY:
+    The YDNU-02 gateway requires specific sequences (DTR assertions, port toggling)
+    to access its configuration menus. This controller abstracts those quirks so
+    the user can fetch diagnostics or change firmware without manually wrestling with `stty`.
+
+    Skills & Examples:
+    ------------------
+    **Bash Example**: You can replicate Level 1 OS Shell commands manually:
+    ```bash
+    # Ensure port is closed, then send command
+    stty -F /dev/ttyACM0 hupcl
+    echo "YDNU MODE SERVICE" > /dev/ttyACM0
+    ```
+
+    **Python Example**: Initialize the controller and grab basic info:
+    ```python
+    from ydnu02 import YDNU02Controller
+    ctrl = YDNU02Controller(port="/dev/ttyACM0")
+    print(ctrl.enter_service_mode())
+    ctrl.exit_service_mode()
+    ```
     """
 
     def __init__(self, port: Optional[str] = None, debug: bool = False):
@@ -393,18 +504,24 @@ class YDNU02Controller:
     # --- Service Mode lifecycle ---
 
     def enter_service_mode(self) -> str:
-        """
-        Enter YDNU-02 service terminal mode.
+        """Enter YDNU-02 service terminal mode.
 
-        Passthrough path (proxy mode, _passthrough is set):
-            The proxy already switched YDNU-02 to service terminal mode during
-            SERVICE_START (via OS-level close → stty hupcl → echo → reopen).
-            We just read any buffered welcome text and request HELP output.
-            Do NOT send 'YDNU MODE SERVICE' here — serial.write() cannot trigger
-            the DTR toggle that YDNU-02 requires; the proxy handles this internally.
+        WHY:
+        To read configuration, change filters, or perform resets, the gateway must be
+        in its interactive 'SERVICE' mode. This method handles the complex handshake
+        (either via direct serial or through a proxy layer) required to invoke the service menu.
 
-        Legacy path (direct serial, no proxy):
-            Uses _send_shell_command() which closes the port, runs stty+echo, reopens.
+        ISSUE(denn): Proxy path relies on an undocumented `_passthrough` attribute.
+        TODO(denn): Refactor proxy dependency injection to be explicit rather than checking `getattr(self, '_passthrough')`.
+
+        Skills & Examples:
+        ------------------
+        **Python Example**: Programmatically enter service mode and dump settings:
+        ```python
+        ctrl = YDNU02Controller()
+        welcome = ctrl.enter_service_mode()
+        print(welcome)
+        ```
         """
         pcc = getattr(self, '_passthrough', None)
         if pcc:
@@ -433,17 +550,22 @@ class YDNU02Controller:
         return welcome
 
     def exit_service_mode(self, target_mode: str = "AUTO") -> str:
-        """
-        Exit YDNU-02 service terminal mode.
+        """Exit YDNU-02 service terminal mode and return to operational state.
 
-        Passthrough path (proxy mode, _passthrough is set):
-            The proxy handles the MODE RAW switch and serial reopen during SERVICE_END
-            (called via pcc.exit_service()). We just update local state here.
-            Sending MODE via passthrough is NOT needed and would race with the proxy's
-            own MODE RAW write in the SERVICE_END handler.
+        WHY:
+        After configuring the device, leaving it in 'SERVICE' mode blocks normal N2K
+        traffic flow. This method cleanly tears down the serial terminal and switches
+        the device back to a working mode (like AUTO or RAW).
 
-        Legacy path (direct serial, no proxy):
-            Sends MODE <target> via the open serial terminal, then closes the port.
+        ISSUE(denn): Does not verify if the device actually acknowledged the mode switch.
+        TODO(denn): Add a verification read after sending the MODE command in legacy path.
+
+        Skills & Examples:
+        ------------------
+        **Python Example**: Exit service mode back to RAW operation:
+        ```python
+        ctrl.exit_service_mode(target_mode="RAW")
+        ```
         """
         pcc = getattr(self, '_passthrough', None)
         if pcc:
@@ -636,15 +758,28 @@ class YDNU02Controller:
 
     def update_firmware(self, bin_path: str, skip_backup: bool = False,
                         progress_cb=None):
-        """
-        Загрузка прошивки на устройство.
-        Официальный метод Yacht Devices: cp FILE.BIN > /dev/ttyACM0
-        Безопасность (из документации):
-        - Прерванная прошивка автоматически перезапускается при следующем включении
-        - Настройки сохраняются (если README.TXT не указывает иначе)
-        - Откат: hardware reset возвращает заводскую прошивку
+        """Flash new firmware (.BIN) to the YDNU-02 device.
 
-        progress_cb: callable(stage: str, percent: int) — для отчёта в UI
+        WHY:
+        Firmware updates are done by raw-copying the binary directly to the serial port.
+        This method wraps that process with safety checks (size, magic bytes),
+        automatic backups of current settings, and progress reporting.
+
+        ISSUE(denn): The script currently doesn't read back LED status confirmation from the device after flashing.
+        TODO(denn): Catch serial timeouts more gracefully if the device disconnects mid-flash.
+
+        Skills & Examples:
+        ------------------
+        **Bash Example**: Manual firmware flash without the Python wrapper:
+        ```bash
+        cp /path/to/firmware.bin > /dev/ttyACM0
+        ```
+
+        **Python Example**: Programmatically update firmware:
+        ```python
+        ctrl = YDNU02Controller()
+        ctrl.update_firmware("YDNU02_v1.75.BIN")
+        ```
         """
         if not os.path.isfile(bin_path):
             raise FileNotFoundError(f"Firmware file not found: {bin_path}")
@@ -718,8 +853,30 @@ class YDNU02Controller:
     # --- NMEA Monitoring ---
 
     def monitor_raw(self, duration: float = 10.0, log_file: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Мониторинг CAN-шины в RAW-режиме с декодированием PGN.
+        """Monitor CAN bus traffic in RAW mode and decode PGNs.
+
+        WHY:
+        Provides a real-time debugging view of the N2K bus. Switches the device to RAW mode,
+        listens to incoming frames, parses them into human-readable PGN data, and optionally
+        logs the raw trace to a file for later playback or analysis.
+
+        ISSUE(denn): `time.sleep(0.01)` busy-wait loop consumes high CPU if traffic is heavy.
+        TODO(denn): Switch to blocking `ser.readline()` with a proper timeout instead of polling.
+
+        Skills & Examples:
+        ------------------
+        **CLI Example**: Run RAW monitor for 30 seconds and save to log:
+        ```bash
+        python ydnu02.py monitor raw -t 30 --log trace.log
+        ```
+
+        **Python Example**: Monitor programmatically:
+        ```python
+        ctrl = YDNU02Controller()
+        traffic = ctrl.monitor_raw(duration=5.0)
+        for frame in traffic:
+            print(frame['decoded'])
+        ```
         """
         self.set_mode("RAW")
         if not self._open_terminal():
@@ -788,9 +945,29 @@ class YDNU02Controller:
             self._close_terminal()
 
     def scan_bus(self, duration: float = 5.0) -> List[Dict[str, Any]]:
-        """
-        Активное сканирование CAN-шины:
-        RAW mode → ISO Request (PGN 60928 + 126996) → сбор ответов.
+        """Actively scan the CAN bus by requesting ISO Address Claims and Product Info.
+
+        WHY:
+        Passively waiting for devices to announce themselves takes time. This method
+        proactively sends ISO Requests (PGN 59904) asking all devices on the bus to
+        reply with their Address Claim (60928) and Product Information (126996),
+        building an instant inventory of the N2K network.
+
+        ISSUE(denn): Hardcoded PGN request strings do not use correct fast-packet protocol for Product Info if needed.
+        TODO(denn): Use the `nmea2000` encoder to construct valid ISO Request frames instead of hardcoded hex.
+
+        Skills & Examples:
+        ------------------
+        **CLI Example**: Scan the bus for devices:
+        ```bash
+        python ydnu02.py monitor scan -t 3
+        ```
+
+        **Python Example**: Programmatic bus scan:
+        ```python
+        ctrl = YDNU02Controller()
+        ctrl.scan_bus(duration=3.0)
+        ```
         """
         self.set_mode("RAW")
         if not self._open_terminal():
@@ -852,6 +1029,19 @@ class YDNU02Controller:
 # ---------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
+    """Construct the CLI argument parser for the YDNU-02 utility.
+
+    WHY:
+    Defines the standard CLI interface, exposing monitoring, firmware flashing,
+    and diagnostic capabilities to terminal users.
+
+    Skills & Examples:
+    ------------------
+    **CLI Example**: Show help for service commands:
+    ```bash
+    python ydnu02.py service --help
+    ```
+    """
     parser = argparse.ArgumentParser(
         description="Yacht Devices YDNU-02 USB Gateway — Controller & Monitor",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -924,6 +1114,27 @@ Examples:
 
 
 def main():
+    """Main CLI entry point for ydnu02.py.
+
+    WHY:
+    Parses arguments, instantiates the `YDNU02Controller`, and routes execution
+    to the appropriate command handler (service menu, monitor, firmware update).
+
+    ISSUE(denn): Global exception handler catches KeyboardInterrupt but might swallow other serial errors.
+    TODO(denn): Improve error reporting for permission denied errors on the serial port.
+
+    Skills & Examples:
+    ------------------
+    **CLI Example**: Connect to a specific port and enter interactive shell:
+    ```bash
+    python ydnu02.py -p /dev/ttyUSB1 service shell
+    ```
+
+    **CLI Example**: Flash firmware ignoring backups:
+    ```bash
+    python ydnu02.py firmware update.bin
+    ```
+    """
     parser = build_parser()
     args = parser.parse_args()
 
