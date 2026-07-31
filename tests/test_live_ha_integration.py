@@ -120,8 +120,10 @@ class TestLiveHAIntegration(unittest.TestCase):
     def test_ha_live_registry_strict_device_and_entities_check(self):
         """Audit live Home Assistant state for gateway N2K devices and sensor entities.
 
-        Verifies that Home Assistant receives N2K broadcast frames (PGN 60928, 130312, 127505)
-        and populates active sensor entities in HA.
+        STRICT REQUIREMENTS:
+          1. Both physical YDNU-02 (402047) and virtual TCP-GW (902047) MUST exist in HA device registry.
+          2. Both devices MUST have DISTINCT Primary Key (PK) hashes (NO HASH COLLISION).
+          3. BOTH devices MUST have active entities assigned (entities_count > 0) — NO empty devices!
         """
         checker = HALiveChecker(ha_url=os.getenv('HA_URL'))
         ha_data = checker.get_ha_data()
@@ -133,20 +135,45 @@ class TestLiveHAIntegration(unittest.TestCase):
             )
 
         devices = ha_data.get('devices', [])
-        states = ha_data.get('states', [])
+        entities = ha_data.get('entities', [])
 
-        # Check for registered gateway devices in HA
-        target_dev = next(
-            (d for d in devices if any(k in str(d).lower() for k in ('2047', '402047', '902047', 'gateway', 'yacht'))),
-            None
+        # 1. Find physical device (402047) and virtual device (902047)
+        phys_dev = next((d for d in devices if '402047' in str(d)), None)
+        virt_dev = next((d for d in devices if '902047' in str(d)), None)
+
+        self.assertIsNotNone(phys_dev, "DIAGNOSTIC FAILURE: Physical YDNU-02 (402047) device record missing from HA registry!")
+        self.assertIsNotNone(virt_dev, "DIAGNOSTIC FAILURE: Virtual TCP Gateway (902047) device record missing from HA registry!")
+
+        # 2. Extract PK hashes from device names / models
+        import re
+        pk_re = re.compile(r'\(PK:\s*([0-9a-fA-F]+)\)')
+        phys_match = pk_re.search(str(phys_dev))
+        virt_match = pk_re.search(str(virt_dev))
+
+        if phys_match and virt_match:
+            phys_hash = phys_match.group(1)
+            virt_hash = virt_match.group(1)
+            self.assertNotEqual(
+                phys_hash, virt_hash,
+                f"STRICT FAILURE: PK Hash Collision in HA! Both 402047 and 902047 share hash '{phys_hash}'. "
+                f"One device will steal all entities leaving the other device empty (0 entities)!"
+            )
+
+        # 3. Verify BOTH devices have active entities assigned (entities_count > 0)
+        phys_id = phys_dev.get('id')
+        virt_id = virt_dev.get('id')
+
+        phys_entities = [e for e in entities if e.get('device_id') == phys_id]
+        virt_entities = [e for e in entities if e.get('device_id') == virt_id]
+
+        self.assertGreater(
+            len(phys_entities), 0,
+            f"STRICT FAILURE: Physical YDNU-02 (402047) device has 0 entities in Home Assistant!"
         )
-        if target_dev is None and len(devices) > 0:
-            self.fail("DIAGNOSTIC FAILURE: No N2K gateway device found in Home Assistant device registry!")
-
-        # Check for active N2K entities in HA states
-        n2k_entities = [s for s in states if any(k in s.get('entity_id', '').lower() for k in ('n2k', 'temperature', 'fluid', 'tank', 'gateway'))]
-        if ha_data.get('source') == 'api' and len(n2k_entities) == 0:
-            self.fail("DIAGNOSTIC FAILURE: No N2K sensor entities found in Home Assistant /api/states!")
+        self.assertGreater(
+            len(virt_entities), 0,
+            f"STRICT FAILURE: Virtual TCP Gateway (902047) device has 0 entities in Home Assistant!"
+        )
 
     def test_physical_ydnu02_has_product_info_in_ha(self):
         """Physical YDNU-02 (402047) in HA MUST have Product Info from PGN 126996.

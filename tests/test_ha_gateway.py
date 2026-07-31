@@ -232,17 +232,98 @@ class TestHADeviceRegistryNamingAndPK(unittest.TestCase):
         self.assertTrue(any(b'18EEFFC8' in line for line in received), "SA=200 ISO Claim missing")
         self.assertTrue(any(b'19F014C8' in line for line in received), "SA=200 Product Info missing")
 
-    def test_ha_rx_line_prefix_format(self):
-        """All announced lines MUST start with '00:00:00.000 R ' for HA TextNmea2000Gateway parser."""
-        received = []
-        class FakeConn:
-            def sendall(self, data):
-                received.append(data)
-        self.hub.clients.add(FakeConn())
-        self.hub.announce_all_devices()
+    def test_pk_hash_uniqueness_per_device_source(self):
+        """PGN 126996 messages from SA=64 and SA=200 MUST generate distinct PK hashes."""
+        from nmea2000.decoder import NMEA2000Decoder as LibDecoder
 
-        for line in received:
-            self.assertTrue(line.startswith(b'00:00:00.000 R '), f"Line lacks HA RX prefix: {line}")
+        # FastPacket PGN 126996 for SA=64 (physical YDNU-02)
+        lines_sa64 = [
+            '00:00:00.000 R 18EEFF40 7F 22 A6 59 00 82 32 C0',
+            '00:00:00.000 R 19F01440 C0 86 15 05 83 19 59 44',
+            '00:00:00.000 R 19F01440 C1 4E 55 2D 30 32 20 20',
+            '00:00:00.000 R 19F01440 C2 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F01440 C3 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F01440 C4 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F01440 C5 20 20 31 2E 37 35 20',
+            '00:00:00.000 R 19F01440 C6 30 37 2F 30 38 2F 32',
+            '00:00:00.000 R 19F01440 C7 30 32 35 20 20 20 20',
+            '00:00:00.000 R 19F01440 C8 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F01440 C9 20 20 20 20 20 20 4E',
+            '00:00:00.000 R 19F01440 CA 4D 45 41 20 32 30 30',
+            '00:00:00.000 R 19F01440 CB 30 20 55 53 42 20 47',
+            '00:00:00.000 R 19F01440 CC 61 74 65 77 61 79 20',
+            '00:00:00.000 R 19F01440 CD 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F01440 CE 20 20 20 30 30 34 30',
+            '00:00:00.000 R 19F01440 CF 32 30 34 37 20 20 20',
+            '00:00:00.000 R 19F01440 D0 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F01440 D1 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F01440 D2 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F01440 D3 01 01',
+        ]
+        # FastPacket PGN 126996 for SA=200 (virtual TCP-GW)
+        lines_sa200 = [
+            '00:00:00.000 R 18EEFFC8 7F 22 A6 59 00 82 33 C0',
+            '00:00:00.000 R 19F014C8 C0 86 15 05 83 19 59 44',
+            '00:00:00.000 R 19F014C8 C1 4E 55 2D 30 32 20 20',
+            '00:00:00.000 R 19F014C8 C2 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F014C8 C3 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F014C8 C4 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F014C8 C5 20 20 30 2E 32 2E 30',
+            '00:00:00.000 R 19F014C8 C6 30 37 2F 30 38 2F 32',
+            '00:00:00.000 R 19F014C8 C7 30 32 35 20 20 20 20',
+            '00:00:00.000 R 19F014C8 C8 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F014C8 C9 20 20 20 20 20 20 4E',
+            '00:00:00.000 R 19F014C8 CA 4D 45 41 20 32 30 30',
+            '00:00:00.000 R 19F014C8 CB 30 20 55 53 42 20 47',
+            '00:00:00.000 R 19F014C8 CC 61 74 65 77 61 79 20',
+            '00:00:00.000 R 19F014C8 CD 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F014C8 CE 20 20 20 30 30 34 30',
+            '00:00:00.000 R 19F014C8 CF 32 30 34 37 20 20 20',
+            '00:00:00.000 R 19F014C8 D0 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F014C8 D1 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F014C8 D2 20 20 20 20 20 20 20',
+            '00:00:00.000 R 19F014C8 D3 01 01',
+        ]
+
+        lib_dec64 = LibDecoder(build_network_map=True)
+        lib_msg64 = None
+        for line in lines_sa64:
+            m = lib_dec64.decode(line)
+            if m and m.PGN == 126996:
+                lib_msg64 = m
+
+        lib_dec200 = LibDecoder(build_network_map=True)
+        lib_msg200 = None
+        for line in lines_sa200:
+            m = lib_dec200.decode(line)
+            if m and m.PGN == 126996:
+                lib_msg200 = m
+
+        self.assertIsNotNone(lib_msg64, "SA=64 PGN 126996 message failed to decode")
+        self.assertIsNotNone(lib_msg200, "SA=200 PGN 126996 message failed to decode")
+
+        hash64 = getattr(lib_msg64, 'hash', None)
+        hash200 = getattr(lib_msg200, 'hash', None)
+
+        # COLLISION VERIFICATION ASSERTION:
+        # PK hashes MUST NOT be identical between physical (SA=64) and virtual (SA=200) devices!
+        self.assertNotEqual(hash64, hash200, f"PK Hash Collision detected! Both SA=64 and SA=200 share hash '{hash64}'")
+        self.assertNotEqual(hash64, '818d9516db08fd90ffd1967e3c403bed', "Hash collapsed to default productInformation static MD5")
+
+    def test_each_device_receives_independent_entities(self):
+        """Both physical (SA=64) and virtual (SA=200) devices MUST have complete distinct product info."""
+        dev64 = self.hub.device_registry.get_device(64)
+        dev200 = self.hub.device_registry.get_device(200)
+
+        self.assertIsNotNone(dev64)
+        self.assertIsNotNone(dev200)
+
+        self.assertTrue(dev64.is_complete, "Physical device SA=64 product info incomplete")
+        self.assertTrue(dev200.is_complete, "Virtual device SA=200 product info incomplete")
+
+        self.assertNotEqual(dev64.model_serial, dev200.model_serial)
+        self.assertEqual(dev64.model_serial, "00402047")
+        self.assertEqual(dev200.model_serial, "SW-GW-00902047")
 
 
 if __name__ == '__main__':

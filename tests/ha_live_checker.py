@@ -53,14 +53,18 @@ class HALiveChecker:
             return None
 
     def fetch_from_ssh(self, host: str = 'user@<gateway-host>') -> Optional[Dict[str, Any]]:
-        """Fetch HA device registry directly from remote Pi via SSH."""
+        """Fetch HA device and entity registries directly from remote Pi via SSH."""
         import subprocess
         try:
-            cmd = f"ssh -o ConnectTimeout=5 {host} \"sudo docker exec homeassistant cat /config/.storage/core.device_registry 2>/dev/null\""
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=8)
-            if res.returncode == 0 and res.stdout.strip():
-                devs = json.loads(res.stdout).get('data', {}).get('devices', [])
-                return {'devices': devs, 'source': 'ssh'}
+            cmd_dev = f"ssh -o ConnectTimeout=5 {host} \"sudo docker exec homeassistant cat /config/.storage/core.device_registry 2>/dev/null\""
+            res_dev = subprocess.run(cmd_dev, shell=True, capture_output=True, text=True, timeout=8)
+            cmd_ent = f"ssh -o ConnectTimeout=5 {host} \"sudo docker exec homeassistant cat /config/.storage/core.entity_registry 2>/dev/null\""
+            res_ent = subprocess.run(cmd_ent, shell=True, capture_output=True, text=True, timeout=8)
+
+            if res_dev.returncode == 0 and res_dev.stdout.strip():
+                devs = json.loads(res_dev.stdout).get('data', {}).get('devices', [])
+                ents = json.loads(res_ent.stdout).get('data', {}).get('entities', []) if res_ent.returncode == 0 and res_ent.stdout.strip() else []
+                return {'devices': devs, 'entities': ents, 'source': 'ssh'}
         except Exception:
             pass
         return None
