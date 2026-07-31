@@ -58,7 +58,7 @@
 
 ## Тестирование
 
-### На gateway.local
+### На gateway-host
 ```
 === PGN 127505 Field Metadata ===
 instance: number, configurable ✅

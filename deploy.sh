@@ -1,32 +1,53 @@
 #!/usr/bin/env bash
 #
-# deploy.sh — YDNU-02 Web Console + TCP Gateway deploy to gateway.local (Pi5)
+# deploy.sh — YDNU-02 Web Console + TCP Gateway deploy to target host
 #
 # ── MINI-SKILL (read this if context is lost) ─────────────────────────────────
 #
 # WHAT THIS DEPLOYS
-#   Two independent services, both living in /opt/nmea2000/ydnu02-web/ :
+#   Two independent services, both living in $REMOTE_DIR (from deploy.conf):
 #
 #   1. ydnu02-tcp-gateway   (ydnu02_tcp_gateway/ydnu02_tcp_gateway.py)
 #      Holds /dev/ttyACM0 exclusively. Exposes:
-#        :4001  DATA — NMEA 2000 ASCII broadcast to all TCP clients (HA + web)
-#        :4002  CTRL — exclusive passthrough for service terminal / firmware
+#        :$DATA_PORT  DATA — NMEA 2000 ASCII broadcast to all TCP clients
+#        :$CTRL_PORT  CTRL — exclusive passthrough for service/firmware
 #      systemd: ydnu02-tcp-gateway.service  (starts BEFORE ydnu02-web)
 #
 #   2. ydnu02-web           (app.py + routes/ + static/ + …)
-#      FastAPI web console on :8080. Reads NMEA from :4001, sends ctrl via :4002.
+#      FastAPI web console on :$WEB_PORT. Reads NMEA via DATA, sends ctrl via CTRL.
 #      systemd: ydnu02-web.service  (Requires=ydnu02-tcp-gateway.service)
 #
 # USAGE
-#   ./deploy.sh [host]              — deploy both services + patch HA
-#   ./deploy.sh [host] --proxy      — gateway only + patch HA (no web restart)
-#   ./deploy.sh [host] --web        — web only (gateway/HA untouched)
-#   ./deploy.sh [host] --patch-ha   — re-apply HA patches only (after HA update)
-#   ./deploy.sh [host] --clean-ha   — delete 259 garbage NMEA devices + restart HA
+#   ./deploy.sh                     — deploy both services + patch HA (host from deploy.conf)
+#   ./deploy.sh --proxy             — gateway only + patch HA (no web restart)
+#   ./deploy.sh --web               — web only (gateway/HA untouched)
+#   ./deploy.sh --patch-ha          — re-apply HA patches only (after HA update)
+#   ./deploy.sh --clean-ha          — delete garbage NMEA devices + restart HA
+#   ./deploy.sh user@host --proxy   — override host from CLI
+#   ./deploy.sh --proxy --no-test   — deploy without running post-deploy tests
+#
+# POST-DEPLOY TESTS
+#   After deploying, tests run automatically on the remote Pi via SSH + pytest.
+#   Each deploy mode runs only the relevant test subset:
+#     --proxy   → gateway + service mode tests (2 suites)
+#     --web     → API + sensors + BLE tests (7 suites)
+#     (full)    → all tests (9 suites)
+#     --patch-ha / --clean-ha → manual verification only
+#   Pass --no-test to skip.
+#
+# CONFIGURATION
+#   All sensitive settings (hostname, user, paths) are in deploy.conf.
+#   deploy.conf is in .gitignore — NEVER commit it.
+#   deploy.conf.template is the reference — copy and fill in your values.
+#
+# SECURITY RULES
+#   - NO hardcoded hostnames, usernames, or IPs in this script
+#   - All connection details come from deploy.conf (gitignored)
+#   - Only deploy.conf.template (with placeholders) is committed to git
+#   - CLI arg can override DEPLOY_HOST but the default is from deploy.conf
 #
 # FILE OWNERSHIP RULE
-#   ydnu02_tcp_gateway.py is uploaded via scp directly to REMOTE_DIR.
-#   scp as user denn → file is denn-owned automatically. NO sudo needed.
+#   Files uploaded via scp are owned by the SSH user automatically.
 #   The .service unit goes via /tmp → sudo mv (only systemd dir needs root).
 #   NEVER use "sudo cp + sudo chown" for py files — scp ownership is correct.
 #
@@ -36,46 +57,72 @@
 #   Fix in patches/nmea2000_ioclient.py — applied to HA container on every
 #   proxy deploy. Path discovered dynamically (survives Python version bumps).
 #   HA is restarted to reload the module, then auto-reconnects within ~10s.
-#   If HA image is updated: run ./deploy.sh [host] --patch-ha to re-apply.
+#   If HA image is updated: run ./deploy.sh --patch-ha to re-apply.
 #   Remove patch when: nmea2000 package > 2026.5.2 has the fix included.
 #
 # SERVICE START ORDER
 #   ydnu02-tcp-gateway  →  ydnu02-web  →  homeassistant (docker)
 #   ydnu02-web.service has Requires= + After= on ydnu02-tcp-gateway.service.
 #
-# ISO CLAIMS / NETWORK MAP BUG (patched in hub.py)
-#   HA's nmea2000 decoder uses build_network_map=True by default. This makes
-#   the decoder return None for ANY message from an unknown device (no ISO
-#   Address Claim received yet). Devices send Claims only at power-on or on
-#   request. Since HA restarts don't power-cycle devices and YDNU-02 in RAW
-#   mode doesn't support TX, ISO Requests never reach the N2K bus.
-#   Fix: patch hub.py to set build_network_map=False. Sensors work without
-#   manufacturer info (device name shows as "(PK: ...)" instead of brand name),
-#   but all data values update correctly.
-#   Remove patch when: nmea2000 HA component auto-detects gateway TX support.
+# SKILL: Adding a new patch to HA
+#   1. Put the patched file in patches/
+#   2. Add a new block in patch_ha() following the ioclient pattern:
+#      - Discover path dynamically via `python3 -c 'import ... print(__file__)'`
+#      - scp to /tmp → docker cp into container
+#   3. Test: ./deploy.sh --patch-ha
 #
-# ONE-TIME MIGRATION (already done, for reference only)
-#   Was: nmea-tcp-proxy.service  from /usr/local/bin/nmea_tcp_proxy.py
-#   Now: ydnu02-tcp-gateway.service  from /opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py
-#   Also removed: ydnu02-tcp.service (legacy socat bridge, never used)
-#   Migration steps were done manually via SSH (not repeatable via this script).
+# SKILL: Adding a new Python module to web deploy
+#   1. Add filename to the `for f in ...` loop in the DEPLOY_WEB section
+#   2. If it's a new sub-package, add a cp -r line like routes/sensors
+#   3. Test: ./deploy.sh --web
 #
-# VERIFY AFTER DEPLOY
-#   ssh user@<gateway-host> 'systemctl is-active ydnu02-tcp-gateway ydnu02-web'
-#   ssh user@<gateway-host> 'ss -tnp | grep 4001'    # 2 ESTAB: HA + ydnu02-web
-#   curl http://gateway.local:8080/api/info           # firmware_version, state: online
+# SKILL: Debugging a failed deploy
+#   ssh <host> 'systemctl status ydnu02-tcp-gateway --no-pager -l'
+#   ssh <host> 'sudo journalctl -u ydnu02-web -n 50 --no-pager'
+#   ssh <host> 'ss -tnp | grep 4001'  # should show 2+ ESTAB connections
+#   curl http://<host>:8080/api/info   # should return JSON with state: online
+#
+# TODO: Add --dry-run mode that shows what would be deployed without executing
+# TODO: Add rollback support (backup previous version before overwrite)
+# ISSUE: If gateway restarts during active service session, HA spins at 100% CPU
+#        until patched nmea2000 lib is applied (see patch_ha)
 # ──────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
-HOST="${1:-user@<gateway-host>}"
-MODE="${2:-}"   # --proxy | --web | --patch-ha | (empty = both)
+# ── Load configuration ────────────────────────────────────────────────────────
+# SKILL: Config loading pattern
+#   deploy.conf is sourced as bash — all variables become available.
+#   CLI host arg overrides DEPLOY_HOST from config.
+#   Required variables: DEPLOY_HOST, REMOTE_DIR, WEB_SERVICE, PROXY_SERVICE,
+#                       HA_CONTAINER, DATA_PORT, CTRL_PORT, WEB_PORT
+#
+# SECURITY: deploy.conf is in .gitignore. Only deploy.conf.template (with
+#   placeholders like user@gateway-host) is committed to git.
+# ─────────────────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONF_FILE="${SCRIPT_DIR}/deploy.conf"
 
-REMOTE_DIR="/opt/nmea2000/ydnu02-web"
-WEB_SERVICE="ydnu02-web"
-PROXY_SERVICE="ydnu02-tcp-gateway"
-HA_CONTAINER="homeassistant"
-LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ ! -f "$CONF_FILE" ]]; then
+    echo "ERROR: ${CONF_FILE} not found."
+    echo "Copy deploy.conf.template to deploy.conf and fill in your values."
+    exit 1
+fi
+
+# shellcheck source=deploy.conf.template
+source "$CONF_FILE"
+
+# CLI overrides: ./deploy.sh [host] [mode]
+# If first arg is not a flag (--), treat it as host override
+if [[ "${1:-}" != --* ]] && [[ -n "${1:-}" ]]; then
+    DEPLOY_HOST="$1"
+    shift
+fi
+HOST="$DEPLOY_HOST"
+MODE="${1:-}"   # --proxy | --web | --patch-ha | (empty = both)
+
+# REMOTE_DIR, WEB_SERVICE, PROXY_SERVICE, HA_CONTAINER are from deploy.conf
+LOCAL_DIR="$SCRIPT_DIR"
 PATCH_DIR="${LOCAL_DIR}/patches"
 
 GREEN='\033[0;32m'
@@ -97,6 +144,95 @@ CLEAN_HA=false
 [[ "$MODE" == "--web"      ]] && DEPLOY_PROXY=false
 [[ "$MODE" == "--patch-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false
 [[ "$MODE" == "--clean-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && CLEAN_HA=true
+
+# ── pre_deploy_diff() ────────────────────────────────────────────────────────
+# Shows current remote state and what will change BEFORE uploading anything.
+# SKILL: Pre-deploy diff pattern
+#   1. Check remote service status (systemctl is-active)
+#   2. For each file to deploy: compare remote vs local via diff
+#   3. Show summary table: file → +lines / -lines
+#   4. For initial install (file missing on remote): show "[NEW]"
+#
+# This runs automatically. Pass --no-diff to skip.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Files per deploy mode (local path → remote path)
+PROXY_FILES=(
+    "ydnu02_tcp_gateway/ydnu02_tcp_gateway.py:ydnu02_tcp_gateway.py"
+    "ydnu02_tcp_gateway/ydnu02_gateway_device.py:ydnu02_gateway_device.py"
+)
+
+WEB_FILES=(
+    "device_manager.py:device_manager.py"
+    "ydnu02.py:ydnu02.py"
+    "app.py:app.py"
+    "models.py:models.py"
+    "gobius_parsers.py:gobius_parsers.py"
+    "mopeka_parsers.py:mopeka_parsers.py"
+    "mopeka_scanner.py:mopeka_scanner.py"
+    "ble_registry.py:ble_registry.py"
+    "gobius_ble_poller.py:gobius_ble_poller.py"
+    "n2k_command_builder.py:n2k_command_builder.py"
+)
+
+pre_deploy_diff() {
+    section "Pre-deploy status & diff"
+
+    # 1. Remote service status
+    log "Remote service status:"
+    ${SSH} ${HOST} "
+        printf '  %-30s %s\n' '${PROXY_SERVICE}' \"\$(systemctl is-active ${PROXY_SERVICE} 2>/dev/null || echo 'not installed')\"
+        printf '  %-30s %s\n' '${WEB_SERVICE}' \"\$(systemctl is-active ${WEB_SERVICE} 2>/dev/null || echo 'not installed')\"
+        printf '  %-30s %s\n' 'TCP :${DATA_PORT}' \"\$(ss -tnp 2>/dev/null | grep -c ':${DATA_PORT}') connections\"
+    " 2>/dev/null || warn "Cannot reach ${HOST}"
+
+    # 2. Per-file diff
+    local -a file_list=()
+    $DEPLOY_PROXY && file_list+=("${PROXY_FILES[@]}")
+    $DEPLOY_WEB   && file_list+=("${WEB_FILES[@]}")
+
+    if [[ ${#file_list[@]} -eq 0 ]]; then
+        log "No file diffs for mode ${MODE}"
+        return 0
+    fi
+
+    echo ""
+    log "File changes (remote → local):"
+    printf "  %-45s %s\n" "File" "Changes"
+    printf "  %-45s %s\n" "----" "-------"
+
+    for entry in "${file_list[@]}"; do
+        local_path="${entry%%:*}"
+        remote_name="${entry##*:}"
+
+        # Get remote file content
+        remote_content=$(${SSH} ${HOST} "cat ${REMOTE_DIR}/${remote_name} 2>/dev/null") 2>/dev/null
+        if [[ -z "$remote_content" ]]; then
+            printf "  %-45s %s\n" "${remote_name}" "[NEW] $(wc -l < "${LOCAL_DIR}/${local_path}" | tr -d ' ') lines"
+        else
+            # Count diff lines
+            diff_output=$(echo "$remote_content" | diff - "${LOCAL_DIR}/${local_path}" 2>/dev/null) || true
+            if [[ -z "$diff_output" ]]; then
+                printf "  %-45s %s\n" "${remote_name}" "identical"
+            else
+                added=$(echo "$diff_output" | grep -c '^>' || true)
+                removed=$(echo "$diff_output" | grep -c '^<' || true)
+                printf "  %-45s %s\n" "${remote_name}" "+${added} / -${removed}"
+            fi
+        fi
+    done
+    echo ""
+}
+
+# Check for --no-diff flag
+SKIP_DIFF=false
+for arg in "$@"; do
+    [[ "$arg" == "--no-diff" ]] && SKIP_DIFF=true
+done
+
+if ! $SKIP_DIFF && [[ "$MODE" != "--clean-ha" ]]; then
+    pre_deploy_diff
+fi
 
 # ── patch_ha() ───────────────────────────────────────────────────────────────
 # Applies local patches/ fixes to third-party libs inside the HA docker container.
@@ -145,9 +281,17 @@ if $DEPLOY_PROXY; then
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02_gateway_device.py" "${HOST}:${REMOTE_DIR}/ydnu02_gateway_device.py"
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02-tcp-gateway.service" "${HOST}:/tmp/ydnu02-tcp-gateway.service"
 
-    # Note: py files uploaded via scp are denn-owned. If the file was previously
+    # Note: py files uploaded via scp are user-owned. If the file was previously
     # created by "sudo cp" it becomes root-owned and next scp fails. Auto-fix:
-    ${SSH} ${HOST} "sudo chown denn:denn ${REMOTE_DIR}/ydnu02_tcp_gateway.py ${REMOTE_DIR}/ydnu02_gateway_device.py 2>/dev/null || true"
+    ${SSH} ${HOST} "sudo chown \$(whoami):\$(whoami) ${REMOTE_DIR}/ydnu02_tcp_gateway.py ${REMOTE_DIR}/ydnu02_gateway_device.py 2>/dev/null || true"
+
+    # Create ydnu02_tcp_gateway/ subdir with symlinks for test compatibility.
+    # Tests import via ydnu02_tcp_gateway/ydnu02_tcp_gateway.py but deploy
+    # copies files flat into REMOTE_DIR.
+    ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}/ydnu02_tcp_gateway && \
+        ln -sf ${REMOTE_DIR}/ydnu02_tcp_gateway.py ${REMOTE_DIR}/ydnu02_tcp_gateway/ydnu02_tcp_gateway.py && \
+        ln -sf ${REMOTE_DIR}/ydnu02_gateway_device.py ${REMOTE_DIR}/ydnu02_tcp_gateway/ydnu02_gateway_device.py"
+
     log "Installing ydnu02-tcp-gateway service..."
     ${SSH} ${HOST} "sudo mv /tmp/ydnu02-tcp-gateway.service /etc/systemd/system/${PROXY_SERVICE}.service \
       && sudo systemctl daemon-reload \
@@ -246,4 +390,95 @@ if $DEPLOY_WEB; then
     log "ydnu02-web deploy complete ✓"
 fi
 
-log "Deploy done → http://${HOST#*@}:8080"
+# ── Post-deploy tests ────────────────────────────────────────────────────────
+# SKILL: Test suite mapping by deploy mode
+#   Each deploy mode has a corresponding test set. Tests run on the REMOTE Pi
+#   via SSH + pytest. Tests are already copied to REMOTE_DIR/tests/ by deploy.
+#
+#   Mode        → Test files
+#   --proxy     → test_ydnu02_tcp_gateway.py, test_service_mode.py
+#   --web       → test_api.py, test_sensors_service.py, test_ble_api.py,
+#                  test_ble_registry.py, test_gobius_parsers.py,
+#                  test_mopeka_parsers.py, test_n2k_commands.py,
+#                  test_gobius_ble_writes.py
+#   --patch-ha  → (no tests, manual verification only)
+#   --clean-ha  → (no tests, manual verification only)
+#   (full)      → ALL test files
+#
+# SKILL: Adding tests for a new component
+#   1. Create test file in tests/
+#   2. Add the filename to the appropriate TESTS_* array below
+#   3. If it's a new deploy mode, add a new TESTS_ array and elif block
+#
+# SKIP: pass --no-test as last arg to skip post-deploy tests
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Test sets keyed by deploy mode
+TESTS_PROXY=(
+    "tests/test_ydnu02_tcp_gateway.py"
+    "tests/test_service_mode.py"
+)
+
+TESTS_WEB=(
+    "tests/test_sensors_service.py"
+    "tests/test_ble_api.py"
+    "tests/test_ble_registry.py"
+    "tests/test_gobius_parsers.py"
+    "tests/test_mopeka_parsers.py"
+    "tests/test_n2k_commands.py"
+    "tests/test_gobius_ble_writes.py"
+)
+
+TESTS_ALL=( "${TESTS_PROXY[@]}" "${TESTS_WEB[@]}" )
+
+run_post_deploy_tests() {
+    local -a test_files=("$@")
+    if [[ ${#test_files[@]} -eq 0 ]]; then
+        log "No tests for this deploy mode — skipping"
+        return 0
+    fi
+
+    section "Post-deploy tests (${#test_files[@]} suites)"
+
+    # Use unittest (built-in, no pip install needed).
+    # Convert file paths to module names: tests/test_foo.py → tests.test_foo
+    local test_modules=""
+    for t in "${test_files[@]}"; do
+        # tests/test_foo.py → tests.test_foo
+        mod="${t%.py}"         # strip .py
+        mod="${mod//\//.}"     # / → .
+        test_modules+=" ${mod}"
+    done
+
+    log "Running: python3 -m unittest${test_modules}"
+    if ${SSH} ${HOST} "cd ${REMOTE_DIR} && python3 -m unittest ${test_modules} 2>&1"; then
+        log "Tests: ALL PASSED ✓"
+    else
+        warn "Tests: SOME FAILED ✗ (see output above)"
+        warn "Review failures before considering this deploy stable"
+    fi
+}
+
+# Check for --no-test flag (can be passed as additional arg)
+SKIP_TESTS=false
+for arg in "$@"; do
+    [[ "$arg" == "--no-test" ]] && SKIP_TESTS=true
+done
+
+if ! $SKIP_TESTS; then
+    if [[ "$MODE" == "--proxy" ]]; then
+        run_post_deploy_tests "${TESTS_PROXY[@]}"
+    elif [[ "$MODE" == "--web" ]]; then
+        run_post_deploy_tests "${TESTS_WEB[@]}"
+    elif [[ "$MODE" == "--patch-ha" ]] || [[ "$MODE" == "--clean-ha" ]]; then
+        log "No automated tests for ${MODE} — verify manually"
+    else
+        # Full deploy — run all tests
+        run_post_deploy_tests "${TESTS_ALL[@]}"
+    fi
+else
+    warn "Tests skipped (--no-test)"
+fi
+
+log "Deploy done → http://${HOST#*@}:${WEB_PORT}"
+

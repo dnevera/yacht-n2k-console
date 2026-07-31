@@ -1,0 +1,57 @@
+# deploy.conf — Local deployment configuration
+#
+# ── MINI-SKILL (read this if context is lost) ─────────────────────────────────
+#
+# PURPOSE
+#   Central config file for deploy.sh and build_bundle.sh.
+#   Contains ALL sensitive/environment-specific settings:
+#   hostnames, usernames, paths, ports.
+#
+# SECURITY
+#   - This file (deploy.conf) is in .gitignore — NEVER commit it
+#   - Only deploy.conf.template (this file) is committed to git
+#   - Template contains placeholders, not real values
+#
+# SETUP
+#   cp deploy.conf.template deploy.conf
+#   # Edit deploy.conf with your actual values
+#
+# USED BY
+#   - deploy.sh:       source deploy.conf → reads DEPLOY_HOST, REMOTE_DIR, etc.
+#   - build_bundle.sh: references this template for documentation
+#
+# VARIABLES
+#   DEPLOY_HOST    — SSH target (user@hostname), used by deploy.sh
+#   REMOTE_DIR     — Installation directory on the target Pi
+#   WEB_SERVICE    — systemd service name for the web console
+#   PROXY_SERVICE  — systemd service name for the TCP gateway
+#   HA_CONTAINER   — Docker container name for Home Assistant
+#   DATA_PORT      — TCP port for N2K broadcast data (must match gateway)
+#   CTRL_PORT      — TCP port for exclusive serial passthrough
+#   WEB_PORT       — HTTP port for the web console
+#
+# SKILL: Adding a new config variable
+#   1. Add it here with a placeholder value and comment
+#   2. Add it to deploy.conf (your local copy) with real value
+#   3. Reference it in deploy.sh as ${VARIABLE_NAME}
+# ──────────────────────────────────────────────────────────────────────────────
+
+# SSH target for deployment (user@hostname)
+DEPLOY_HOST="user@gateway-host"
+
+# Remote installation directory
+REMOTE_DIR="/opt/nmea2000/ydnu02-web"
+
+# Systemd service names
+WEB_SERVICE="ydnu02-web"
+PROXY_SERVICE="ydnu02-tcp-gateway"
+
+# Home Assistant docker container name
+HA_CONTAINER="homeassistant"
+
+# Proxy ports (must match gateway config)
+DATA_PORT=4001
+CTRL_PORT=4002
+
+# Web server port
+WEB_PORT=8080

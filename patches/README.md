@@ -40,7 +40,7 @@ HA auto-reconnects to `:4001` within ~10s — no manual restart needed.
 
 If HA container is updated (image pull) and the patch is lost:
 ```bash
-./deploy.sh user@<gateway-host> --patch-ha
+./deploy.sh user@gateway-host --patch-ha
 ```
 
 ### Remove this patch when

@@ -61,9 +61,9 @@ yacht-n2k-console/
 │   └── tabs/               # HTML fragments loaded into tab sections
 │
 ├── tests/                  # API and unit tests
-├── deploy.sh               # SCP deploy to gateway.local + service restart + HA patch
+├── deploy.sh               # SCP deploy to gateway-host + service restart + HA patch
 ├── build_bundle.sh         # Build tarball for offline deployment
-├── setup_gateway.local.sh      # Initial Raspberry Pi setup script
+├── setup_gateway.sh      # Initial Raspberry Pi setup script
 ├── ydnu02-web.service      # Systemd unit for ydnu02-web (depends on tcp-gateway)
 ├── docker-compose.yml      # Signal K server (optional)
 └── pyproject.toml          # Python project metadata
@@ -325,19 +325,19 @@ All routes are mounted under `/api` prefix (except WebSockets).
 
 ## Deployment
 
-### Target: Raspberry Pi 5 (`gateway.local`)
+### Target: Raspberry Pi 5 (`<gateway-host>`)
 
 ```bash
 # Deploy all files
 ./deploy.sh
 
 # Manual deploy
-scp *.py user@<gateway-host>:/opt/nmea2000/ydnu02-web/
-scp routes/*.py user@<gateway-host>:/opt/nmea2000/ydnu02-web/routes/
-scp static/js/*.js user@<gateway-host>:/opt/nmea2000/ydnu02-web/static/js/
+scp *.py user@gateway-host:/opt/nmea2000/ydnu02-web/
+scp routes/*.py user@gateway-host:/opt/nmea2000/ydnu02-web/routes/
+scp static/js/*.js user@gateway-host:/opt/nmea2000/ydnu02-web/static/js/
 
 # Restart service
-ssh user@<gateway-host> 'sudo systemctl restart ydnu02-web'
+ssh user@gateway-host 'sudo systemctl restart ydnu02-web'
 ```
 
 ### Dependencies
@@ -355,4 +355,4 @@ ssh user@<gateway-host> 'sudo systemctl restart ydnu02-web'
 |------|---------|
 | `ydnu02-web.service` | Systemd unit — auto-start on boot |
 | `docker-compose.yml` | Signal K server (optional, alternative to this console) |
-| `setup_gateway.local.sh` | First-time Raspberry Pi setup (packages, permissions, venv) |
+| `setup_gateway.sh` | First-time Raspberry Pi setup (packages, permissions, venv) |

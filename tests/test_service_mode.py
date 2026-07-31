@@ -59,7 +59,7 @@ sys.path.insert(0, ROOT)
 # STUB OUT SERVER-ONLY DEPENDENCIES
 # ---------------------------------------------------------------------------
 # device_manager.py imports fastapi, ydnu02, sensors — not installed locally
-# (only on gateway.local). Register MagicMock modules in sys.modules BEFORE the
+# (only on target Pi). Register MagicMock modules in sys.modules BEFORE the
 # first import of device_manager. Standard pattern for testing server code
 # without installing the full stack.
 

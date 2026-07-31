@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from specs import ALL as TESTS
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://192.168.68.56:8080"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://<gateway-host>:8080"
 
 
 def run_test(spec: dict) -> tuple[bool, str, str]:

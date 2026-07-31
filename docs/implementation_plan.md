@@ -155,9 +155,9 @@ sequenceDiagram
 ### Automated Tests
 - Unit test: `get_pgn_field_metadata(127505)` возвращает 4 поля с правильными типами
 - Unit test: `build_read_fields_request()` генерирует валидный CAN frame
-- Integration test на gateway.local: Read Fields → Gobius → проверить ответ
+- Integration test на gateway-host: Read Fields → Gobius → проверить ответ
 
 ### Manual Verification
-- Scan на gateway.local → проверить что YDNU-02 показывается как Gateway без Configure
+- Scan на gateway-host → проверить что YDNU-02 показывается как Gateway без Configure
 - Configure Gobius → проверить что динамическая форма показывает правильные поля
 - Write → Read-back → проверить diff

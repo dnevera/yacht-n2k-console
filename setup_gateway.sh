@@ -1,13 +1,52 @@
 #!/usr/bin/env bash
 #
-# YDNU-02 Console — setup on Raspberry Pi 5 (runs locally on Pi)
+# setup_gateway.sh — First-time setup on Raspberry Pi (runs locally on Pi)
 #
-# Usage:
-#   1. Copy this bundle to Pi:  scp ydnu02-bundle.tar.gz user@<gateway-host>:~/
-#   2. SSH into Pi:             ssh user@<gateway-host>
-#   3. Extract:                 tar xzf ydnu02-bundle.tar.gz
-#   4. Run:                     cd ydnu02-bundle && ./setup.sh
+# ── MINI-SKILL (read this if context is lost) ─────────────────────────────────
 #
+# PURPOSE
+#   One-time initial setup of the YDNU-02 Web Console on a fresh Raspberry Pi.
+#   Installs system packages, Python deps, application files, and systemd service.
+#   After this script, use deploy.sh for incremental updates.
+#
+# WHEN TO USE
+#   - First deployment to a new Pi
+#   - After OS reinstall
+#   - NOT for routine updates (use deploy.sh instead)
+#
+# HOW IT WORKS
+#   1. Installs system packages: python3, pip, bluetooth, bluez
+#   2. Installs Python packages: fastapi, uvicorn, bleak, websockets
+#   3. Adds current user to dialout + bluetooth groups
+#   4. Copies app files from bundle to INSTALL_DIR
+#   5. Creates and enables systemd service
+#   6. Starts service and verifies
+#
+# SECURITY RULES
+#   - NO hardcoded usernames — uses $(whoami) for the current SSH user
+#   - NO hardcoded hostnames — uses $(hostname) for local hostname
+#   - Installation directory INSTALL_DIR is the only hardcoded path
+#
+# USAGE
+#   1. Copy bundle to Pi:  scp build/ydnu02-bundle.tar.gz user@gateway-host:~/
+#   2. SSH into Pi:        ssh user@gateway-host
+#   3. Extract:            tar xzf ydnu02-bundle.tar.gz
+#   4. Run:                cd ydnu02-bundle && ./setup.sh
+#
+# SKILL: Adding a new system dependency
+#   Add to the apt-get install line in Step 1
+#
+# SKILL: Adding a new Python dependency
+#   Add to the pip3 install block in Step 2
+#   Pin exact version for reproducibility
+#
+# SKILL: Changing the install directory
+#   Modify INSTALL_DIR variable AND update the .service unit paths
+#
+# TODO: Add requirements.txt instead of inline pip install
+# TODO: Add --uninstall flag to cleanly remove everything
+# TODO: Add version check to skip re-install if already up-to-date
+# ──────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
@@ -23,11 +62,13 @@ fail() { echo -e "${RED}[setup] ERROR:${NC} $*"; exit 1; }
 INSTALL_DIR="/opt/nmea2000"
 SERVICE="ydnu02-web"
 BUNDLE_DIR="$(cd "$(dirname "$0")" && pwd)"
+CURRENT_USER="$(whoami)"
 
 echo ""
 echo "══════════════════════════════════════════════════"
 echo "  YDNU-02 Console — Setup"
 echo "  Install dir: ${INSTALL_DIR}"
+echo "  User:        ${CURRENT_USER}"
 echo "══════════════════════════════════════════════════"
 echo ""
 
@@ -49,7 +90,7 @@ log "Python packages ✓"
 
 # ── 3. User permissions ──
 log "Step 3/6: Setting permissions..."
-sudo usermod -aG dialout,bluetooth denn 2>/dev/null || true
+sudo usermod -aG dialout,bluetooth "${CURRENT_USER}" 2>/dev/null || true
 log "Permissions ✓"
 
 # ── 4. Copy application files ──
@@ -59,7 +100,7 @@ sudo mkdir -p "${INSTALL_DIR}/static/css" \
               "${INSTALL_DIR}/sensors" \
               "${INSTALL_DIR}/routes" \
               "${INSTALL_DIR}/tests/specs"
-sudo chown -R denn:denn "${INSTALL_DIR}"
+sudo chown -R "${CURRENT_USER}:${CURRENT_USER}" "${INSTALL_DIR}"
 
 # Copy all app files from bundle
 cp -v "${BUNDLE_DIR}/app/"*.py               "${INSTALL_DIR}/"
@@ -79,14 +120,16 @@ if [ -f "${BUNDLE_DIR}/app/ble_registry.json" ]; then
     log "BLE registry (sensor config) copied"
 fi
 
-# Deploy script
+# Deploy script + config template for future incremental deploys
 cp "${BUNDLE_DIR}/app/deploy.sh"             "${INSTALL_DIR}/" 2>/dev/null || true
+cp "${BUNDLE_DIR}/app/deploy.conf.template"  "${INSTALL_DIR}/" 2>/dev/null || true
 
 log "Application installed ✓"
 
 # ── 5. Install systemd service ──
+# NOTE: User= is set dynamically from CURRENT_USER, not hardcoded
 log "Step 5/6: Installing systemd service..."
-sudo tee /etc/systemd/system/${SERVICE}.service > /dev/null <<'EOF'
+sudo tee /etc/systemd/system/${SERVICE}.service > /dev/null <<EOF
 [Unit]
 Description=YDNU-02 NMEA 2000 Web Console
 After=network.target bluetooth.target
@@ -94,9 +137,9 @@ Wants=network.target bluetooth.target
 
 [Service]
 Type=simple
-User=denn
-WorkingDirectory=/opt/nmea2000
-ExecStart=/usr/bin/python3 /opt/nmea2000/app.py --port 8080
+User=${CURRENT_USER}
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=/usr/bin/python3 ${INSTALL_DIR}/app.py --port 8080
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=3s
@@ -110,7 +153,7 @@ SupplementaryGroups=dialout bluetooth
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/nmea2000
+ReadWritePaths=${INSTALL_DIR}
 ProtectHome=false
 
 [Install]
@@ -144,3 +187,4 @@ log "Next steps:"
 log "  1. Plug YDNU-02 USB gateway into this Pi"
 log "  2. Open http://${HOSTNAME}.local:8080"
 log "  3. Verify NMEA + BLE data"
+log "  4. Copy deploy.conf.template to deploy.conf and fill in your settings"

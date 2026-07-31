@@ -6,11 +6,11 @@ PURPOSE:
   1. pytest suite: verifies TCP connection, ISO Request sending, and fast-packet
      PGN 126996 (Product Info) + PGN 60928 (Address Claim) decoding using mock server.
   2. Live probe mode: run directly (`python3 tests/test_bus_scanner.py [host]`)
-     to perform a live scan against port 4001 on gateway.local.local and print the device table.
+     to perform a live scan against port 4001 on <gateway-host> and print the device table.
 
 USAGE:
   pytest tests/test_bus_scanner.py -v
-  python3 tests/test_bus_scanner.py gateway.local.local 4001
+  python3 tests/test_bus_scanner.py <gateway-host> 4001
 """
 
 import sys

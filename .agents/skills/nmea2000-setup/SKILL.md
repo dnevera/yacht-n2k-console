@@ -12,10 +12,10 @@ description: >-
 
 | Файл | Описание |
 |:---|:---|
-| [nmea_tcp_proxy.py](file:///Users/denn/Develop/yacht/yacht-n2k-console/nmea_tcp_proxy.py) | TCP прокси — YDNU-02 → broadcast, Control API |
-| [device_manager.py](file:///Users/denn/Develop/yacht/yacht-n2k-console/device_manager.py) | TCPProxyConnection + ProxyControlClient |
-| [ydnu02.py](file:///Users/denn/Develop/yacht/yacht-n2k-console/ydnu02.py) | Hardware controller (поддерживает passthrough) |
-| [tests/test_nmea_tcp_proxy.py](file:///Users/denn/Develop/yacht/yacht-n2k-console/tests/test_nmea_tcp_proxy.py) | 18 тестов прокси |
+| [nmea_tcp_proxy.py](file:///path/to/yacht-n2k-console/nmea_tcp_proxy.py) | TCP прокси — YDNU-02 → broadcast, Control API |
+| [device_manager.py](file:///path/to/yacht-n2k-console/device_manager.py) | TCPProxyConnection + ProxyControlClient |
+| [ydnu02.py](file:///path/to/yacht-n2k-console/ydnu02.py) | Hardware controller (поддерживает passthrough) |
+| [tests/test_nmea_tcp_proxy.py](file:///path/to/yacht-n2k-console/tests/test_nmea_tcp_proxy.py) | 18 тестов прокси |
 | HA integration | `/Users/denn/Develop/3dprint/ha/nmea2000/` — FastAPI приложение |
 
 ---
@@ -147,7 +147,7 @@ except Exception as e:
 - **Custom component:** `/config/custom_components/nmea2000/` внутри HA контейнера
 - **Версия:** v2026.5.0, `nmea2000==2026.5.2`
 - **Config:** `gateway_type=text`, `ip=127.0.0.1`, `port=4001`
-- **Процесс:** `python3 -m homeassistant --config /config` в Docker `homeassistant` на **gateway.local**
+- **Процесс:** `python3 -m homeassistant --config /config` в Docker `homeassistant` на **gateway-host**
 
 ---
 
@@ -157,24 +157,24 @@ except Exception as e:
 
 ```bash
 # CPU usage
-ssh user@<gateway-host> 'ps aux --sort=-%cpu | head -5'
+ssh user@gateway-host 'ps aux --sort=-%cpu | head -5'
 
 # Прокси работает?
-ssh user@<gateway-host> 'systemctl status nmea-tcp-proxy --no-legend | head -4'
+ssh user@gateway-host 'systemctl status nmea-tcp-proxy --no-legend | head -4'
 
 # HA подключена к прокси?
-ssh user@<gateway-host> 'ss -tnp | grep 4001'
+ssh user@gateway-host 'ss -tnp | grep 4001'
 # Должно быть: ESTAB ... 127.0.0.1:XXXXX → 127.0.0.1:4001
 
 # Данные из прокси (5 строк за 15 сек)
-ssh user@<gateway-host> 'timeout 15 bash -c "nc localhost 4001" | head -5'
+ssh user@gateway-host 'timeout 15 bash -c "nc localhost 4001" | head -5'
 # Пример валидного фрейма: 03:35:31.851 R 19F2115C 00 30 5C 64 00 00 00 FF
 
 # Ошибки HA интеграции
-ssh user@<gateway-host> 'sudo docker exec homeassistant bash -c "grep decoding /config/home-assistant.log | tail -5"'
+ssh user@gateway-host 'sudo docker exec homeassistant bash -c "grep decoding /config/home-assistant.log | tail -5"'
 
 # Лог прокси
-ssh user@<gateway-host> 'sudo journalctl -u nmea-tcp-proxy -n 20 --no-pager'
+ssh user@gateway-host 'sudo journalctl -u nmea-tcp-proxy -n 20 --no-pager'
 ```
 
 ### ⚠️ Обязательный restart sequence
@@ -185,15 +185,15 @@ sudo systemctl restart nmea-tcp-proxy
 sudo docker restart homeassistant   # ← ОБЯЗАТЕЛЬНО, иначе spin loop
 
 # Проверка через 60 сек:
-ssh user@<gateway-host> 'ps aux --sort=-%cpu | head -4 && ss -tnp | grep 4001'
+ssh user@gateway-host 'ps aux --sort=-%cpu | head -4 && ss -tnp | grep 4001'
 # HA должна быть <10% CPU и ESTAB соединение на :4001
 ```
 
 ### Деплой прокси
 
 ```bash
-scp /Users/denn/Develop/yacht/yacht-n2k-console/nmea_tcp_proxy.py user@<gateway-host>:/home/denn/
-ssh user@<gateway-host> 'sudo mv /home/denn/nmea_tcp_proxy.py /usr/local/bin/nmea_tcp_proxy.py \
+scp /path/to/yacht-n2k-console/nmea_tcp_proxy.py user@gateway-host:/home/user/
+ssh user@gateway-host 'sudo mv /home/user/nmea_tcp_proxy.py /usr/local/bin/nmea_tcp_proxy.py \
   && sudo systemctl restart nmea-tcp-proxy \
   && sudo docker restart homeassistant'
 ```

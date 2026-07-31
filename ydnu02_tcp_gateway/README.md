@@ -10,7 +10,7 @@ Standalone Python TCP proxy and device gateway. Manages the hardware serial inte
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                            Raspberry Pi 5 (gateway.local)                       │
+│                            Raspberry Pi 5 (<gateway-host>)                       │
 │                                                                             │
 │  ┌─────────────────────────┐               ┌─────────────────────────────┐  │
 │  │ Home Assistant /        │               │ ydnu02-web                  │  │
@@ -198,7 +198,7 @@ The YDNU-02 USB gateway requires a physical **DTR line drop** to switch from RAW
 
 ## Deployment & Systemd Configuration
 
-### Target Paths on `gateway.local`
+### Target Paths on `<gateway-host>`
 
 | File | Remote Path |
 |:---|:---|
@@ -215,25 +215,25 @@ The gateway service starts **before** `ydnu02-web.service` (declared in systemd 
 ./deploy.sh
 
 # Proxy-only deploy
-./deploy.sh user@<gateway-host> --proxy
+./deploy.sh user@gateway-host --proxy
 ```
 
 ### Manual Deployment
 
 ```bash
-# 1. Copy scripts to gateway.local
-scp ydnu02_tcp_gateway/ydnu02_tcp_gateway.py user@<gateway-host>.local:/opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py
-scp ydnu02_tcp_gateway/ydnu02_gateway_device.py user@<gateway-host>.local:/opt/nmea2000/ydnu02-web/ydnu02_gateway_device.py
+# 1. Copy scripts to gateway-host
+scp ydnu02_tcp_gateway/ydnu02_tcp_gateway.py user@gateway-host:/opt/nmea2000/ydnu02-web/ydnu02_tcp_gateway.py
+scp ydnu02_tcp_gateway/ydnu02_gateway_device.py user@gateway-host:/opt/nmea2000/ydnu02-web/ydnu02_gateway_device.py
 
 # 2. Install and activate systemd service unit (first time only)
-scp ydnu02_tcp_gateway/ydnu02-tcp-gateway.service user@<gateway-host>.local:/tmp/ydnu02-tcp-gateway.service
-ssh user@<gateway-host>.local "sudo mv /tmp/ydnu02-tcp-gateway.service /etc/systemd/system/ydnu02-tcp-gateway.service \
+scp ydnu02_tcp_gateway/ydnu02-tcp-gateway.service user@gateway-host:/tmp/ydnu02-tcp-gateway.service
+ssh user@gateway-host "sudo mv /tmp/ydnu02-tcp-gateway.service /etc/systemd/system/ydnu02-tcp-gateway.service \
   && sudo systemctl daemon-reload \
   && sudo systemctl enable ydnu02-tcp-gateway \
   && sudo systemctl restart ydnu02-tcp-gateway"
 
 # 3. Verify
-ssh user@<gateway-host>.local "systemctl status ydnu02-tcp-gateway --no-pager && \
+ssh user@gateway-host "systemctl status ydnu02-tcp-gateway --no-pager && \
   sudo journalctl -u ydnu02-tcp-gateway -n 20 --no-pager"
 ```
 
@@ -241,13 +241,13 @@ ssh user@<gateway-host>.local "systemctl status ydnu02-tcp-gateway --no-pager &&
 
 ```bash
 # Restart
-ssh user@<gateway-host>.local "sudo systemctl restart ydnu02-tcp-gateway"
+ssh user@gateway-host "sudo systemctl restart ydnu02-tcp-gateway"
 
 # Status
-ssh user@<gateway-host>.local "systemctl status ydnu02-tcp-gateway --no-pager"
+ssh user@gateway-host "systemctl status ydnu02-tcp-gateway --no-pager"
 
 # Logs
-ssh user@<gateway-host>.local "sudo journalctl -u ydnu02-tcp-gateway -n 50 --no-pager"
+ssh user@gateway-host "sudo journalctl -u ydnu02-tcp-gateway -n 50 --no-pager"
 ```
 
 ---
@@ -297,7 +297,7 @@ python3 -m pytest tests/test_ydnu02_tcp_gateway.py tests/test_service_mode.py -v
 import socket, time
 
 s = socket.socket()
-s.connect(('gateway.local.local', 4002))
+s.connect(('<gateway-host>', 4002))
 s.settimeout(5.0)
 
 s.sendall(b'SERVICE_START\n')

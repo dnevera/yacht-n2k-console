@@ -35,3 +35,7 @@ uv.lock
 *.bin
 docs/chat_logs/
 *.jsonl
+
+# Sensitive config files (only .template goes to git)
+deploy.conf
+build.conf

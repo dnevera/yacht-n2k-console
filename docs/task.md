@@ -16,5 +16,5 @@
 
 - [ ] Обновить `device_manager.py` — broadcast decoded data для всех PGN
 
-## Deployed to gateway.local: ✅
+## Deployed to gateway-host: ✅
 Files: n2k_meta.py, routes/n2k_config.py, routes/__init__.py, app.py, device_manager.py, static/js/n2k_config.js, static/js/network.js

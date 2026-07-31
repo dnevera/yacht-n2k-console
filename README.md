@@ -93,7 +93,7 @@ For complete documentation, DTR state machine details, and standalone deployment
 
 ```bash
 # Initial setup
-./setup_gateway.local.sh
+./setup_gateway.sh
 
 # Run the service
 python3 app.py --port 8080

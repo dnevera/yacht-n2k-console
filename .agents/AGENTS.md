@@ -5,7 +5,7 @@
 Не полагайся на память и контекст. Правила могли измениться. Каждый раз читай заново.
 
 ## Deploy Rule
-**Всегда показывай diff файлов перед деплоем на gateway.local.**
+**Всегда показывай diff файлов перед деплоем на целевой хост.**
 
 Порядок:
 1. Показать пользователю что изменилось (diff)
@@ -30,10 +30,11 @@
 **Запрещено использовать browser tools для просмотра страниц.**
 
 ## Target Platform
-- **Raspberry Pi 5** (hostname: `gateway.local`, user: `denn`)
+- **Raspberry Pi 5** (hostname and user defined in `deploy.conf`)
 - **Service path:** `/opt/nmea2000/ydnu02-web/`
 - **Systemd service:** `ydnu02-web.service`
 - **Python 3.13** с библиотекой `nmea2000`
+- **Sensitive config:** `deploy.conf` (gitignored, created from `deploy.conf.template`)
 
 ## NMEA 2000 — правила разработки
 - **NMEA 2000 — ОСНОВНОЙ источник данных. BLE — ТОЛЬКО НАСТРОЙКА.**
@@ -61,6 +62,17 @@
 Любые `#`, docstring, inline-комментарии — исключительно на английском.
 Это относится ко всем файлам проекта: `.py`, `.js`, `.html`, `.css`, конфигам.
 Общение с пользователем — на русском. Код — на английском.
+
+## Rule: No sensitive data in code or git
+**Категорически запрещено хардкодить чувствительные данные в коде и скриптах.**
+Это включает: реальные hostname, username, IP-адреса, пути к конкретным инсталляциям.
+
+Правила:
+- В коде и скриптах — только плейсхолдеры (`<gateway-host>`, `user@gateway-host`)
+- Фактические значения — в конфиг-файлах (`deploy.conf`, `build.conf`)
+- В git попадают ТОЛЬКО шаблоны (`.template`), фактические конфиги — в `.gitignore`
+- При сборке/деплое скрипты загружают значения из конфигов через `source`
+- В документации/README — generic примеры, не реальные адреса
 
 ## Rule: Комментарии — уровня мини-скилла
 **All new code must be commented at "mini-skill" level — explain WHY, not WHAT.**
