@@ -146,8 +146,9 @@ class DeviceManager:
         """Update sensor registry state from NMEA frame."""
         self._sensor_registry.update(parsed)
         decoded_str = parsed.get("decoded", "") or ""
-        if decoded_str and re.search(r"error|fault|fail|bus off", decoded_str, re.IGNORECASE):
-            self._record_error_event(parsed)
+        if decoded_str and not re.search(r"error active", decoded_str, re.IGNORECASE):
+            if re.search(r"error|fault|fail|bus off", decoded_str, re.IGNORECASE):
+                self._record_error_event(parsed)
 
     def _get_dev_name(self, src: int) -> str:
         dev = self._discovered_bus_devices.get(src, {})

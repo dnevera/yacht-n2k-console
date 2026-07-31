@@ -40,6 +40,8 @@ class ErrorLogger:
         error_fields = []
         for match in re.finditer(r'(?:^|\s+)([\w\s-]+?):([^\s:]+(?:\s+[^\s:]+)*(?=\s+[\w\s-]+?:|$))', decoded):
             k, v = match.group(1).strip(), match.group(2).strip()
+            if re.search(r'error active', v, re.IGNORECASE):
+                continue  # 'Error Active' is the normal healthy CAN controller state
             if re.search(r'error|fault|fail|bus off', v, re.IGNORECASE):
                 error_fields.append({"key": k, "val": v})
 
