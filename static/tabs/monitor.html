@@ -20,6 +20,27 @@
             <div class="status-bar">
                 <span>Packets: <b id="mon-count">0</b></span>
                 <span>Rate: <b id="mon-rate">0</b>/s</span>
-                <span>Errors: <b id="mon-errors" class="red">0</b></span>
+                <span class="clickable-stat" onclick="App.openErrorLogModal()" title="Click to open CAN error history log">Errors: <b id="mon-errors" class="red-badge">0</b> 🔍</span>
+            </div>
+
+            <!-- ERROR LOG MODAL -->
+            <div id="modal-error-log" class="modal" style="display:none;">
+                <div class="modal-backdrop" onclick="App.closeErrorLogModal()"></div>
+                <div class="modal-content modal-lg">
+                    <div class="modal-header">
+                        <h3>⚠️ NMEA 2000 Error Log History</h3>
+                        <button class="btn-close" onclick="App.closeErrorLogModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="modal-toolbar">
+                            <span id="err-log-summary" class="muted">Loading error history...</span>
+                            <div class="btn-row">
+                                <button class="btn" onclick="App.fetchErrorLog()">🔄 Refresh</button>
+                                <button class="btn danger" onclick="App.clearErrorLogHistory()">🗑 Clear Log</button>
+                            </div>
+                        </div>
+                        <div id="err-log-list" class="error-log-list"></div>
+                    </div>
+                </div>
             </div>
         

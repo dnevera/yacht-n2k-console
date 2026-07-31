@@ -44,6 +44,18 @@ async def api_sensors():
     return get_device_mgr().get_sensors_state()
 
 
+@router.get("/errors")
+async def api_get_errors(limit: int = 100, src: int = None):
+    """Get recorded CAN bus error events."""
+    return get_device_mgr().get_error_log(limit=limit, src=src)
+
+
+@router.delete("/errors")
+async def api_clear_errors():
+    """Clear recorded CAN bus error events history."""
+    return get_device_mgr().clear_error_log()
+
+
 @router.get("/dashboard/sensors")
 async def api_dashboard_sensors():
     """Unified sensor list for dashboard — merges registry + live data.

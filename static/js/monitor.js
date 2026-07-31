@@ -83,6 +83,8 @@ Object.assign(App, {
         raw.textContent = msg.raw;
         el.appendChild(raw);
 
+        let isErrorFrame = false;
+
         // Line 2: parsed fields (large font + bold values)
         if (msg.decoded) {
             const dec = document.createElement('div');
@@ -103,16 +105,27 @@ Object.assign(App, {
                     hasPairs = true;
                     const key = match[1].trim();
                     const val = match[2].trim();
-                    html += ` ${key}:<strong class="log-val">${val}</strong>`;
+                    const isErr = /error|fault|fail|bus off/i.test(val);
+                    if (isErr) isErrorFrame = true;
+                    const valClass = isErr ? 'log-val log-val-error' : 'log-val';
+                    html += ` ${key}:<strong class="${valClass}">${val}</strong>`;
                 }
 
                 if (!hasPairs && decStr) {
-                    html += ` <strong class="log-val">${decStr}</strong>`;
+                    const isErr = /error|fault|fail|bus off/i.test(decStr);
+                    if (isErr) isErrorFrame = true;
+                    const valClass = isErr ? 'log-val log-val-error' : 'log-val';
+                    html += ` <strong class="${valClass}">${decStr}</strong>`;
                 }
             }
 
             dec.innerHTML = html;
             el.appendChild(dec);
+        }
+
+        if (isErrorFrame) {
+            this.monitorErrors++;
+            this.updateMonitorStats();
         }
 
         log.appendChild(el);
@@ -151,5 +164,73 @@ Object.assign(App, {
         document.getElementById('mon-errors').textContent = this.monitorErrors;
         const elapsed = Math.max(1, (Date.now() - this.monitorStart) / 1000);
         document.getElementById('mon-rate').textContent = (this.monitorCount / elapsed).toFixed(1);
+    },
+
+    // ==================================================================
+    //  ERROR LOG MODAL & HISTORY API
+    // ==================================================================
+    openErrorLogModal() {
+        const modal = document.getElementById('modal-error-log');
+        if (modal) modal.style.display = 'block';
+        this.fetchErrorLog();
+    },
+
+    closeErrorLogModal() {
+        const modal = document.getElementById('modal-error-log');
+        if (modal) modal.style.display = 'none';
+    },
+
+    async fetchErrorLog() {
+        const summary = document.getElementById('err-log-summary');
+        const list = document.getElementById('err-log-list');
+        if (!list) return;
+
+        if (summary) summary.textContent = 'Fetching error history...';
+
+        try {
+            const res = await this.apiGet('/api/errors');
+            const errors = res.errors || [];
+            if (summary) summary.textContent = `${res.count || errors.length} total error event(s) recorded`;
+
+            if (errors.length === 0) {
+                list.innerHTML = '<div class="empty-state">No error events recorded yet.</div>';
+                return;
+            }
+
+            let html = '';
+            for (const err of errors) {
+                const dateStr = err.timestamp ? new Date(err.timestamp * 1000).toLocaleTimeString() : (err.time_str || '');
+                const fieldsHtml = (err.error_fields || []).map(f =>
+                    `<span class="log-key">${f.key}:</span><strong class="log-val log-val-error">${f.val}</strong>`
+                ).join(' ');
+
+                html += `
+                <div class="err-log-item">
+                    <div class="err-log-header">
+                        <span class="err-time">${dateStr}</span>
+                        <span class="err-device">📍 <strong>${err.device_name || 'Src:' + err.src}</strong> (SA:${err.src})</span>
+                        <span class="err-pgn">PGN ${err.pgn} [${err.pgn_name || ''}]</span>
+                    </div>
+                    <div class="err-log-detail">${fieldsHtml || err.decoded}</div>
+                    <div class="log-raw err-raw">${err.raw}</div>
+                </div>`;
+            }
+            list.innerHTML = html;
+        } catch (e) {
+            if (summary) summary.textContent = 'Failed to fetch error log: ' + e;
+        }
+    },
+
+    async clearErrorLogHistory() {
+        if (!confirm('Are you sure you want to clear the server-side error log history?')) return;
+        try {
+            await this.apiDelete('/api/errors');
+            this.monitorErrors = 0;
+            this.updateMonitorStats();
+            this.fetchErrorLog();
+            this.toast('Error log history cleared');
+        } catch (e) {
+            this.toast('Failed to clear error log: ' + e, true);
+        }
     }
 });

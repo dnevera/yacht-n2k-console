@@ -436,6 +436,11 @@ class DeviceManager:
         # Active TCP data connection (held by _bus_worker)
         self._tcp: Optional[TCPProxyConnection] = None
 
+        # Error log history ring buffer (max 500 records)
+        self._error_log: List[Dict[str, Any]] = []
+        self._error_log_lock = threading.Lock()
+        self._next_error_id: int = 1
+
     def _get_ctrl(self) -> YDNU02Controller:
         """
         Lazy-init YDNU02Controller (serial controller for service/firmware ops).
@@ -712,6 +717,66 @@ class DeviceManager:
                     "capacity_l": capacity_l,
                     "src":        src,
                 })
+
+        # ── Check for CAN error states across all frames ──────────────────────
+        decoded_str = parsed.get("decoded", "") or ""
+        if decoded_str and re.search(r'error|fault|fail|bus off', decoded_str, re.IGNORECASE):
+            self._record_error_event(parsed)
+
+    def _record_error_event(self, parsed: Dict[str, Any]):
+        """Record a CAN error event into the in-memory error history buffer."""
+        info = parsed.get("info", {})
+        src = info.get("src", 0)
+        pgn = info.get("pgn", 0)
+        decoded = parsed.get("decoded", "") or ""
+        dev = self._discovered_bus_devices.get(src, {})
+        dev_name = ""
+        if dev:
+            mfr = dev.get("manufacturer", "")
+            mdl = dev.get("model", "")
+            dev_name = f"{mfr} {mdl}".strip() or f"Device SA:{src}"
+        else:
+            dev_name = f"Device SA:{src}"
+
+        # Extract specific error key-value pairs
+        error_fields = []
+        for match in re.finditer(r'(?:^|\s+)([\w\s-]+?):([^\s:]+(?:\s+[^\s:]+)*(?=\s+[\w\s-]+?:|$))', decoded):
+            k, v = match.group(1).strip(), match.group(2).strip()
+            if re.search(r'error|fault|fail|bus off', v, re.IGNORECASE):
+                error_fields.append({"key": k, "val": v})
+
+        with self._error_log_lock:
+            entry = {
+                "id": self._next_error_id,
+                "timestamp": time.time(),
+                "time_str": parsed.get("time", ""),
+                "src": src,
+                "device_name": dev_name,
+                "pgn": pgn,
+                "pgn_name": N2KPGNDecoder.pgn_name(pgn),
+                "raw": parsed.get("raw", ""),
+                "decoded": decoded,
+                "error_fields": error_fields,
+            }
+            self._next_error_id += 1
+            self._error_log.append(entry)
+            if len(self._error_log) > 500:
+                self._error_log.pop(0)
+
+    def get_error_log(self, limit: int = 100, src: Optional[int] = None) -> Dict[str, Any]:
+        """Return recorded CAN error events (most recent first)."""
+        with self._error_log_lock:
+            logs = list(self._error_log)
+        if src is not None:
+            logs = [e for e in logs if e["src"] == src]
+        logs = list(reversed(logs[-limit:]))
+        return {"count": len(self._error_log), "errors": logs}
+
+    def clear_error_log(self) -> Dict[str, Any]:
+        """Clear the error history buffer."""
+        with self._error_log_lock:
+            self._error_log.clear()
+        return {"status": "cleared", "count": 0}
 
     # ══════════════════════════════════════════════════════════════════════════
     # REST API helpers
