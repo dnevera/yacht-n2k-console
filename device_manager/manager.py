@@ -24,7 +24,20 @@ from ydnu02 import YDNU02Controller
 
 
 def get_app_version() -> str:
-    """Read software version from VERSION file in the project root."""
+    """Read software version from VERSION file in the project root.
+
+    Search order:
+      1. ``../VERSION`` (expected when running from device_manager/ or routes/)
+      2. ``./VERSION``  (fallback when running from project root)
+
+    Returns:
+        Version string (e.g. "0.2.0"), or "0.0.0" if file is missing.
+
+    Skill — get version via REST API::
+
+        curl -s http://<gateway-host>:8080/api/version
+        # Output: {"version": "0.2.0"}
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     for path in (os.path.join(here, '..', 'VERSION'),
                  os.path.join(here, 'VERSION')):

@@ -22,7 +22,13 @@ async def api_info(force: bool = False):
 
 @router.get("/version")
 async def api_version():
-    """Get console application version from VERSION file."""
+    """Get console application version from VERSION file.
+
+    Skill — query app version from REST API::
+
+        curl -s http://localhost:8080/api/version
+        # Output: {"version": "0.2.0"}
+    """
     mgr = get_device_mgr()
     return {"version": mgr.get_app_version() if mgr else "0.0.0"}
 

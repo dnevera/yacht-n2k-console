@@ -41,7 +41,14 @@ class ServiceManager:
         self._info_cache_time = 0.0
 
     def get_info(self, force: bool = False) -> Dict[str, Any]:
-        """Read device info from YDNU-02 service terminal (HELP command)."""
+        """Read device info from YDNU-02 service terminal (HELP command).
+
+        Skill — query device info with defensive cache fallback::
+
+            mgr = get_device_mgr()
+            info = mgr.get_info(force=False)  # Uses cached welcome screen if fresh
+            # Returns dict with firmware_version, serial_number, previous_mode, app_version, etc.
+        """
         if not force and self._info_cache and (time.time() - self._info_cache_time) < self._cache_ttl:
             return self._info_cache
 
