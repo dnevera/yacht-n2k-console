@@ -188,7 +188,7 @@ Object.assign(App, {
         if (summary) summary.textContent = 'Fetching error history...';
 
         try {
-            const res = await this.apiGet('/api/errors');
+            const res = await this.api('/api/errors');
             const errors = res.errors || [];
             if (summary) summary.textContent = `${res.count || errors.length} total error event(s) recorded`;
 
@@ -224,7 +224,7 @@ Object.assign(App, {
     async clearErrorLogHistory() {
         if (!confirm('Are you sure you want to clear the server-side error log history?')) return;
         try {
-            await this.apiDelete('/api/errors');
+            await this.api('/api/errors', 'DELETE');
             this.monitorErrors = 0;
             this.updateMonitorStats();
             this.fetchErrorLog();
