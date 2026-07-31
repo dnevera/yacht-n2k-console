@@ -201,5 +201,49 @@ class TestHABLERegistry(unittest.TestCase):
         self.assertTrue(len(v) > 0)
 
 
+class TestHADeviceRegistryNamingAndPK(unittest.TestCase):
+    """Verify HA device naming and PK hash registration logic for physical (SA=64) and virtual (SA=200) devices."""
+
+    def setUp(self):
+        self.mod = load_gateway()
+        self.hub = self.mod.DataHub()
+
+    def test_dual_device_pre_registration_distinct_unique_ids(self):
+        """Both physical (SA=64) and virtual (SA=200) devices are pre-registered with distinct unique IDs."""
+        devices = self.hub.device_registry.get_all_devices()
+        self.assertIn(64, devices)
+        self.assertIn(200, devices)
+        self.assertEqual(devices[64].unique_id, 402047)
+        self.assertEqual(devices[200].unique_id, 902047)
+        self.assertEqual(devices[64].mfg_code, 717)
+        self.assertEqual(devices[200].mfg_code, 2047)
+
+    def test_announce_all_devices_emits_both_sa64_and_sa200_frames(self):
+        """announce_all_devices() outputs ISO Claim + Product Info for both SA=64 and SA=200."""
+        received = []
+        class FakeConn:
+            def sendall(self, data):
+                received.append(data)
+        self.hub.clients.add(FakeConn())
+        self.hub.announce_all_devices()
+
+        self.assertTrue(any(b'18EEFF40' in line for line in received), "SA=64 ISO Claim missing")
+        self.assertTrue(any(b'19F01440' in line for line in received), "SA=64 Product Info missing")
+        self.assertTrue(any(b'18EEFFC8' in line for line in received), "SA=200 ISO Claim missing")
+        self.assertTrue(any(b'19F014C8' in line for line in received), "SA=200 Product Info missing")
+
+    def test_ha_rx_line_prefix_format(self):
+        """All announced lines MUST start with '00:00:00.000 R ' for HA TextNmea2000Gateway parser."""
+        received = []
+        class FakeConn:
+            def sendall(self, data):
+                received.append(data)
+        self.hub.clients.add(FakeConn())
+        self.hub.announce_all_devices()
+
+        for line in received:
+            self.assertTrue(line.startswith(b'00:00:00.000 R '), f"Line lacks HA RX prefix: {line}")
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
