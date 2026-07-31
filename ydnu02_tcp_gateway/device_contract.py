@@ -11,25 +11,49 @@ ARCHITECTURAL PRINCIPLES & NMEA 2000 DEVICE REGISTRATION SPECIFICATION:
    - Physical YDNU-02 USB Gateway: SA=64, Unique ID=402047, Mfg Code=717 (Yacht Devices).
    - Virtual TCP Gateway Service: SA=200, Unique ID=902047, Mfg Code=2047 (Custom).
    - Having distinct 21-bit Unique IDs ensures Home Assistant (ha-nmea2000) generates
-     distinct device registry cards: 'Product Information (Yacht Devices - PC Gateway - 402047)'
-     and 'Product Information (2047 - PC Gateway - 902047)'.
+     distinct device registry cards:
+       • 'Product Information (Yacht Devices - PC Gateway - 402047)'
+       • 'Product Information (2047 - PC Gateway - 902047)'
 
-2. PRODUCT INFORMATION (PGN 126996) SOURCE ROUTING:
-   - Product Information (PGN 126996) contains Model ID, Software Version Code,
-     Model Serial Code, and Model Version.
-   - To prevent state collisions in Home Assistant, every PGN 126996 message MUST be
-     encoded with the EXACT Source Address (SA) of the device that owns it:
-     • Physical YDNU-02 (SA=64): 29-bit CAN ID 0x19F01440 ('19F01440 ...')
-     • Virtual TCP Gateway (SA=200): 29-bit CAN ID 0x19F014C8 ('19F014C8 ...')
-   - When encoded with its distinct SA, Home Assistant binds the Model ID, S/N, and
-     firmware version to the corresponding ISO Name, populating Product Info fields
-     for physical YDNU-02 ('1.75 07/08/2025', '00402047') and TCP GW ('0.2.0', 'SW-GW-00902047').
+2. FASTPACKET ASSEMBLY & DECODER NORMALIZATION:
+   - Product Information (PGN 126996) is transmitted as a 19-frame FastPacket sequence (C0..D3).
+   - Physical YDNU-02 hardware emits these frames with direction flag 'T'.
+   - `N2KDeviceRegistry.update_from_frame()` uses `normalize_frame()` to convert 'T' to 'R'
+     so `NMEA2000Decoder` successfully assembles the 19 frames and sets `is_complete = True`
+     (populating `model_id` and `model_serial`).
 
-3. UNIFORM USAGE OF NMEA2000 LIBRARY:
-   - Message structures are built using `nmea2000.message.NMEA2000Message` and `NMEA2000Field`.
-   - ASCII line construction is delegated to `nmea2000.encoder_formats.CanFrameAsciiEncoder`
-     (the canonical library handler for N2KFormat.CAN_FRAME_ASCII).
-   - Pure in-memory encoding: zero socket side effects, zero async dependencies.
+3. PRE-REGISTRATION GUARANTEE (`DEFAULT_PHYSICAL_DEVICE` + `DEFAULT_VIRTUAL_DEVICE`):
+   - To prevent race conditions where Home Assistant connects before FastPacket assembly completes,
+     both `DEFAULT_PHYSICAL_DEVICE` (SA=64) and `DEFAULT_VIRTUAL_DEVICE` (SA=200) are pre-registered
+     in `DataHub.__init__`.
+   - This guarantees that `DataHub.announce_all_devices()` immediately transmits PGN 60928 and PGN 126996
+     for BOTH devices as soon as a TCP client connects.
+
+DIAGNOSTIC SKILL / MINI-PROMPTS:
+================================
+  Skill — verify default device pre-registration::
+
+      python3 -c "
+      from ydnu02_tcp_gateway.device_contract import DEFAULT_PHYSICAL_DEVICE, DEFAULT_VIRTUAL_DEVICE
+      assert DEFAULT_PHYSICAL_DEVICE.unique_id == 402047
+      assert DEFAULT_VIRTUAL_DEVICE.unique_id == 902047
+      print('Physical:', DEFAULT_PHYSICAL_DEVICE)
+      print('Virtual:', DEFAULT_VIRTUAL_DEVICE)
+      "
+
+  Skill — verify FastPacket PGN 126996 assembly in N2KDeviceRegistry::
+
+      python3 -c "
+      from ydnu02_tcp_gateway.device_contract import N2KDeviceRegistry
+      reg = N2KDeviceRegistry()
+      lines = [
+          b'00:00:00.000 R 18EEFF40 7F 22 A6 59 00 82 32 C0\\n',
+          b'00:00:00.000 R 19F01440 C0 86 15 05 83 19 59 44\\n',
+          b'00:00:00.000 R 19F01440 D3 01 01\\n',
+      ]
+      for line in lines: reg.update_from_frame(line)
+      print('Registered devices:', reg.get_all_devices())
+      "
 """
 
 import sys

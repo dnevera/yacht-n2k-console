@@ -1,7 +1,40 @@
 """Control port handler for YDNU-02 TCP Gateway (:4002).
+======================================================
 
-Exclusive control session for service terminal operations and OTA firmware flashing.
-DTR toggle mode switching and serial passthrough.
+EXCLUSIVE CONTROL SESSION & SERVICE PROTOCOL SPECIFICATION:
+----------------------------------------------------------
+1. PURPOSE:
+   - Provides exclusive control channel on TCP port 4002 for:
+     a. Interactive terminal commands (`SERVICE_START` / `SERVICE_END`).
+     b. High-speed YDNU-02 firmware flashing (`FIRMWARE_START` / `FIRMWARE_END`).
+
+2. DTR TOGGLE HARDWARE SEQUENCE (`enter_service_mode_on_device`):
+   - To switch physical YDNU-02 hardware from RAW mode to SERVICE mode:
+     a. Closes current raw serial connection.
+     b. Runs `stty` command with DTR toggle and echo string `YDNU MODE SERVICE > /dev/ttyACM0`.
+     c. Waits 0.15s for hardware mode switch.
+     d. Reopens serial port at 115200 8N1 with DTR=True.
+
+3. EXCLUSIVE MUTEX GUARANTEE:
+   - Only ONE control client connection is permitted at any time.
+   - Any second client attempting to connect to :4002 receives `ERROR: another control session is active`.
+   - While `service_mode` event is set, `SerialReader` pauses N2K frame broadcasting.
+   - Upon disconnection or `SERVICE_END`, `exit_service_mode_on_device()` sends `MODE RAW\\r\\n`
+     and clears `service_mode`, resuming normal N2K frame broadcasting.
+
+DIAGNOSTIC SKILL / MINI-PROMPTS:
+================================
+  Skill — test CTRL session handshake via netcat CLI::
+
+      ssh user@localhost 'python3 -c "
+      import socket
+      s = socket.create_connection((\"localhost\", 4002))
+      s.sendall(b\"SERVICE_START\\n\")
+      resp = s.recv(1024)
+      print(\"CTRL Handshake Response:\", resp)
+      s.sendall(b\"SERVICE_END\\n\")
+      s.close()
+      "'
 """
 
 import os

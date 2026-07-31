@@ -1,7 +1,35 @@
 """Serial port reader thread for YDNU-02 TCP Gateway.
+===================================================
 
-Owns the serial connection (/dev/ttyACM0), performs RAW mode initialization sequence,
-reads CAN frames continuously, and feeds the DataHub broadcast pipeline.
+PURPOSE & HARDWARE PROTOCOL SPECIFICATION:
+------------------------------------------
+1. HARDWARE CONNECTION:
+   - Owns the physical USB serial connection (/dev/ttyACM0 or /dev/ttyUSB0).
+   - Baud rate: 115200 8N1, DTR=True.
+
+2. RAW MODE INITIALIZATION SEQUENCE:
+   - To force YDNU-02 into ASCII raw mode:
+     a. Writes `YDNU MODE RAW\\r\\n` to serial port.
+     b. Waits 2.0s for device handshake response.
+     c. Writes `0\\n` to clear any pending prompt.
+   - Upon successful initialization, marks `serial_ready` event and triggers
+     `send_iso_request()` to query physical bus identity (PGN 60928 + 126996).
+
+3. CONTINUOUS FRAME STREAM & NORMALIZATION:
+   - Reads ASCII line bytes continuously from serial.
+   - Delegates framing cleanup and T-to-R flag repacking to `normalize_frame()`.
+   - Validates format against `NMEA_LINE_RE` regex before forwarding to `DataHub.broadcast()`.
+   - Pauses reading when `service_mode` event is set to allow exclusive CTRL terminal operations.
+
+DIAGNOSTIC SKILL / MINI-PROMPTS:
+================================
+  Skill — check serial port status on host::
+
+      ssh user@localhost 'ls -l /dev/ttyACM0 /dev/ttyUSB0 2>/dev/null'
+
+  Skill — inspect serial reader logs in systemd service::
+
+      ssh user@localhost 'journalctl -u ydnu02-tcp-gateway -n 50 | grep serial'
 """
 
 import time

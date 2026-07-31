@@ -1,7 +1,28 @@
 """TCP Gateway for YDNU-02 NMEA 2000 USB interface.
+==================================================
 
-Facade class `Gateway` coordinating serial reader, data hub, control handler,
-and TCP servers on ports 4001 (DATA) and 4002 (CTRL).
+FACADE ARCHITECTURE SPECIFICATION:
+---------------------------------
+1. ORCHESTRATION LAYER:
+   - `Gateway` is the central orchestrator class that instantiates and coordinates:
+     a. `SerialReader`: Background daemon thread managing /dev/ttyACM0.
+     b. `DataHub`: Bidirectional N2K frame broadcast engine on TCP :4001.
+     c. `CtrlHandler`: Exclusive control terminal session handler on TCP :4002.
+
+2. TCP SERVER LIFECYCLE:
+   - Port 4001 (DATA): Multi-client non-blocking ASCII frame fanout. Spawns `handle_client` thread per client.
+   - Port 4002 (CTRL): Exclusive control port. Spawns `handle_client` thread for terminal/firmware operations.
+   - Both servers use `SO_REUSEADDR` for clean immediate restart capability.
+
+DIAGNOSTIC SKILL / MINI-PROMPTS:
+================================
+  Skill — test starting standalone gateway instance in Python::
+
+      python3 -c "
+      from ydnu02_tcp_gateway import Gateway
+      gw = Gateway(data_port=14001, ctrl_port=14002)
+      print('Gateway initialized successfully:', gw)
+      "
 """
 
 import sys

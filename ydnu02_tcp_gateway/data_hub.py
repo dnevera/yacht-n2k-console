@@ -6,35 +6,30 @@ PURPOSE
   TCP clients (Home Assistant, Signal K, web console). Handles instant client
   onboarding via active ISO Requests and immediate virtual device identity broadcasts.
 
-ARCHITECTURE DECISION (NO CACHING)
-  We do NOT use a passive frame cache for device identification.
-  Instead, we rely on canonical NMEA 2000 protocols:
-    1. Virtual Gateway Identity: On every new TCP client connection, we immediately
-       transmit PGN 60928 (ISO Address Claim) and PGN 126996 (Product Information)
-       for our virtual gateway (SA=200).
-    2. Physical Bus Discovery: Simultaneously, we broadcast PGN 59904 (ISO Request)
-       to the physical bus (Destination=255). Physical devices (such as the physical YDNU-02)
-       reply with their own authentic PGN 60928 and PGN 126996 frames.
-
-  This guarantees zero stale data, zero frame mutation, and zero entity confusion in Home Assistant.
+ONBOARDING PROTOCOL & DUAL DEVICE GUARANTEE
+  1. Pre-registered Devices: `DEFAULT_PHYSICAL_DEVICE` (SA=64, Unique ID=402047) and
+     `DEFAULT_VIRTUAL_DEVICE` (SA=200, Unique ID=902047) are pre-registered in `self.device_registry`.
+  2. Instant Client Announcement: As soon as a TCP client (such as Home Assistant) connects to :4001,
+     `DataHub.handle_client()` immediately invokes `self.send_iso_request()`, which calls
+     `announce_all_devices()`.
+  3. Frame Formatting: `announce_all_devices()` broadcasts PGN 60928 (ISO Claim) and PGN 126996
+     (Product Info) for BOTH devices with the required `00:00:00.000 R ` prefix.
+  4. Physical Bus Request: Simultaneously, PGN 59904 (ISO Request) is sent to the physical serial bus
+     to prompt any real hardware on the N2K bus to refresh its state.
 
 SKILLS / DIAGNOSTIC MINI-PROMPTS
 ================================
-  Skill — verify TCP clients connected to data hub::
+  Skill — verify dual device announcements in live stream::
 
-      ssh user@localhost 'netstat -an | grep 4001'
+      ssh user@localhost 'nc localhost 4001 | grep -E "19F01440|19F014C8"'
 
-  Skill — inspect live CAN frame stream on port 4001::
-
-      ssh user@localhost 'nc localhost 4001 | head -n 20'
-
-  Skill — trigger manual ISO Request to physical bus::
+  Skill — trigger manual ISO Request and announcement::
 
       python3 -c "
       import socket
       s = socket.create_connection(('localhost', 4001))
       s.sendall(b'00:00:00.000 T 18EAFFFE 00 EE 00\\r\\n')
-      print('ISO Request PGN 60928 sent')
+      print('ISO Request sent')
       s.close()
       "
 """
