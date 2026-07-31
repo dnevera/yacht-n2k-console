@@ -142,12 +142,11 @@ class DataHub:
         """Generate and broadcast ISO Claim + Product Info for all registered devices."""
         lines = self.device_registry.generate_all_announcements()
         for line in lines:
-            # HA TextNmea2000Gateway expects RX lines starting with timestamp and direction ('00:00:00.000 R ')
             text = line.decode("ascii", errors="ignore").rstrip()
             if not text.startswith("00:00:00.000 R "):
-                formatted_line = f"00:00:00.000 R {text}\r\n".encode("ascii")
+                formatted_line = f"00:00:00.000 R {text}\n".encode("ascii")
             else:
-                formatted_line = line
+                formatted_line = f"{text}\n".encode("ascii")
             self.broadcast(formatted_line)
 
     def get_physical_devices(self) -> Dict[int, Dict[str, Any]]:

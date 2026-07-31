@@ -32,6 +32,7 @@ ARCHITECTURAL PRINCIPLES & NMEA 2000 DEVICE REGISTRATION SPECIFICATION:
    - Pure in-memory encoding: zero socket side effects, zero async dependencies.
 """
 
+import sys
 import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
@@ -115,7 +116,8 @@ class N2KDeviceEncoder:
                 lines.extend(encoder.encode(prod_msg))
 
             return lines
-        except Exception:
+        except Exception as e:
+            sys.stderr.write(f"[device_contract] encode error: {e}\n")
             return []
 
 

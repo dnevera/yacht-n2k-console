@@ -416,7 +416,8 @@ fi
 #   via SSH + pytest. Tests are already copied to REMOTE_DIR/tests/ by deploy.
 #
 #   Mode        → Test files
-#   --proxy     → test_ydnu02_tcp_gateway.py, test_service_mode.py
+#   --proxy     → tests/test_frame_utils.py, test_data_hub.py, test_bidirectional_hub.py,
+#                 test_gateway_device.py, test_integration.py, test_device_contract.py, test_service_mode.py
 #   --web       → test_api.py, test_sensors_service.py, test_ble_api.py,
 #                  test_ble_registry.py, test_gobius_parsers.py,
 #                  test_mopeka_parsers.py, test_n2k_commands.py,
