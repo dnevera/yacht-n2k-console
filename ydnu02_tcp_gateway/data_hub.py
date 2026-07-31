@@ -22,11 +22,11 @@ SKILLS / DIAGNOSTIC MINI-PROMPTS
 ================================
   Skill — verify TCP clients connected to data hub::
 
-      ssh user@gateway.local 'netstat -an | grep 4001'
+      ssh user@localhost 'netstat -an | grep 4001'
 
   Skill — inspect live CAN frame stream on port 4001::
 
-      ssh user@gateway.local 'nc localhost 4001 | head -n 20'
+      ssh user@localhost 'nc localhost 4001 | head -n 20'
 
   Skill — trigger manual ISO Request to physical bus::
 
@@ -43,7 +43,8 @@ import time
 import socket
 import threading
 import serial
-from typing import Set, Tuple, Optional, Callable
+from typing import Set, Tuple, Optional, Callable, Dict, Any
+from ydnu02_tcp_gateway.device_contract import N2KDeviceRegistry, N2KDeviceInfo
 from ydnu02_tcp_gateway.frame_utils import NMEA_LINE_RE, TX_LINE_RE, fmt_frame, get_pgn_sa
 
 _ISO_REQUEST_MIN_INTERVAL = 5.0
@@ -83,11 +84,26 @@ class DataHub:
         self._serial_lock = serial_lock or threading.Lock()
 
         self._own_clients: Set[socket.socket] = set()
-        self._get_clients_fn = get_clients or (lambda: self._own_clients)
-        self.clients_lock = clients_lock or threading.Lock()
-
+        self._get_clients_fn = get_clients if get_clients is not None else (lambda: self._own_clients)
+        self.clients_lock = clients_lock if clients_lock is not None else threading.Lock()
         self._iso_request_lock = threading.Lock()
         self._iso_request_last_sent: float = 0.0
+
+        # Unified N2K Device Registry: tracks physical + virtual devices
+        self.device_registry = N2KDeviceRegistry()
+        # Pre-register virtual TCP Gateway (SA=200) so announce_all_devices() immediately includes it
+        self.device_registry.register_device(N2KDeviceInfo(
+            sa=200,
+            unique_id=902047,
+            mfg_code=2047,
+            device_class=25,
+            device_function=130,
+            industry_group=4,
+            model_id="YDNU-02 TCP-GW",
+            software_version="0.2.0",
+            model_serial="SW-GW-00902047",
+            model_version="yacht-n2k-console",
+        ))
 
     @property
     def clients(self) -> Set[socket.socket]:
@@ -97,14 +113,16 @@ class DataHub:
     def broadcast(self, line: bytes, exclude: Optional[socket.socket] = None) -> None:
         """Send an N2K ASCII line to all connected TCP clients.
 
+        Also tracks physical device data from PGN 60928 and PGN 126996 frames
+        so _replay_iso_presence() can synthesize HA-compatible device announcements.
+
         Args:
             line: Raw line bytes ending with newline.
             exclude: Optional client socket to exclude from fanout (e.g. the sender).
-
-        Skill — inspect frame broadcast in logs::
-
-            ssh user@gateway.local 'journalctl -u ydnu02-tcp-gateway -f | grep data'
         """
+        # Track physical device data from passing frames
+        self._track_physical_device(line)
+
         dead: Set[socket.socket] = set()
         with self.clients_lock:
             for conn in list(self.clients):
@@ -116,6 +134,42 @@ class DataHub:
                     dead.add(conn)
             self.clients.difference_update(dead)
 
+    def _track_physical_device(self, line: bytes) -> None:
+        """Decode PGN 60928 / 126996 from a frame and update N2KDeviceRegistry."""
+        self.device_registry.update_from_frame(line)
+
+    def announce_all_devices(self) -> None:
+        """Generate and broadcast ISO Claim + Product Info for all registered devices."""
+        lines = self.device_registry.generate_all_announcements()
+        for line in lines:
+            # HA TextNmea2000Gateway expects RX lines starting with timestamp and direction ('00:00:00.000 R ')
+            text = line.decode("ascii", errors="ignore").rstrip()
+            if not text.startswith("00:00:00.000 R "):
+                formatted_line = f"00:00:00.000 R {text}\r\n".encode("ascii")
+            else:
+                formatted_line = line
+            self.broadcast(formatted_line)
+
+    def get_physical_devices(self) -> Dict[int, Dict[str, Any]]:
+        """Return a snapshot dictionary of all registered devices for backwards compatibility."""
+        devices = self.device_registry.get_all_devices()
+        return {
+            sa: {
+                "src": dev.sa,
+                "unique_id": dev.unique_id,
+                "mfg_code": dev.mfg_code,
+                "device_class": dev.device_class,
+                "device_class_int": dev.device_class,
+                "device_function": dev.device_function,
+                "industry_group": dev.industry_group,
+                "model": dev.model_id,
+                "firmware": dev.software_version,
+                "serial": dev.model_serial,
+                "model_version": dev.model_version,
+            }
+            for sa, dev in devices.items()
+        }
+
     def send_iso_request(self) -> None:
         """Broadcast ISO Requests (PGN 59904) to physical serial bus and TCP clients.
 
@@ -124,7 +178,7 @@ class DataHub:
 
         Skill — trigger ISO Request from command line::
 
-            ssh user@gateway.local 'python3 -c "from ydnu02_tcp_gateway.data_hub import DataHub; ..."'
+            ssh user@localhost 'python3 -c "from ydnu02_tcp_gateway.data_hub import DataHub; ..."'
         """
         with self._iso_request_lock:
             now = time.time()
@@ -143,8 +197,8 @@ class DataHub:
             return
 
         # Canonical N2K ISO Requests (PGN 59904) for PGN 60928 (Address Claim) and 126996 (Product Info)
-        frame_claim = b"00:00:00.000 T 18EAFFFE 00 EE 00\r\n"
-        frame_prod  = b"00:00:00.000 T 18EAFFFE 14 F0 01\r\n"
+        frame_claim = b"18EAFFFE 00 EE 00\r\n"
+        frame_prod  = b"18EAFFFE 14 F0 01\r\n"
         try:
             ser.write(frame_claim)
             ser.write(frame_prod)
@@ -156,6 +210,9 @@ class DataHub:
         tcp_iso_req_prod  = fmt_frame('18EAFFFE', b'\x14\xf0\x01')
         self.broadcast(tcp_iso_req_claim)
         self.broadcast(tcp_iso_req_prod)
+
+        # Broadcast active announcements for all registered devices
+        self.announce_all_devices()
 
     def handle_client(self, conn: socket.socket, addr: Tuple[str, int]) -> None:
         """Handle lifecycle and bidirectional frame loop for a single connected TCP client.
@@ -171,7 +228,7 @@ class DataHub:
 
         Skill — watch client onboarding logs::
 
-            ssh user@gateway.local 'journalctl -u ydnu02-tcp-gateway -n 30 | grep client'
+            ssh user@localhost 'journalctl -u ydnu02-tcp-gateway -n 30 | grep client'
         """
         print(f"[data] client connected: {addr}", flush=True)
         with self.clients_lock:

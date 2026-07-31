@@ -80,6 +80,14 @@ class SerialReader:
                     if not NMEA_LINE_RE.match(line):
                         continue
 
+                    # Repack outgoing T-frames (YDNU-02 TX to bus) as R-frames.
+                    # The nmea2000 library (used by ha-nmea2000) only decodes R-frames.
+                    # Physical devices respond to ISO Requests with T-frames — without
+                    # this repack, HA never receives Product Info (PGN 126996) or ISO
+                    # Claims from physical bus devices.
+                    if b" T " in line:
+                        line = line.replace(b" T ", b" R ", 1)
+
                     self.broadcast(line)
 
             except serial.SerialException as e:

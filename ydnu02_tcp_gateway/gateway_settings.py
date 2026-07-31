@@ -25,22 +25,22 @@ THREAD SAFETY
 KNOWN ISSUES / SKILLS
   Skill — read current settings via API::
 
-      curl -s http://gateway.local:8080/api/gw-settings | python3 -m json.tool
+      curl -s http://localhost:8080/api/gw-settings | python3 -m json.tool
 
   Skill — disable ISO replay at runtime::
 
-      curl -X POST http://gateway.local:8080/api/gw-settings \\
+      curl -X POST http://localhost:8080/api/gw-settings \\
            -H 'Content-Type: application/json' \\
            -d '{"ha_iso_replay_enabled": false}'
 
   Skill — read settings file directly on Pi::
 
-      ssh user@gateway.local 'cat ~/.config/ydnu02/gateway_settings.json'
+      ssh user@localhost 'cat ~/.config/ydnu02/gateway_settings.json'
 
   Skill — reset to defaults (delete file, restart daemon)::
 
-      ssh user@gateway.local 'rm ~/.config/ydnu02/gateway_settings.json'
-      ssh user@gateway.local 'sudo systemctl restart ydnu02-tcp-gateway'
+      ssh user@localhost 'rm ~/.config/ydnu02/gateway_settings.json'
+      ssh user@localhost 'sudo systemctl restart ydnu02-tcp-gateway'
 """
 
 import json
@@ -81,11 +81,11 @@ class GatewaySettings:
 
     Skill — check current values in running daemon::
 
-        curl -s http://gateway.local:8080/api/gw-settings | python3 -m json.tool
+        curl -s http://localhost:8080/api/gw-settings | python3 -m json.tool
 
     Skill — update interval without restart::
 
-        curl -X POST http://gateway.local:8080/api/gw-settings \\
+        curl -X POST http://localhost:8080/api/gw-settings \\
              -H 'Content-Type: application/json' \\
              -d '{"ha_iso_replay_interval_s": 30}'
     """

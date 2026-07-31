@@ -109,11 +109,11 @@ SKILLS (DIAGNOSTIC MINI-PROMPTS)
 ================================
   Skill — monitor raw frame traffic on TCP port 4001::
 
-      ssh user@gateway.local 'nc localhost 4001 | head -n 30'
+      ssh user@localhost 'nc localhost 4001 | head -n 30'
 
   Skill — inspect gateway systemd logs::
 
-      ssh user@gateway.local 'journalctl -u ydnu02-tcp-gateway -n 50 --no-pager'
+      ssh user@localhost 'journalctl -u ydnu02-tcp-gateway -n 50 --no-pager'
 
   Skill — test client connection and ISO Request trigger::
 
@@ -402,6 +402,8 @@ def main() -> None:
     # Import gateway device module (uses nmea2000 library's N2KDevice).
     # Deferred import so gateway can start without the library on non-target platforms.
     from ydnu02_gateway_device import start_in_thread as start_gw_device
+    from ydnu02_gateway_device import set_data_hub as _set_gw_data_hub
+    _set_gw_data_hub(_data_hub)
 
     # Start serial reader thread
     t = threading.Thread(target=serial_reader, daemon=True)

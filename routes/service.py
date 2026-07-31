@@ -226,7 +226,7 @@ async def api_gw_settings_get():
 
     Skill — read via curl::
 
-        curl -s http://gateway.local:8080/api/gw-settings | python3 -m json.tool
+        curl -s http://localhost:8080/api/gw-settings | python3 -m json.tool
     """
     return GatewaySettings.instance().to_dict()
 
@@ -247,13 +247,13 @@ async def api_gw_settings_post(body: dict):
 
     Skill — disable ISO replay::
 
-        curl -X POST http://gateway.local:8080/api/gw-settings \\
+        curl -X POST http://localhost:8080/api/gw-settings \\
              -H 'Content-Type: application/json' \\
              -d '{"ha_iso_replay_enabled": false}'
 
     Skill — set 30s interval::
 
-        curl -X POST http://gateway.local:8080/api/gw-settings \\
+        curl -X POST http://localhost:8080/api/gw-settings \\
              -H 'Content-Type: application/json' \\
              -d '{"ha_iso_replay_interval_s": 30}'
     """

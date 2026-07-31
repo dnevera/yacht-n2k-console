@@ -163,20 +163,20 @@ KNOWN ISSUES / WORKAROUNDS
 
   Skill — manually trigger ISO replay via API::
 
-      curl -s http://gateway.local:8080/api/gw-settings | python3 -m json.tool
-      curl -X POST http://gateway.local:8080/api/gw-settings \
+      curl -s http://localhost:8080/api/gw-settings | python3 -m json.tool
+      curl -X POST http://localhost:8080/api/gw-settings \
            -H 'Content-Type: application/json' \
            -d '{"ha_iso_replay_enabled": true, "ha_iso_replay_interval_s": 30}'
 
   Skill — disable ISO replay (e.g. after proper hub.py fix is deployed)::
 
-      curl -X POST http://gateway.local:8080/api/gw-settings \
+      curl -X POST http://localhost:8080/api/gw-settings \
            -H 'Content-Type: application/json' \
            -d '{"ha_iso_replay_enabled": false}'
 
   Skill — watch ISO replay events in gateway logs::
 
-      ssh user@gateway.local \
+      ssh user@localhost \
           'journalctl -u ydnu02-tcp-gateway -f | grep "ISO replay"'
 
 SKILLS (diagnostic mini-prompts)
@@ -185,45 +185,45 @@ SKILLS (diagnostic mini-prompts)
   Skill — verify virtual device is visible on N2K bus::
 
       # Check that SA=200 appears in the CAN frame stream:
-      ssh user@gateway.local 'nc -q1 localhost 4001 | grep -m5 "200"'
+      ssh user@localhost 'nc -q1 localhost 4001 | grep -m5 "200"'
 
   Skill — check CPU temperature broadcast from sysfs::
 
-      ssh user@gateway.local \
+      ssh user@localhost \
           'cat /sys/class/thermal/thermal_zone0/temp'
       # Output: 52300  → 52.3 °C. Divide by 1000.
 
   Skill — verify Product Info is on the bus::
 
       # Decode PGN 126996 frames from TCP hub (CAN_FRAME_ASCII format):
-      ssh user@gateway.local \
+      ssh user@localhost \
           'nc -q5 localhost 4001 | grep -m3 "^:126996:"'
 
   Skill — check N2K address claim of virtual device::
 
       # PGN 60928 frames contain the ISO NAME; SA=200 → source field = C8 hex:
-      ssh user@gateway.local \
+      ssh user@localhost \
           'nc -q5 localhost 4001 | grep -m3 "^:60928:"'
 
   Skill — read current GatewaySettings from disk::
 
-      ssh user@gateway.local \
+      ssh user@localhost \
           'cat ~/.config/ydnu02/gateway_settings.json'
 
   Skill — watch gateway device daemon logs in real time::
 
-      ssh user@gateway.local \
+      ssh user@localhost \
           'journalctl -u ydnu02-tcp-gateway -f -n 40'
 
   Skill — restart gateway daemon to force address re-claim::
 
-      ssh user@gateway.local \
+      ssh user@localhost \
           'sudo systemctl restart ydnu02-tcp-gateway'
 
   Skill — check heartbeat interval (PGN 126993) on bus::
 
       # Heartbeat appears every GW_HEARTBEAT_S (10s); SA=200:
-      ssh user@gateway.local \
+      ssh user@localhost \
           'nc -q15 localhost 4001 | grep "^:126993:" | head -3'
 """
 
@@ -240,8 +240,20 @@ from nmea2000.message import NMEA2000Message, NMEA2000Field
 
 
 from ydnu02_tcp_gateway.gateway_settings import GatewaySettings
+from ydnu02_tcp_gateway.data_hub import DataHub
 
 logger = logging.getLogger(__name__)
+
+# Module-level reference to DataHub injected by ydnu02_tcp_gateway.py on startup.
+# DataHub.get_physical_devices() returns ISO 60928+126996 data collected from
+# every frame that passed through broadcast() — no extra decoder needed.
+_data_hub_ref: DataHub | None = None
+
+
+def set_data_hub(hub: DataHub) -> None:
+    """Wire the DataHub instance so _replay_iso_presence() can read physical device data."""
+    global _data_hub_ref
+    _data_hub_ref = hub
 
 # ── Gateway device identity ───────────────────────────────────────────────────
 #
@@ -306,13 +318,13 @@ and can be changed without restarting the daemon via the web UI or API.
 
 Skill — change interval at runtime without daemon restart::
 
-    curl -X POST http://gateway.local:8080/api/gw-settings \\
+    curl -X POST http://localhost:8080/api/gw-settings \\
          -H 'Content-Type: application/json' \\
          -d '{"ha_iso_replay_enabled": true, "ha_iso_replay_interval_s": 30}'
 
 Skill — verify current runtime value::
 
-    curl -s http://gateway.local:8080/api/gw-settings | python3 -m json.tool
+    curl -s http://localhost:8080/api/gw-settings | python3 -m json.tool
 """
 
 # PGN 130312 temperature source: 2 = "Inside Temperature"
@@ -596,6 +608,22 @@ async def _run_device() -> None:
     logger.warning('[gwdev] Address claimed: SA=%d  model="%s"  version=%s',
                    device.address, GW_MODEL_ID, version)
 
+    # Register virtual gateway device info in DataHub.device_registry
+    if _data_hub_ref is not None:
+        from ydnu02_tcp_gateway.device_contract import N2KDeviceInfo
+        _data_hub_ref.device_registry.register_device(N2KDeviceInfo(
+            sa=device.address,
+            unique_id=GW_UNIQUE_NUMBER,
+            mfg_code=GW_MANUFACTURER,
+            device_class=GW_DEVICE_CLASS,
+            device_function=GW_DEVICE_FUNCTION,
+            industry_group=GW_INDUSTRY_GROUP,
+            model_id=GW_MODEL_ID,
+            model_version=GW_MODEL_VERSION,
+            software_version=version,
+            model_serial=f"SW-GW-{GW_UNIQUE_NUMBER:08d}",
+        ))
+
     async def _replay_iso_presence() -> None:
         """Broadcast own presence and prompt all physical devices via ISO Request (PGN 59904).
 
@@ -622,17 +650,6 @@ async def _run_device() -> None:
 
         await asyncio.sleep(0.1)
 
-        # 2. Our virtual device — PGN 126996 (Product Info)
-        try:
-            prod_msg = device._build_product_information_message()
-            prod_msg.source = device.address
-            await device.send(prod_msg)
-            logger.warning('[gwdev] ISO replay: broadcast PGN 126996 for virtual SA=%d', device.address)
-        except Exception as exc:
-            logger.warning('[gwdev] ISO replay: failed PGN 126996 (own): %s', exc)
-
-        await asyncio.sleep(0.1)
-
         # 3. Canonical N2K Request: Prompt all physical devices on bus to announce PGN 60928
         try:
             req_claim = device._build_iso_request_message(60928, destination=255)
@@ -650,6 +667,11 @@ async def _run_device() -> None:
             logger.warning('[gwdev] ISO Request: prompted bus for PGN 126996 (Product Info)')
         except Exception as exc:
             logger.warning('[gwdev] ISO Request for PGN 126996 failed: %s', exc)
+
+        # 5. Broadcast announcements for all registered devices (virtual + physical)
+        if _data_hub_ref is not None:
+            _data_hub_ref.announce_all_devices()
+            logger.warning('[gwdev] Re-broadcast presence for all registered N2K devices')
 
     # Startup replay — run once after address claim, before entering the main loop.
     await asyncio.sleep(1.0)

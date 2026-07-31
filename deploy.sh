@@ -165,8 +165,13 @@ done
 # Files per deploy mode (local path → remote path)
 PROXY_FILES=(
     "VERSION:VERSION"
-    "ydnu02_tcp_gateway/ydnu02_tcp_gateway.py:ydnu02_tcp_gateway.py"
-    "ydnu02_tcp_gateway/ydnu02_gateway_device.py:ydnu02_gateway_device.py"
+    "ydnu02_tcp_gateway/__init__.py:ydnu02_tcp_gateway/__init__.py"
+    "ydnu02_tcp_gateway/ydnu02_tcp_gateway.py:ydnu02_tcp_gateway/ydnu02_tcp_gateway.py"
+    "ydnu02_tcp_gateway/ydnu02_gateway_device.py:ydnu02_tcp_gateway/ydnu02_gateway_device.py"
+    "ydnu02_tcp_gateway/data_hub.py:ydnu02_tcp_gateway/data_hub.py"
+    "ydnu02_tcp_gateway/serial_reader.py:ydnu02_tcp_gateway/serial_reader.py"
+    "ydnu02_tcp_gateway/gateway.py:ydnu02_tcp_gateway/gateway.py"
+    "ydnu02_tcp_gateway/gateway_settings.py:ydnu02_tcp_gateway/gateway_settings.py"
 )
 
 WEB_FILES=(
@@ -272,10 +277,13 @@ patch_ha() {
     ${SCP} "${PATCH_DIR}/nmea2000_ioclient.py" "${HOST}:/tmp/nmea2000_ioclient.py"
     ${SSH} ${HOST} "sudo docker cp /tmp/nmea2000_ioclient.py \
         ${HA_CONTAINER}:${ioclient_path}"
-    log "Patch 1 (ioclient EOF fix) applied ✓"
-
-    # NOTE: hub.py build_network_map patch REMOVED — breaks integration loading.
-    # TODO: investigate why build_network_map=False prevents nmea2000 from setting up.
+    # ── Patch 2: custom_components/nmea2000 NMEA2000Sensor DeviceInfo Product Info fix ─
+    if [[ -f "${PATCH_DIR}/ha_nmea2000_sensor.py" ]]; then
+        log "Patching /config/custom_components/nmea2000/NMEA2000Sensor.py in HA container..."
+        ${SCP} "${PATCH_DIR}/ha_nmea2000_sensor.py" "${HOST}:/tmp/ha_nmea2000_sensor.py"
+        ${SSH} ${HOST} "sudo docker cp /tmp/ha_nmea2000_sensor.py ${HA_CONTAINER}:/config/custom_components/nmea2000/NMEA2000Sensor.py"
+        log "Patch 2 (NMEA2000Sensor Product Info) applied ✓"
+    fi
 
     log "Restarting HA to reload patched modules..."
     ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
@@ -289,8 +297,8 @@ ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}"
 if $DEPLOY_PROXY; then
     section "ydnu02-tcp-gateway"
     log "Uploading ydnu02_tcp_gateway.py + ydnu02_gateway_device.py to ${HOST}:${REMOTE_DIR}"
-    # Clean up stale legacy root file that conflicts with ydnu02_tcp_gateway package
-    ${SSH} ${HOST} "rm -f ${REMOTE_DIR}/ydnu02_tcp_gateway.py"
+    # Clean up stale legacy root file and test file that conflicts with new split test suite
+    ${SSH} ${HOST} "rm -f ${REMOTE_DIR}/ydnu02_tcp_gateway.py ${REMOTE_DIR}/tests/test_ydnu02_tcp_gateway.py"
 
     # Ensure remote package directories exist
     ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}/ydnu02_tcp_gateway ${REMOTE_DIR}/ydnu02 ${REMOTE_DIR}/device_manager"
@@ -427,8 +435,14 @@ fi
 
 # Test sets keyed by deploy mode
 TESTS_PROXY=(
-    "tests/test_ydnu02_tcp_gateway.py"
+    "tests/test_frame_utils.py"
+    "tests/test_data_hub.py"
+    "tests/test_bidirectional_hub.py"
+    "tests/test_gateway_device.py"
+    "tests/test_integration.py"
+    "tests/test_device_contract.py"
     "tests/test_service_mode.py"
+    "tests/test_live_ha_integration.py"
 )
 
 TESTS_WEB=(

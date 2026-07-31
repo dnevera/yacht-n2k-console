@@ -44,10 +44,15 @@ class SensorRegistry:
                     self.discovered_bus_devices[src] = {
                         "src": src,
                         "manufacturer": "",   # filled by ISO Claim (PGN 60928)
+                        "mfg_code": 0,        # filled by ISO Claim — raw manufacturer_code int
                         "model": "",          # filled by Product Info (PGN 126996)
                         "serial": "",         # filled by Product Info
                         "firmware": "",       # filled by Product Info
                         "device_class": "",
+                        "device_class_int": 0,  # raw int device class
+                        "device_function": 0,   # raw int device function
+                        "industry_group": 4,    # Marine Industry (default)
+                        "unique_id": 0,
                         "function_name": "",
                         "device_class_name": "",
                         "active_pgns": [],
@@ -67,6 +72,22 @@ class SensorRegistry:
                         if "device_class" in dev_info:
                             dev["device_class"] = dev_info.get("device_class_name",
                                                                str(dev_info["device_class"]))
+                        # Raw integer fields needed for N2KDevice synthesis
+                        if "mfg_code" in dev_info:
+                            try:
+                                dev["mfg_code"] = int(dev_info["mfg_code"])
+                            except (ValueError, TypeError):
+                                pass
+                        if "device_class" in dev_info:
+                            try:
+                                dev["device_class_int"] = int(dev_info["device_class"])
+                            except (ValueError, TypeError):
+                                pass
+                        if "function" in dev_info:
+                            try:
+                                dev["device_function"] = int(dev_info["function"])
+                            except (ValueError, TypeError):
+                                pass
 
                 # ── All frames → library decoder (handles fast-packet reassembly) ──
                 lib_msg = N2KPGNDecoder.feed_to_lib(parsed)

@@ -39,3 +39,5 @@ docs/chat_logs/
 # Sensitive config files (only .template goes to git)
 deploy.conf
 build.conf
+
+.env
