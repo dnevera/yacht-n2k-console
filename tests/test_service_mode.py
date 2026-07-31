@@ -80,17 +80,29 @@ if 'fastapi' not in sys.modules:
     _mock_module('fastapi.routing')
 
 # ydnu02 — YDNU02Controller and N2KPGNDecoder (real hardware interaction)
-if 'ydnu02' not in sys.modules:
-    _mock_module('ydnu02',
-                 YDNU02Controller=MagicMock,
-                 N2KPGNDecoder=MagicMock)
+try:
+    import ydnu02
+    import ydnu02.pgn_decoder
+except ImportError:
+    if 'ydnu02' not in sys.modules:
+        _mock_module('ydnu02',
+                     YDNU02Controller=MagicMock,
+                     N2KPGNDecoder=MagicMock)
+        _mock_module('ydnu02.pgn_decoder',
+                     N2KPGNDecoder=MagicMock)
 
 # sensors — sensor drivers (Gobius C, Mopeka)
-if 'sensors' not in sys.modules:
-    _mock_module('sensors', GobiusCSensor=MagicMock)
-    _mock_module('sensors.base_sensor')
-    _mock_module('sensors.gobius_sensor')
-    _mock_module('sensors.mopeka_sensor')
+try:
+    import sensors
+    import sensors.base_sensor
+    import sensors.gobius_sensor
+    import sensors.mopeka_sensor
+except ImportError:
+    if 'sensors' not in sys.modules:
+        _mock_module('sensors', GobiusCSensor=MagicMock)
+        _mock_module('sensors.base_sensor')
+        _mock_module('sensors.gobius_sensor')
+        _mock_module('sensors.mopeka_sensor')
 
 
 # ===========================================================================
@@ -149,6 +161,10 @@ def _load_proxy_module(ctrl_port: int = 0) -> types.ModuleType:
     spec.loader.exec_module(mod)
     # Override constants AFTER exec_module (exec sets the defaults from env)
     mod.SERIAL_PORT  = '/dev/null'
+    if hasattr(mod, '_ctrl_handler'):
+        mod._ctrl_handler.serial_port = '/dev/null'
+    if hasattr(mod, '_ctrl_serial_reader_worker'):
+        mod._ctrl_serial_reader_worker.serial_port = '/dev/null'
     mod.TCP_PORT     = 0           # DATA port not needed in ctrl-only tests
     mod.CTRL_PORT    = ctrl_port
     mod.clients      = set()
@@ -627,24 +643,34 @@ class TestDeviceManagerService(unittest.TestCase):
         self.stop      = _start_ctrl_server(self.mod, self.ctrl_port, self.fake_ser)
 
         import device_manager as dm
+        import device_manager.operation_runner as dm_ops
+        import device_manager.tcp_connection as dm_tcp
+
         _port = self.ctrl_port
-        _orig_cls = dm.ProxyControlClient
+        _orig_cls = dm_tcp.ProxyControlClient
 
         class _TestPCC(_orig_cls):
             """
             ProxyControlClient subclass that always connects to the test ctrl server.
-            Replaces dm.ProxyControlClient for the duration of the test so that
+            Replaces ProxyControlClient for the duration of the test so that
             _raw_locked_operation's `pcc = ProxyControlClient()` uses our port.
             """
             def __init__(self_):          # noqa: N805
                 super().__init__(port=_port)
 
         self._orig_pcc_cls = _orig_cls
-        dm.ProxyControlClient = _TestPCC  # patch the class in the module
+        dm.ProxyControlClient = _TestPCC
+        dm_ops.ProxyControlClient = _TestPCC
+        dm_tcp.ProxyControlClient = _TestPCC
 
     def tearDown(self):
         import device_manager as dm
-        dm.ProxyControlClient = self._orig_pcc_cls  # restore original class
+        import device_manager.operation_runner as dm_ops
+        import device_manager.tcp_connection as dm_tcp
+
+        dm.ProxyControlClient = self._orig_pcc_cls
+        dm_ops.ProxyControlClient = self._orig_pcc_cls
+        dm_tcp.ProxyControlClient = self._orig_pcc_cls
         self.stop.set()
         self.mod.service_mode.clear()
         with self.mod.service_conn_lock:

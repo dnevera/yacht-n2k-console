@@ -1,0 +1,129 @@
+"""Tracks N2K device state and sensor readings from live bus traffic.
+
+Maintains per-SA device info (ISO Claims, Product Info) and per-instance
+sensor readings (fluid levels, temperatures).
+"""
+
+import threading
+from typing import Dict, Any, Optional
+from ydnu02 import N2KPGNDecoder
+from sensors import GobiusCSensor
+
+
+class SensorRegistry:
+    """Thread-safe sensor state and N2K bus device tracker.
+
+    PGN dispatch:
+      60928  → ISO Address Claim → device identity cache
+      126996 → Product Information → device model/version (fast-packet reassembly)
+      127505 → Fluid Level → GobiusCSensor update
+
+    Locking:
+        Receives external lock reference (owned by DeviceManager facade).
+    """
+
+    def __init__(self, lock: Optional[threading.Lock] = None):
+        self._lock = lock or threading.Lock()
+        self.sensors: Dict[int, GobiusCSensor] = {}
+        self.discovered_bus_devices: Dict[int, Dict[str, Any]] = {}
+
+    def update(self, parsed: Dict[str, Any]) -> None:
+        """Process a decoded NMEA frame and update internal state.
+
+        Called from _bus_worker inner loop on every valid frame.
+        """
+        info = parsed.get("info", {})
+        pgn = info.get("pgn")
+        src = info.get("src")
+        data = parsed.get("data", b"")
+
+        with self._lock:
+            # ── Track all CAN-bus devices by source address ───────────────────
+            if src is not None:
+                if src not in self.discovered_bus_devices:
+                    self.discovered_bus_devices[src] = {
+                        "src": src,
+                        "manufacturer": "",   # filled by ISO Claim (PGN 60928)
+                        "model": "",          # filled by Product Info (PGN 126996)
+                        "serial": "",         # filled by Product Info
+                        "firmware": "",       # filled by Product Info
+                        "device_class": "",
+                        "function_name": "",
+                        "device_class_name": "",
+                        "active_pgns": [],
+                    }
+                if pgn and pgn not in self.discovered_bus_devices[src]["active_pgns"]:
+                    self.discovered_bus_devices[src]["active_pgns"].append(pgn)
+
+                # ── PGN 60928 (Address Claim) — single-frame, parse directly ──
+                if pgn == 60928:
+                    dev_info = N2KPGNDecoder.parse_device_info(parsed)
+                    if dev_info:
+                        dev = self.discovered_bus_devices[src]
+                        for key in ("manufacturer", "function_name", "device_class_name",
+                                    "model_version", "unique_id"):
+                            if key in dev_info:
+                                dev[key] = dev_info[key]
+                        if "device_class" in dev_info:
+                            dev["device_class"] = dev_info.get("device_class_name",
+                                                               str(dev_info["device_class"]))
+
+                # ── All frames → library decoder (handles fast-packet reassembly) ──
+                lib_msg = N2KPGNDecoder.feed_to_lib(parsed)
+                if lib_msg is not None and lib_msg.PGN == 126996:
+                    fields = {f.id: f for f in lib_msg.fields}
+                    dev = self.discovered_bus_devices.get(lib_msg.source)
+                    if dev is None and lib_msg.source is not None:
+                        dev = self.discovered_bus_devices.setdefault(
+                            lib_msg.source, {"src": lib_msg.source}
+                        )
+                    if dev is not None:
+                        for field_id, attr in (
+                            ("modelId",            "model"),
+                            ("softwareVersionCode", "firmware"),
+                            ("modelSerialCode",     "serial"),
+                            ("modelVersion",        "model_version"),
+                        ):
+                            fld = fields.get(field_id)
+                            if fld and fld.value:
+                                dev[attr] = str(fld.value).strip()
+
+            # ── PGN 127505: Fluid Level ───────────────────────────────────────
+            if pgn == 127505 and len(data) >= 5:
+                instance  = data[0] & 0x0F
+                type_code = (data[0] >> 4) & 0x0F
+                raw_level = data[1] | (data[2] << 8)
+                level_pct = round(raw_level * 0.004, 1) if raw_level <= 25000 else None
+
+                capacity_l = None
+                if len(data) >= 7:
+                    raw_cap = int.from_bytes(data[3:7], 'little')
+                    if raw_cap != 0xFFFFFFFF:
+                        capacity_l = round(raw_cap * 0.1, 1)
+
+                if instance not in self.sensors:
+                    self.sensors[instance] = GobiusCSensor(instance=instance,
+                                                           name=f"Tank {instance}")
+
+                self.sensors[instance].update_from_nmea127505({
+                    "instance":   instance,
+                    "type_code":  type_code,
+                    "level_pct":  level_pct,
+                    "capacity_l": capacity_l,
+                    "src":        src,
+                })
+
+    def get_sensors_state(self) -> Dict[str, Any]:
+        """Non-blocking snapshot of all known sensors (thread-safe)."""
+        with self._lock:
+            fluid_levels = [sensor.to_dict() for sensor in self.sensors.values()]
+        return {
+            "status": "ok",
+            "fluid_levels": fluid_levels,
+            "count": len(fluid_levels)
+        }
+
+    def get_bus_devices(self) -> Dict[int, Dict[str, Any]]:
+        """Return cached bus device info keyed by Source Address."""
+        with self._lock:
+            return dict(self.discovered_bus_devices)

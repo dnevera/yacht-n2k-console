@@ -66,6 +66,11 @@ mkdir -p "${BUILD_DIR}/app/sensors" \
 cp "${LOCAL_DIR}/setup_gateway.sh" "${BUILD_DIR}/setup.sh"
 chmod +x "${BUILD_DIR}/setup.sh"
 
+# Python packages
+cp -r "${LOCAL_DIR}/device_manager" "${BUILD_DIR}/app/" 2>/dev/null || true
+cp -r "${LOCAL_DIR}/ydnu02_tcp_gateway" "${BUILD_DIR}/app/" 2>/dev/null || true
+cp -r "${LOCAL_DIR}/ydnu02" "${BUILD_DIR}/app/" 2>/dev/null || true
+
 # Python sources
 for f in ydnu02.py app.py device_manager.py models.py \
          gobius_parsers.py mopeka_parsers.py mopeka_scanner.py \

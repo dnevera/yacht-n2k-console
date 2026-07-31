@@ -1,12 +1,13 @@
-"""Protocol audit: test all PGN 126208 variants against Gobius C (SRC 92)"""
-import serial, time
+import os
+import serial
+import time
+try:
+    import pytest
+except ImportError:
+    pytest = None
 
-port = "/dev/ttyACM0"
-ser = serial.Serial(port, timeout=0.5)
-time.sleep(0.3)
-while ser.in_waiting:
-    ser.read(ser.in_waiting)
-    time.sleep(0.1)
+if pytest is not None:
+    pytestmark = pytest.mark.skipif(not os.path.exists("/dev/ttyACM0"), reason="Hardware device /dev/ttyACM0 not present")
 
 SEP = "=" * 60
 
@@ -24,7 +25,7 @@ def parse_can_id(hex_str):
         dst = 255
     return {"priority": priority, "pf": pf, "pgn": pgn, "src": src, "dst": dst}
 
-def send_and_listen(name, frame, listen_sec=3.0, filter_src=None):
+def send_and_listen(ser, name, frame, listen_sec=3.0, filter_src=None):
     while ser.in_waiting:
         ser.read(ser.in_waiting)
     print(f"\n{SEP}")
@@ -65,53 +66,48 @@ def send_and_listen(name, frame, listen_sec=3.0, filter_src=None):
         print(f"  (no response from SRC {filter_src} in {listen_sec}s)")
     return replies
 
-# TEST 1: Address Claim — SHOULD work
-send_and_listen("ISO Request -> Address Claim (60928)", "18EAFF10 00 EE 00", 3, 92)
+def main():
+    port = "/dev/ttyACM0"
+    ser = serial.Serial(port, timeout=0.5)
+    time.sleep(0.3)
+    while ser.in_waiting:
+        ser.read(ser.in_waiting)
+        time.sleep(0.1)
 
-# TEST 2: Product Info — SHOULD work
-send_and_listen("ISO Request -> Product Info (126996)", "18EAFF10 14 F0 01", 3, 92)
+    send_and_listen(ser, "ISO Request -> Address Claim (60928)", "18EAFF10 00 EE 00", 3, 92)
+    send_and_listen(ser, "ISO Request -> Product Info (126996)", "18EAFF10 14 F0 01", 3, 92)
+    send_and_listen(ser, "ISO Request -> PGN List (126464)", "18EAFF10 C0 EE 01", 3, 92)
+    send_and_listen(ser, "126208 Command FC=1 (correct)", "18ED5C10 01 11 F2 01 08 02 01 00 02 01", 3, 92)
+    send_and_listen(ser, "126208 Command FC=0 (legacy bug)", "18ED5C10 00 11 F2 01 08 02 01 00 02 01", 3, 92)
+    send_and_listen(ser, "126208 Read Fields FC=3", "0CED5C10 03 11 F2 01 FF FF FF 00 FF", 3, 92)
+    send_and_listen(ser, "126208 Write Fields FC=5", "0CED5C10 05 11 F2 01 FF FF FF 00 02 01 00 02 01", 3, 92)
+    send_and_listen(ser, "126208 Request Group FC=0", "0CED5C10 00 11 F2 01 FF FF FF FF", 3, 92)
 
-# TEST 3: PGN List
-send_and_listen("ISO Request -> PGN List (126464)", "18EAFF10 C0 EE 01", 3, 92)
+    print(f"\n{SEP}")
+    print("REFERENCE: Gobius PGN 127505 broadcast decode")
+    t0 = time.time()
+    while time.time() - t0 < 5.0:
+        line = ser.readline().decode("ascii", errors="ignore").strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 4 or parts[1] != "R":
+            continue
+        ri = parse_can_id(parts[2])
+        if ri["src"] == 92 and ri["pgn"] == 127505:
+            db = [int(x, 16) for x in parts[3:]]
+            instance = db[0] & 0x0F
+            fluid_type = (db[0] >> 4) & 0x0F
+            raw_level = db[1] | (db[2] << 8)
+            level_pct = round(raw_level * 0.004, 1)
+            raw_cap = int.from_bytes(bytes(db[3:7]), "little")
+            cap_l = round(raw_cap * 0.1, 1) if raw_cap != 0xFFFFFFFF else None
+            print(f"  Raw bytes: {' '.join(parts[3:])}")
+            print(f"  Instance={instance} FluidType={fluid_type} Level={level_pct}% Capacity={cap_l}L")
+            break
 
-# TEST 4: Command FC=1 (correct NMEA standard)
-send_and_listen("126208 Command FC=1 (correct)", "18ED5C10 01 11 F2 01 08 02 01 00 02 01", 3, 92)
+    ser.close()
+    print("\nDone.")
 
-# TEST 5: Command FC=0 (legacy bug in n2k_command_builder.py)
-send_and_listen("126208 Command FC=0 (legacy bug)", "18ED5C10 00 11 F2 01 08 02 01 00 02 01", 3, 92)
-
-# TEST 6: Read Fields FC=3
-send_and_listen("126208 Read Fields FC=3", "0CED5C10 03 11 F2 01 FF FF FF 00 FF", 3, 92)
-
-# TEST 7: Write Fields FC=5
-send_and_listen("126208 Write Fields FC=5", "0CED5C10 05 11 F2 01 FF FF FF 00 02 01 00 02 01", 3, 92)
-
-# TEST 8: Request Group FC=0 (some devices)
-send_and_listen("126208 Request Group FC=0", "0CED5C10 00 11 F2 01 FF FF FF FF", 3, 92)
-
-# Decode regular Gobius broadcast
-print(f"\n{SEP}")
-print("REFERENCE: Gobius PGN 127505 broadcast decode")
-t0 = time.time()
-while time.time() - t0 < 5.0:
-    line = ser.readline().decode("ascii", errors="ignore").strip()
-    if not line:
-        continue
-    parts = line.split()
-    if len(parts) < 4 or parts[1] != "R":
-        continue
-    ri = parse_can_id(parts[2])
-    if ri["src"] == 92 and ri["pgn"] == 127505:
-        db = [int(x, 16) for x in parts[3:]]
-        instance = db[0] & 0x0F
-        fluid_type = (db[0] >> 4) & 0x0F
-        raw_level = db[1] | (db[2] << 8)
-        level_pct = round(raw_level * 0.004, 1)
-        raw_cap = int.from_bytes(bytes(db[3:7]), "little")
-        cap_l = round(raw_cap * 0.1, 1) if raw_cap != 0xFFFFFFFF else None
-        print(f"  Raw bytes: {' '.join(parts[3:])}")
-        print(f"  Instance={instance} FluidType={fluid_type} Level={level_pct}% Capacity={cap_l}L")
-        break
-
-ser.close()
-print("\nDone.")
+if __name__ == "__main__":
+    main()

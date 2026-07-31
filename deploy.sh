@@ -183,7 +183,8 @@ pre_deploy_diff() {
     ${SSH} ${HOST} "
         printf '  %-30s %s\n' '${PROXY_SERVICE}' \"\$(systemctl is-active ${PROXY_SERVICE} 2>/dev/null || echo 'not installed')\"
         printf '  %-30s %s\n' '${WEB_SERVICE}' \"\$(systemctl is-active ${WEB_SERVICE} 2>/dev/null || echo 'not installed')\"
-        printf '  %-30s %s\n' 'TCP :${DATA_PORT}' \"\$(ss -tnp 2>/dev/null | grep -c ':${DATA_PORT}') connections\"
+        printf '  %-30s %s\n' 'TCP :${DATA_PORT} (DATA)' \"\$(ss -tnp 2>/dev/null | grep -c ':${DATA_PORT}') connections\"
+        printf '  %-30s %s\n' 'TCP :${CTRL_PORT} (CTRL)' \"\$(ss -tnp 2>/dev/null | grep -c ':${CTRL_PORT}') connections\"
     " 2>/dev/null || warn "Cannot reach ${HOST}"
 
     # 2. Per-file diff
@@ -224,8 +225,11 @@ pre_deploy_diff() {
     echo ""
 }
 
-# Check for --no-diff flag
+# Check for --no-diff flag or NO_DIFF env var
 SKIP_DIFF=false
+if [[ "${NO_DIFF:-0}" == "1" ]] || [[ "${SKIP_DIFF:-false}" == "true" ]]; then
+    SKIP_DIFF=true
+fi
 for arg in "$@"; do
     [[ "$arg" == "--no-diff" ]] && SKIP_DIFF=true
 done
@@ -277,20 +281,17 @@ ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}"
 if $DEPLOY_PROXY; then
     section "ydnu02-tcp-gateway"
     log "Uploading ydnu02_tcp_gateway.py + ydnu02_gateway_device.py to ${HOST}:${REMOTE_DIR}"
-    ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02_tcp_gateway.py"   "${HOST}:${REMOTE_DIR}/ydnu02_tcp_gateway.py"
-    ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02_gateway_device.py" "${HOST}:${REMOTE_DIR}/ydnu02_gateway_device.py"
+    # Clean up stale legacy root file that conflicts with ydnu02_tcp_gateway package
+    ${SSH} ${HOST} "rm -f ${REMOTE_DIR}/ydnu02_tcp_gateway.py"
+
+    # Ensure remote package directories exist
+    ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}/ydnu02_tcp_gateway ${REMOTE_DIR}/ydnu02 ${REMOTE_DIR}/device_manager"
+
+    # Upload gateway package files
+    ${SCP} -r "${LOCAL_DIR}/ydnu02_tcp_gateway/"* "${HOST}:${REMOTE_DIR}/ydnu02_tcp_gateway/"
+    ${SCP} -r "${LOCAL_DIR}/ydnu02/"*             "${HOST}:${REMOTE_DIR}/ydnu02/"
+    ${SCP} -r "${LOCAL_DIR}/device_manager/"*      "${HOST}:${REMOTE_DIR}/device_manager/"
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02-tcp-gateway.service" "${HOST}:/tmp/ydnu02-tcp-gateway.service"
-
-    # Note: py files uploaded via scp are user-owned. If the file was previously
-    # created by "sudo cp" it becomes root-owned and next scp fails. Auto-fix:
-    ${SSH} ${HOST} "sudo chown \$(whoami):\$(whoami) ${REMOTE_DIR}/ydnu02_tcp_gateway.py ${REMOTE_DIR}/ydnu02_gateway_device.py 2>/dev/null || true"
-
-    # Create ydnu02_tcp_gateway/ subdir with symlinks for test compatibility.
-    # Tests import via ydnu02_tcp_gateway/ydnu02_tcp_gateway.py but deploy
-    # copies files flat into REMOTE_DIR.
-    ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}/ydnu02_tcp_gateway && \
-        ln -sf ${REMOTE_DIR}/ydnu02_tcp_gateway.py ${REMOTE_DIR}/ydnu02_tcp_gateway/ydnu02_tcp_gateway.py && \
-        ln -sf ${REMOTE_DIR}/ydnu02_gateway_device.py ${REMOTE_DIR}/ydnu02_tcp_gateway/ydnu02_gateway_device.py"
 
     log "Installing ydnu02-tcp-gateway service..."
     ${SSH} ${HOST} "sudo mv /tmp/ydnu02-tcp-gateway.service /etc/systemd/system/${PROXY_SERVICE}.service \
@@ -450,8 +451,8 @@ run_post_deploy_tests() {
         test_modules+=" ${mod}"
     done
 
-    log "Running: python3 -m unittest${test_modules}"
-    if ${SSH} ${HOST} "cd ${REMOTE_DIR} && python3 -m unittest ${test_modules} 2>&1"; then
+    log "Running: python3 -m unittest -v${test_modules}"
+    if ${SSH} ${HOST} "cd ${REMOTE_DIR} && python3 -m unittest -v ${test_modules} 2>&1"; then
         log "Tests: ALL PASSED ✓"
     else
         warn "Tests: SOME FAILED ✗ (see output above)"

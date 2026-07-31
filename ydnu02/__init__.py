@@ -1,5 +1,7 @@
-#!/usr/bin/env python3
-"""Backward-compatibility wrapper for ydnu02 package."""
+"""ydnu02 package.
+
+Yacht Devices YDNU-02 NMEA 2000 USB Gateway Controller & Monitor.
+"""
 
 import sys
 import types
@@ -21,5 +23,10 @@ class _Ydnu02Module(types.ModuleType):
 
 sys.modules[__name__].__class__ = _Ydnu02Module
 
-if __name__ == "__main__":
-    main()
+__all__ = [
+    "N2KPGNDecoder",
+    "YDNU02Controller",
+    "_HAS_N2K_LIB",
+    "build_parser",
+    "main",
+]

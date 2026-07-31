@@ -1,8 +1,21 @@
-"""Read Gobius C BLE N2K config, then write fluid_type=1 (Water), then verify NMEA"""
+import os
 import asyncio
 import serial
 import time
-from bleak import BleakClient, BleakScanner
+try:
+    import pytest
+except ImportError:
+    pytest = None
+
+try:
+    from bleak import BleakClient, BleakScanner
+    has_bleak = True
+except ImportError:
+    has_bleak = False
+
+has_hw = os.path.exists("/dev/ttyACM0")
+if pytest is not None:
+    pytestmark = pytest.mark.skipif(not (has_bleak and has_hw), reason="Requires bleak library and /dev/ttyACM0 hardware")
 
 GOBIUS_MAC = "2C:A7:74:21:56:D8"
 UUID_N2K_CONFIG = "0000fff2-0000-1000-8000-00805f9b34fb"
@@ -146,4 +159,5 @@ async def main():
     print(f"  BLE 0xFFF2 fluid_type AFTER:  {updated['type']} ({FLUID_TYPES.get(updated['type'], '?')})")
     print(f"  Check NMEA PGN 127505 above: did byte[0] upper nibble change from 0 to 1?")
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

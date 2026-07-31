@@ -476,9 +476,11 @@ class TestISORequestBroadcast(unittest.TestCase):
         mock_ser = self._setup_serial()
         self.mod.clients = set()
         self.mod._send_iso_request()
-        mock_ser.write.assert_called_once()
-        frame = mock_ser.write.call_args[0][0]
-        self.assertIn(b'18EAFFFE', frame)
+        self.assertEqual(mock_ser.write.call_count, 2)
+        frame1 = mock_ser.write.call_args_list[0][0][0]
+        frame2 = mock_ser.write.call_args_list[1][0][0]
+        self.assertIn(b'18EAFFFE', frame1)
+        self.assertIn(b'18EAFFFE', frame2)
 
     def test_broadcasts_to_tcp_clients(self):
         """ISO Request must also be broadcast to TCP clients (for virtual N2KDevice)."""
@@ -505,7 +507,7 @@ class TestISORequestBroadcast(unittest.TestCase):
         self.mod._send_iso_request()
         self.mod._send_iso_request()  # should be rate-limited
         self.mod._send_iso_request()
-        self.assertEqual(mock_ser.write.call_count, 1, 'Must be rate-limited to 1 write')
+        self.assertEqual(mock_ser.write.call_count, 2, 'Must be rate-limited to 1 request set (2 writes)')
 
     def test_no_write_when_serial_not_ready(self):
         mock_ser = self._setup_serial()
