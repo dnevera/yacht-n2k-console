@@ -44,7 +44,12 @@ import socket
 import threading
 import serial
 from typing import Set, Tuple, Optional, Callable, Dict, Any
-from ydnu02_tcp_gateway.device_contract import N2KDeviceRegistry, N2KDeviceInfo
+from ydnu02_tcp_gateway.device_contract import (
+    N2KDeviceRegistry,
+    N2KDeviceInfo,
+    DEFAULT_PHYSICAL_DEVICE,
+    DEFAULT_VIRTUAL_DEVICE,
+)
 from ydnu02_tcp_gateway.frame_utils import NMEA_LINE_RE, TX_LINE_RE, fmt_frame, get_pgn_sa
 
 _ISO_REQUEST_MIN_INTERVAL = 5.0
@@ -91,32 +96,8 @@ class DataHub:
 
         # Unified N2K Device Registry: tracks physical + virtual devices
         self.device_registry = N2KDeviceRegistry()
-        # Pre-register physical YDNU-02 USB Gateway (SA=64)
-        self.device_registry.register_device(N2KDeviceInfo(
-            sa=64,
-            unique_id=402047,
-            mfg_code=717,
-            device_class=25,
-            device_function=130,
-            industry_group=4,
-            model_id="YDNU-02",
-            software_version="1.75 07/08/2025",
-            model_serial="00402047",
-            model_version="NMEA 2000 USB Gateway",
-        ))
-        # Pre-register virtual TCP Gateway (SA=200) so announce_all_devices() immediately includes it
-        self.device_registry.register_device(N2KDeviceInfo(
-            sa=200,
-            unique_id=902047,
-            mfg_code=2047,
-            device_class=25,
-            device_function=130,
-            industry_group=4,
-            model_id="YDNU-02 TCP-GW",
-            software_version="0.2.0",
-            model_serial="SW-GW-00902047",
-            model_version="yacht-n2k-console",
-        ))
+        self.device_registry.register_device(DEFAULT_PHYSICAL_DEVICE)
+        self.device_registry.register_device(DEFAULT_VIRTUAL_DEVICE)
 
     @property
     def clients(self) -> Set[socket.socket]:

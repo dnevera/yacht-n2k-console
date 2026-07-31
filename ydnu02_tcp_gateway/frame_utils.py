@@ -21,6 +21,17 @@ TX_LINE_RE = re.compile(
 )
 
 
+def normalize_frame(line: bytes) -> bytes:
+    """Normalize a YDNU-02 ASCII line into canonical RX (R-frame) format.
+
+    Replaces outgoing ' T ' flags with ' R ' so nmea2000 decoders process them correctly,
+    and strips trailing carriage returns while guaranteeing a single '\n' terminator.
+    """
+    if b" T " in line:
+        line = line.replace(b" T ", b" R ", 1)
+    return line.rstrip(b"\r\n") + b"\n"
+
+
 def fmt_frame(can_id_hex: str, data: bytes) -> bytes:
     """Format raw CAN data as a YDNU-02 ASCII RX-format text line.
 

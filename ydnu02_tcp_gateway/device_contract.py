@@ -63,6 +63,33 @@ class N2KDeviceInfo:
         return bool(self.model_id.strip() and self.model_serial.strip())
 
 
+DEFAULT_PHYSICAL_DEVICE = N2KDeviceInfo(
+    sa=64,
+    unique_id=402047,
+    mfg_code=717,
+    device_class=25,
+    device_function=130,
+    industry_group=4,
+    model_id="YDNU-02",
+    software_version="1.75 07/08/2025",
+    model_serial="00402047",
+    model_version="NMEA 2000 USB Gateway",
+)
+
+DEFAULT_VIRTUAL_DEVICE = N2KDeviceInfo(
+    sa=200,
+    unique_id=902047,
+    mfg_code=2047,
+    device_class=25,
+    device_function=130,
+    industry_group=4,
+    model_id="YDNU-02 TCP-GW",
+    software_version="0.2.0",
+    model_serial="SW-GW-00902047",
+    model_version="yacht-n2k-console",
+)
+
+
 class N2KDeviceEncoder:
     """Encodes N2KDeviceInfo into canonical CAN_FRAME_ASCII byte lines.
 
@@ -121,6 +148,9 @@ class N2KDeviceEncoder:
             return []
 
 
+from ydnu02_tcp_gateway.frame_utils import normalize_frame
+
+
 class N2KDeviceRegistry:
     """Thread-safe registry tracking all active N2K devices on the network."""
 
@@ -132,10 +162,8 @@ class N2KDeviceRegistry:
     def update_from_frame(self, line: bytes) -> Optional[int]:
         """Decode a broadcast R-frame line and update device registry."""
         try:
-            # Normalize T-frames to R-frames for NMEA2000Decoder compatibility
-            if b" T " in line:
-                line = line.replace(b" T ", b" R ", 1)
-            text = line.decode("ascii", errors="ignore").rstrip()
+            norm = normalize_frame(line)
+            text = norm.decode("ascii", errors="ignore").rstrip()
             msg = self._decoder.decode(text)
         except Exception:
             return None
