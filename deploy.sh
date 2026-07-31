@@ -51,14 +51,23 @@
 #   The .service unit goes via /tmp → sudo mv (only systemd dir needs root).
 #   NEVER use "sudo cp + sudo chown" for py files — scp ownership is correct.
 #
-# HA AUTO-RECONNECT (spin-loop bug fixed, patch applied by this script)
-#   Bug in nmea2000 lib TextNmea2000Gateway._receive_impl(): readline() returns
-#   b"" on EOF but had no check → silent return → 100% CPU spin-loop.
-#   Fix in patches/nmea2000_ioclient.py — applied to HA container on every
-#   proxy deploy. Path discovered dynamically (survives Python version bumps).
-#   HA is restarted to reload the module, then auto-reconnects within ~10s.
-#   If HA image is updated: run ./deploy.sh --patch-ha to re-apply.
-#   Remove patch when: nmea2000 package > 2026.5.2 has the fix included.
+# HA PATCHES (idempotent — safe to run multiple times)
+#
+#   Patch 1: patches/nmea2000_ioclient.py → nmea2000/ioclient.py
+#     Fix: TextNmea2000Gateway readline() EOF → ConnectionError (not silent return → 100% CPU)
+#     Upstream PR merged: github.com/tomer-w/nmea2000 (PR #61)
+#     Idempotency: MD5 checksum comparison before copy — skipped if identical.
+#
+#   Patch 2: scripts/patch_ha_nmea2000_message.py → nmea2000/message.py
+#     Fix: primary_key = f"{self.id}" caused hash collision for PGN 126996 — all devices
+#     shared MD5 818d9516db08fd90ffd1967e3c403bed → second device got 0 HA entities.
+#     Fix: include source_iso_name.name (64-bit ISO NAME) in primary_key.
+#     Upstream PR pending: github.com/dnevera/nmea2000/tree/fix/pgn-126996-hash-collision-per-source
+#     Idempotency: marker "yacht-n2k-console-patch-v1" checked before applying.
+#
+#   HA is restarted ONLY if at least one patch was actually applied (changed).
+#   If HA image is updated: run ./deploy.sh --patch-ha to re-apply both patches.
+#   Remove each patch when: nmea2000 package has the fix included upstream.
 #
 # SERVICE START ORDER
 #   ydnu02-tcp-gateway  →  ydnu02-web  →  homeassistant (docker)
@@ -264,31 +273,66 @@ fi
 #
 patch_ha() {
     section "HA patches"
+    local ha_changed=false  # track if any patch was actually applied → need HA restart
 
     # ── Patch 1: nmea2000 ioclient EOF spin-loop fix ──────────────────────────
-    # Discover exact path inside container (survives Python version bumps)
+    # Discover exact path inside container (survives Python version bumps).
+    # Same dynamic discovery pattern used for Patch 2 below.
     local ioclient_path
     ioclient_path=$(${SSH} ${HOST} \
         "sudo docker exec ${HA_CONTAINER} python3 -c \
         'import nmea2000.ioclient as m; print(m.__file__)'" 2>/dev/null) \
-        || { warn "Cannot find nmea2000.ioclient in HA container — skipping patch"; return 1; }
+        || { warn "Cannot find nmea2000.ioclient in HA container — skipping Patch 1"; ioclient_path=""; }
 
-    log "Patching ${ioclient_path}"
-    ${SCP} "${PATCH_DIR}/nmea2000_ioclient.py" "${HOST}:/tmp/nmea2000_ioclient.py"
-    ${SSH} ${HOST} "sudo docker cp /tmp/nmea2000_ioclient.py \
-        ${HA_CONTAINER}:${ioclient_path}"
-    # ── Patch 2: custom_components/nmea2000 NMEA2000Sensor DeviceInfo Product Info fix ─
-    if [[ -f "${PATCH_DIR}/ha_nmea2000_sensor.py" ]]; then
-        log "Patching /config/custom_components/nmea2000/NMEA2000Sensor.py in HA container..."
-        ${SCP} "${PATCH_DIR}/ha_nmea2000_sensor.py" "${HOST}:/tmp/ha_nmea2000_sensor.py"
-        ${SSH} ${HOST} "sudo docker cp /tmp/ha_nmea2000_sensor.py ${HA_CONTAINER}:/config/custom_components/nmea2000/NMEA2000Sensor.py"
-        log "Patch 2 (NMEA2000Sensor Product Info) applied ✓"
+    if [[ -n "$ioclient_path" ]]; then
+        # IDEMPOTENCY: compare MD5 checksums before overwriting
+        local local_md5 remote_md5
+        local_md5=$(md5 -q "${PATCH_DIR}/nmea2000_ioclient.py" 2>/dev/null \
+                    || md5sum "${PATCH_DIR}/nmea2000_ioclient.py" | cut -d' ' -f1)
+        remote_md5=$(${SSH} ${HOST} \
+            "sudo docker exec ${HA_CONTAINER} md5sum '${ioclient_path}' 2>/dev/null \
+             | cut -d' ' -f1") || remote_md5=""
+
+        if [[ "$local_md5" == "$remote_md5" ]]; then
+            log "Patch 1 (ioclient EOF fix): already up to date — skipping"
+        else
+            log "Patch 1 (ioclient EOF fix): applying → ${ioclient_path}"
+            ${SCP} "${PATCH_DIR}/nmea2000_ioclient.py" "${HOST}:/tmp/nmea2000_ioclient.py"
+            ${SSH} ${HOST} "sudo docker cp /tmp/nmea2000_ioclient.py \
+                ${HA_CONTAINER}:${ioclient_path}"
+            log "Patch 1 (ioclient EOF fix): applied ✓"
+            ha_changed=true
+        fi
     fi
 
-    log "Restarting HA to reload patched modules..."
-    ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
-    log "HA restarted ✓  (auto-reconnects to :4001 within ~10s)"
+    # ── Patch 2: nmea2000 message.py PGN 126996 hash collision fix ────────────
+    # Script is idempotent — checks for marker "yacht-n2k-console-patch-v1" before applying.
+    # Reports "Already applied" if marker found, "SUCCESS" if newly applied.
+    # Dynamic path discovery is done inside the script itself (survives Python version bumps).
+    log "Patch 2 (message.py hash collision fix): checking..."
+    ${SCP} "${SCRIPT_DIR}/scripts/patch_ha_nmea2000_message.py" \
+        "${HOST}:/tmp/patch_ha_nmea2000_message.py"
+    ${SSH} ${HOST} "sudo docker cp /tmp/patch_ha_nmea2000_message.py \
+        ${HA_CONTAINER}:/tmp/patch_ha_nmea2000_message.py"
+
+    local patch2_out
+    patch2_out=$(${SSH} ${HOST} \
+        "sudo docker exec ${HA_CONTAINER} python3 /tmp/patch_ha_nmea2000_message.py")
+    log "Patch 2: ${patch2_out}"
+    if echo "$patch2_out" | grep -q "SUCCESS"; then
+        ha_changed=true
+    fi
+
+    # ── Restart HA only if something actually changed ─────────────────────────
+    if $ha_changed; then
+        log "Patches changed — restarting HA to reload modules..."
+        ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
+        log "HA restarted ✓  (auto-reconnects to :4001 within ~10s)"
+    else
+        log "All patches already up to date — HA restart skipped ✓"
+    fi
 }
+
 
 ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}"
 

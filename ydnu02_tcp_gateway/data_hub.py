@@ -9,13 +9,54 @@ PURPOSE
 ONBOARDING PROTOCOL & DUAL DEVICE GUARANTEE
   1. Pre-registered Devices: `DEFAULT_PHYSICAL_DEVICE` (SA=64, Unique ID=402047) and
      `DEFAULT_VIRTUAL_DEVICE` (SA=200, Unique ID=902047) are pre-registered in `self.device_registry`.
-  2. Instant Client Announcement: As soon as a TCP client (such as Home Assistant) connects to :4001,
-     `DataHub.handle_client()` immediately invokes `self.send_iso_request()`, which calls
-     `announce_all_devices()`.
-  3. Frame Formatting: `announce_all_devices()` broadcasts PGN 60928 (ISO Claim) and PGN 126996
-     (Product Info) for BOTH devices with the required `00:00:00.000 R ` prefix.
-  4. Physical Bus Request: Simultaneously, PGN 59904 (ISO Request) is sent to the physical serial bus
-     to prompt any real hardware on the N2K bus to refresh its state.
+  2. Two-Phase Announcement (CRITICAL):
+     When a TCP client (e.g. Home Assistant) connects, the onboarding MUST happen in two phases:
+
+       Phase 1 — Immediately on connect:
+         Broadcast PGN 60928 (ISO Address Claim) for ALL devices.
+         The nmea2000 decoder on the HA side processes PGN 60928 and populates
+         its internal `source_to_iso_name` map: {64: IsoName(402047, ...), 200: IsoName(902047, ...)}.
+
+       Phase 2 — After ANNOUNCE_PRODUCT_INFO_DELAY seconds:
+         Broadcast PGN 126996 (Product Information) for ALL devices.
+         By this time source_to_iso_name is already built, so the decoder sets
+         `message.source_iso_name` correctly for each SA.
+         This allows `message.hash` (which uses source_iso_name in primary_key) to be
+         UNIQUE per device — no hash collision in Home Assistant device registry.
+
+     WHY THE DELAY IS REQUIRED:
+       From nmea2000/decoder.py lines 338-346 (build_network_map=True mode):
+         source_iso_name = self.source_to_iso_name.get(source_id, None)
+         if source_iso_name is None and self.build_network_map:
+             return None  # ← DROPS the PGN 126996 silently!
+       Without the delay, PGN 60928 and PGN 126996 arrive simultaneously in the same
+       TCP buffer flush, and the decoder processes PGN 126996 before source_to_iso_name
+       is populated — causing BOTH devices to get message.source_iso_name=None and
+       identical message.hash='818d9516db08fd90ffd1967e3c403bed'. The second device
+       ends up with 0 entities in HA ("This device has no entities").
+
+  3. Frame Formatting: All announcement frames are broadcast with `00:00:00.000 R ` prefix.
+  4. Physical Bus Request: PGN 59904 (ISO Request) is also sent to the physical serial bus
+     to prompt real hardware on the N2K bus to refresh its state.
+
+HA REGISTRY STABILITY & unique_number
+  The HA nmea2000 integration keys each device by message.hash, which is an MD5 of
+  primary_key. Our fork of nmea2000/message.py uses `source_iso_name.unique_number`
+  (21-bit, manufacturer-assigned per NMEA 2000 §3.1.1) in the primary_key:
+
+      primary_key = f"{self.id}_{source_iso_name.unique_number}"
+
+  This is CRITICAL. The alternative — iso_name.name (full 64-bit ISO NAME integer) —
+  includes device_instance which changes every time YDNU-02 reinitialises on the bus.
+  Using .name would produce a different MD5 on every gateway restart, creating a new
+  HA device entry each time and accumulating duplicates in the registry.
+
+  Stable hashes (patch-v2, unique_number-based):
+    SA=64  unique_number=402047 → hash=ef195c7c99c762fdfda4e198aae87930
+    SA=200 unique_number=902047 → hash=c11f5c824c71fe7e186cba56bf0f8672
+
+  If duplicates appear in HA: run `./deploy.sh --clean-ha` to purge stale entries.
+  The patch is applied by scripts/patch_ha_nmea2000_message.py (marker: patch-v2).
 
 SKILLS / DIAGNOSTIC MINI-PROMPTS
 ================================
@@ -32,6 +73,10 @@ SKILLS / DIAGNOSTIC MINI-PROMPTS
       print('ISO Request sent')
       s.close()
       "
+
+  Skill — watch client onboarding logs::
+
+      ssh user@localhost 'journalctl -u ydnu02-tcp-gateway -n 30 | grep -E "Phase|client|ISO"'
 """
 
 import time
@@ -44,10 +89,16 @@ from ydnu02_tcp_gateway.device_contract import (
     N2KDeviceInfo,
     DEFAULT_PHYSICAL_DEVICE,
     DEFAULT_VIRTUAL_DEVICE,
+    N2KDeviceEncoder,
 )
 from ydnu02_tcp_gateway.frame_utils import NMEA_LINE_RE, TX_LINE_RE, fmt_frame, get_pgn_sa
 
 _ISO_REQUEST_MIN_INTERVAL = 5.0
+
+# Delay between Phase 1 (PGN 60928) and Phase 2 (PGN 126996) announcements.
+# Required so the HA nmea2000 decoder builds source_to_iso_name before receiving Product Info.
+# See docstring above for full explanation.
+ANNOUNCE_PRODUCT_INFO_DELAY = 0.6  # seconds
 
 
 class DataHub:
@@ -127,9 +178,8 @@ class DataHub:
         """Decode PGN 60928 / 126996 from a frame and update N2KDeviceRegistry."""
         self.device_registry.update_from_frame(line)
 
-    def announce_all_devices(self) -> None:
-        """Generate and broadcast ISO Claim + Product Info for all registered devices."""
-        lines = self.device_registry.generate_all_announcements()
+    def _broadcast_lines(self, lines) -> None:
+        """Helper: broadcast a list of raw encoder byte lines with correct R-frame prefix."""
         for line in lines:
             text = line.decode("ascii", errors="ignore").rstrip()
             if not text.startswith("00:00:00.000 R "):
@@ -137,6 +187,55 @@ class DataHub:
             else:
                 formatted_line = f"{text}\n".encode("ascii")
             self.broadcast(formatted_line)
+
+    def announce_all_devices(self, product_info_delay: float = 0.0) -> None:
+        """Two-phase broadcast: PGN 60928 immediately, PGN 126996 after a delay.
+
+        Phase 1 (immediate): broadcast PGN 60928 (ISO Address Claim) for all devices.
+          → HA decoder builds source_to_iso_name: {64: IsoName(402047), 200: IsoName(902047)}
+
+        Phase 2 (after delay): broadcast PGN 126996 (Product Info).
+          → source_to_iso_name is now populated, so message.source_iso_name is unique per SA.
+          → message.hash becomes unique per device → no HA device registry collision.
+
+        Args:
+            product_info_delay: Seconds to wait before Phase 2 (Product Info broadcast).
+                Default 0 = synchronous (both phases sent immediately, used by unit tests
+                and any direct call that needs all frames available at once).
+                Production code (send_iso_request) passes ANNOUNCE_PRODUCT_INFO_DELAY (0.6s)
+                to give the HA nmea2000 decoder time to register source_to_iso_name from
+                Phase 1 before Product Info arrives.
+        """
+        delay = product_info_delay
+        snapshot = self.device_registry.get_all_devices()
+
+        # Phase 1: broadcast only Address Claims (PGN 60928) immediately
+        claim_lines = []
+        prod_lines = []
+        for dev in snapshot.values():
+            all_lines = N2KDeviceEncoder.encode_announcement(dev)
+            for line in all_lines:
+                text = line.decode("ascii", errors="ignore")
+                # Detect PGN 60928 (ISO Claim): CAN ID 18EEFF<SA_hex>
+                # Detect PGN 126996 (Product Info): CAN ID 19F014<SA> fastpacket frames
+                if "EEFF" in text.upper() or "18EE" in text.upper():
+                    claim_lines.append(line)
+                else:
+                    prod_lines.append(line)
+
+        self._broadcast_lines(claim_lines)
+        print(f"[data] Phase 1: broadcast {len(claim_lines)} Address Claim frames", flush=True)
+
+        # Phase 2: broadcast Product Info — synchronously if delay==0, else via Timer
+        def _send_product_info():
+            self._broadcast_lines(prod_lines)
+            print(f"[data] Phase 2: broadcast {len(prod_lines)} Product Info frames", flush=True)
+
+        if delay:
+            threading.Timer(delay, _send_product_info).start()
+        else:
+            _send_product_info()
+
 
     def get_physical_devices(self) -> Dict[int, Dict[str, Any]]:
         """Return a snapshot dictionary of all registered devices for backwards compatibility."""
@@ -199,8 +298,8 @@ class DataHub:
         self.broadcast(tcp_iso_req_claim)
         self.broadcast(tcp_iso_req_prod)
 
-        # Broadcast active announcements for all registered devices
-        self.announce_all_devices()
+        # Two-phase announcement: PGN 60928 now, PGN 126996 after ANNOUNCE_PRODUCT_INFO_DELAY
+        self.announce_all_devices(product_info_delay=ANNOUNCE_PRODUCT_INFO_DELAY)
 
     def handle_client(self, conn: socket.socket, addr: Tuple[str, int]) -> None:
         """Handle lifecycle and bidirectional frame loop for a single connected TCP client.

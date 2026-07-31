@@ -6,3 +6,9 @@ pyserial>=3.5
 bleak>=0.21.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+
+# nmea2000: use our fork's fix branch (contains fix for PGN 126996 hash collision,
+# primary_key includes source_iso_name to prevent device entity collision in HA).
+# Branch: fix/pgn-126996-hash-collision-per-source
+# PR target: https://github.com/tomer-w/nmea2000
+git+https://github.com/dnevera/nmea2000.git@fix/pgn-126996-hash-collision-per-source#egg=nmea2000

@@ -1,488 +1,426 @@
 ---
 name: nmea2000-setup
 description: >-
-  Полное руководство и база знаний по настройке NMEA 2000 (Yacht Devices YDNU-02, Gobius C),
-  Mopeka Pro 200 BLE, сервисного режима YDNU-02, TCP-прокси архитектуры,
-  Signal K Server на Raspberry Pi 5 и интеграции с Home Assistant / Victron.
+  Полное руководство и база знаний по yacht-n2k-console: TCP Gateway архитектура
+  (data_hub, serial_reader, service_mode), все баги nmea2000 lib и их патчи,
+  идемпотентный деплой HA, nmea2000 fork (unique_number fix), оборудование
+  (YDNU-02, Gobius C BLE GATT, Mopeka Pro 200), Signal K. Активируй при любых
+  задачах связанных с: N2K gateway, data_hub, serial_reader, HA patches, deploy,
+  YDNU-02, Gobius, Mopeka, ioclient, message.py hash collision.
 ---
 
-# NMEA 2000 + YDNU-02 + Gobius C + Mopeka BLE + Signal K (Raspberry Pi 5)
+# NMEA 2000 Gateway — База знаний (yacht-n2k-console)
 
-## 📁 Файлы проекта (yacht-n2k-console)
-
-| Файл | Описание |
-|:---|:---|
-| [nmea_tcp_proxy.py](file:///path/to/yacht-n2k-console/nmea_tcp_proxy.py) | TCP прокси — YDNU-02 → broadcast, Control API |
-| [device_manager.py](file:///path/to/yacht-n2k-console/device_manager.py) | TCPProxyConnection + ProxyControlClient |
-| [ydnu02.py](file:///path/to/yacht-n2k-console/ydnu02.py) | Hardware controller (поддерживает passthrough) |
-| [tests/test_nmea_tcp_proxy.py](file:///path/to/yacht-n2k-console/tests/test_nmea_tcp_proxy.py) | 18 тестов прокси |
-| HA integration | `/Users/denn/Develop/3dprint/ha/nmea2000/` — FastAPI приложение |
-
----
-
-## 🏗️ TCP Proxy Архитектура
-
-### ⚠️ ГЛАВНОЕ ПРАВИЛО: только прокси держит /dev/ttyACM0
+## 📁 Структура проекта
 
 ```
+yacht-n2k-console/
+├── ydnu02_tcp_gateway/           # TCP Gateway пакет (основной)
+│   ├── data_hub.py               # DataHub: broadcast, announce, ISO request, handle_client
+│   ├── serial_reader.py          # SerialReader: читает /dev/ttyACM0, пишет в DataHub
+│   ├── ydnu02_tcp_gateway.py     # Точка входа, запуск всего
+│   ├── ydnu02_gateway_device.py  # N2KDeviceRegistry, N2KDeviceEncoder, DEFAULT_* devices
+│   └── gateway.py / gateway_settings.py
+├── ydnu02/                       # YDNU-02 hardware controller (BLE + Service mode)
+├── device_manager/               # ProxyControlClient, ServiceModeManager
+├── scripts/
+│   └── patch_ha_nmea2000_message.py  # Идемпотентный патч message.py (v2)
+├── patches/
+│   └── nmea2000_ioclient.py      # Пропатченный ioclient.py (EOF fix)
+├── tests/
+│   ├── test_ha_gateway.py        # Unit тесты DataHub + registry (221+ тестов)
+│   ├── test_live_ha_integration.py  # Live тесты против реального HA (7 тестов)
+│   ├── test_service_mode.py      # Service mode тесты (TCP socket — sandbox-only)
+│   └── ...
+├── deploy.sh                     # Деплой на Pi + HA патчи (идемпотентный)
+├── requirements.txt              # Зависимости + nmea2000 из нашего git форка
+└── pyproject.toml
+
+Смежный репозиторий:
+/Users/denn/Develop/yacht/nmea2000/   # форк tomer-w/nmea2000
+  ветка: fix/pgn-126996-hash-collision-per-source
+  nmea2000/message.py  — исправлен primary_key (unique_number fix)
+  nmea2000/ioclient.py — исправлен EOF spin-loop (PR уже merged в upstream)
+```
+
+---
+
+## 🏗️ TCP Gateway Архитектура
+
+### Схема потоков данных
+
+```
+NMEA 2000 Bus
+    │
 YDNU-02 /dev/ttyACM0
-       │
-  nmea_tcp_proxy.py  (systemd: nmea-tcp-proxy.service)
-       ├── :4001  DATA port   → broadcast NMEA строк всем клиентам (read-only для них)
-       └── :4002  CTRL port   → эксклюзивный serial passthrough (service/firmware mode)
-       │
-       ├── HA ha-nmea2000 integration (автоматически подключается к :4001)
-       └── ydnu02-web (TCPProxyConnection → :4001, ProxyControlClient → :4002)
+    │
+SerialReader (serial_reader.py)
+    │  readline() → парсит NMEA ASCII фреймы
+    │  фильтр: _NMEA_LINE_RE — только валидные фреймы
+    ▼
+DataHub (data_hub.py)
+    ├── broadcast(line) → все TCP clients (set[socket])
+    ├── _track_physical_device(line) → N2KDeviceRegistry (PGN 60928 + 126996)
+    │
+    ├── :4001 DATA port — NMEA broadcast (read-only для клиентов)
+    │       └── HA ha-nmea2000 integration (auto-connect)
+    │       └── ydnu02-web (TCPProxyConnection)
+    │
+    └── :4002 CTRL port — service/firmware passthrough (эксклюзивный)
+            └── ProxyControlClient (service mode, firmware flash)
+
+N2KDeviceRegistry:
+    DEFAULT_PHYSICAL_DEVICE  SA=64 (0x40)  unique_number=402047  ISO NAME=YDNU-02
+    DEFAULT_VIRTUAL_DEVICE   SA=200 (0xC8) unique_number=902047  ISO NAME=TCP-GW
+
+На connect нового клиента: handle_client() → send_iso_request()
+  Phase 1: broadcast ISO Claim (PGN 60928) для обоих устройств  [немедленно]
+  Phase 2: broadcast Product Info (PGN 126996) после задержки    [+0.6s Timer]
 ```
 
-**Никто кроме прокси не открывает `/dev/ttyACM0` напрямую.**
-
-### nmea_tcp_proxy.py — ключевые детали
-
-**Env vars:**
-- `NMEA_SERIAL_PORT` (default `/dev/ttyACM0`)
-- `NMEA_SERIAL_BAUD` (default `115200`)
-- `NMEA_PROXY_HOST` (default `0.0.0.0`)
-- `NMEA_PROXY_PORT` (default `4001`) — DATA
-- `NMEA_CTRL_PORT` (default `4002`) — CTRL
-
-**Init при старте:**
-```python
-ser.write(b"YDNU MODE RAW\r\n")  # переключение в RAW mode
-time.sleep(2.0)
-ser.read(ser.in_waiting)         # flush echo
-ser.write(b"0\n")                # сбрасываем фильтры
-time.sleep(0.5)
-ser.read(ser.in_waiting)         # flush echo
-```
-
-**NMEA frame filter (ОБЯЗАТЕЛЬНЫЙ):**
-```python
-_NMEA_LINE_RE = re.compile(
-    rb"^\d{2}:\d{2}:\d{2}\.\d{3} [RT] [0-9A-Fa-f]{8}( [0-9A-Fa-f]{2})+\n$"
-)
-# Только строки совпадающие с этим regex идут в broadcast.
-# Текстовые ответы YDNU-02 (init echo, mode-switch ack) — отбрасываются.
-```
-
-**⚠️ КРИТИЧЕСКИ ВАЖНО:** Без этого фильтра init-эхо YDNU-02 попадает в broadcast,
-HA библиотека получает нечитаемые строки и спинится на 100% CPU (см. баг ниже).
-
-**Control API (:4002) команды:**
-```
-SERVICE_START   → ставит service_mode, паузирует broadcast
-SERVICE_END     → снимает service_mode, возобновляет broadcast
-FIRMWARE_START  → аналог SERVICE_START
-FIRMWARE_END    → аналог SERVICE_END
-(после команды клиент получает эксклюзивный serial passthrough)
-```
-
-### device_manager.py — TCPProxyConnection
+### Ключевые константы (data_hub.py)
 
 ```python
-class TCPProxyConnection:
-    """Читает NMEA строки из :4001 вместо прямого serial."""
-    def readline(self) -> str: ...   # blocking, с reconnect backoff
-    def write(self, data: bytes): ... # TCP write
-
-class ProxyControlClient:
-    """Подключается к :4002, управляет service/firmware mode."""
-    def enter_service(self): ...     # отправляет SERVICE_START
-    def exit_service(self): ...      # отправляет SERVICE_END
-    def passthrough_write(self, data): ...
-    def passthrough_read_for(self, duration): ...
+ANNOUNCE_PRODUCT_INFO_DELAY = 0.6   # секунды между Phase 1 и Phase 2
+DATA_PORT  = 4001
+CTRL_PORT  = 4002
 ```
 
-### ydnu02.py — passthrough поддержка
+### announce_all_devices() — двухфазный анонс
 
-`YDNU02Controller` поддерживает атрибут `_passthrough` (экземпляр `ProxyControlClient`):
-- `_write()` → если `_passthrough` установлен, пишет через него, иначе прямой serial
-- `_read_response()` → `pcc.passthrough_read_for(duration)` или прямой serial
-- `_send_terminal_command()` → пропускает flush-буфера если passthrough
-- `enter_service_mode()` → proxy path (через passthrough) + legacy path (shell echo)
+```python
+def announce_all_devices(self, product_info_delay: float = 0.0) -> None:
+    """
+    product_info_delay=0   → синхронный broadcast (unit tests, прямые вызовы)
+    product_info_delay=0.6 → Timer (production: send_iso_request вызывает с ANNOUNCE_PRODUCT_INFO_DELAY)
+    """
+```
 
-Backward compatible: legacy direct-serial код остаётся (используется при `_passthrough=None`).
+**ПОЧЕМУ двухфазный:** HA nmea2000 decoder строит `source_to_iso_name` из PGN 60928.
+Если PGN 126996 приходит РАНЬШЕ PGN 60928 — `source_to_iso_name[SA]` не заполнен →
+decoder делает **silent drop** (строка ~339 в decoder.py: `if source_iso_name is None and build_network_map: return None`).
 
 ---
 
-## 🐛 HA nmea2000 Library — CPU Spin Loop Bug
+## 🐛 Известные Баги и Фиксы
 
-### Симптом
-```
-python3 -m homeassistant  100%+ CPU
-HA log: decoding failed. text: , bytes: . Error: Invalid CAN Frame ASCII string format
-```
+### Bug 1 — HA decoder silent drop (NMEA ioclient EOF spin-loop)
 
-### Причина
-Баг в `nmea2000` lib v2026.5.2 (`nmea2000/ioclient.py`):
+**Файл:** `nmea2000/ioclient.py` в HA Docker контейнере
 
+**Симптом:** После рестарта gateway — HA крутится на 100% CPU, не переподключается.
+
+**Причина:**
 ```python
-# AsyncIOClient._receive_loop (~строка 209):
-while self._state != State.CLOSED:
-    await self._receive_impl()   # ← если возвращает мгновенно — спин!
-
-# _receive_impl (~строка 535):
+# _receive_impl() (строка ~535):
 data = await self.reader.readline()  # EOF → b""
 line = data.decode().strip()         # ""
-try:
-    message = self.decoder.decode(line)  # EXCEPTION
-except Exception as e:
-    self.logger.warning(...)
-    return   # ← немедленный return, нет sleep!
+message = self.decoder.decode(line)  # EXCEPTION
+# except: return  ← немедленный return, цикл крутится без sleep → 100% CPU
 ```
 
-**При EOF (`b""`):** HA библиотека не детектирует закрытие соединения,
-крутится в бесконечном цикле без sleep → 100% CPU.
-**При нечитаемых строках:** те же симптомы — decode exception → return → немедленный следующий вызов.
+**Фикс:** `patches/nmea2000_ioclient.py` — при `b""` поднимает `ConnectionError` вместо `return`.
 
-### Когда возникает
-1. Прокси рестартовал → TCP соединение разорвано → HA получает EOF → **spin forever**
-2. В broadcast попали не-NMEA строки (init echo) → decode fail spin
+**PR:** merged в `tomer-w/nmea2000` (PR #61).
 
-### Фикс на нашей стороне
-1. **NMEA regex фильтр** в прокси — только валидные фреймы в broadcast
-2. После рестарта прокси — **обязательно перезапустить HA**
-
-### HA интеграция (ha-nmea2000, @tomer-w)
-- **Custom component:** `/config/custom_components/nmea2000/` внутри HA контейнера
-- **Версия:** v2026.5.0, `nmea2000==2026.5.2`
-- **Config:** `gateway_type=text`, `ip=127.0.0.1`, `port=4001`
-- **Процесс:** `python3 -m homeassistant --config /config` в Docker `homeassistant` на **gateway-host**
+**Идемпотентность деплоя:** MD5-сравнение remote vs local перед `docker cp`.
 
 ---
 
-## 🔧 Диагностика и команды
+### Bug 2 — PGN 126996 hash collision (все устройства → один device в HA)
 
-### Проверка состояния
+**Файл:** `nmea2000/message.py` в HA Docker контейнере
 
-```bash
-# CPU usage
-ssh user@gateway-host 'ps aux --sort=-%cpu | head -5'
+**Симптом:** Второй NMEA 2000 девайс в HA показывает «0 entities».
 
-# Прокси работает?
-ssh user@gateway-host 'systemctl status nmea-tcp-proxy --no-legend | head -4'
-
-# HA подключена к прокси?
-ssh user@gateway-host 'ss -tnp | grep 4001'
-# Должно быть: ESTAB ... 127.0.0.1:XXXXX → 127.0.0.1:4001
-
-# Данные из прокси (5 строк за 15 сек)
-ssh user@gateway-host 'timeout 15 bash -c "nc localhost 4001" | head -5'
-# Пример валидного фрейма: 03:35:31.851 R 19F2115C 00 30 5C 64 00 00 00 FF
-
-# Ошибки HA интеграции
-ssh user@gateway-host 'sudo docker exec homeassistant bash -c "grep decoding /config/home-assistant.log | tail -5"'
-
-# Лог прокси
-ssh user@gateway-host 'sudo journalctl -u nmea-tcp-proxy -n 20 --no-pager'
+**Причина (оригинальный upstream код):**
+```python
+primary_key = f"{self.id}"    # для PGN 126996: self.id = "productInformation"
+# Нет полей с part_of_primary_key=True → primary_key одинаков для ВСЕХ устройств
+# MD5("productInformation") = "818d9516db08fd90ffd1967e3c403bed"  ← коллизия
 ```
 
-### ⚠️ Обязательный restart sequence
-
-```bash
-# После ЛЮБОГО systemctl restart nmea-tcp-proxy:
-sudo systemctl restart nmea-tcp-proxy
-sudo docker restart homeassistant   # ← ОБЯЗАТЕЛЬНО, иначе spin loop
-
-# Проверка через 60 сек:
-ssh user@gateway-host 'ps aux --sort=-%cpu | head -4 && ss -tnp | grep 4001'
-# HA должна быть <10% CPU и ESTAB соединение на :4001
+**Фикс (наш форк + патч):**
+```python
+source_id = (
+    self.source_iso_name.unique_number   # ← 21-бит, manufacturer-assigned, STABLE
+    if self.source_iso_name is not None
+    else self.source                      # ← fallback: SA byte
+)
+primary_key = f"{self.id}_{source_id}"
 ```
 
-### Деплой прокси
+**ПОЧЕМУ `unique_number`, а НЕ `iso_name.name`:**
+- `unique_number` = 21-бит, прошит производителем (NMEA 2000 §3.1.1), **никогда не меняется**
+- `iso_name.name` = 64-бит integer, включает `device_instance` (меняется при переинициализации шины!)
+- Использование `iso_name.name` → разный MD5 при каждом рестарте YDNU-02 → новый device в HA registry
 
+**Хэши после фикса (стабильны навсегда):**
+- SA=64 (YDNU-02, unique_number=402047): `ef195c7c99c762fdfda4e198aae87930`
+- SA=200 (TCP-GW, unique_number=902047): `c11f5c824c71fe7e186cba56bf0f8672`
+
+**Маркер идемпотентности:**
+- `"yacht-n2k-console-patch-v1"` — использовал `.name` (нестабильный, создавал дубли)
+- `"yacht-n2k-console-patch-v2"` — использует `.unique_number` (стабильный, текущий)
+
+**Upgrade v1→v2:** автоматически через `patch_ha_nmea2000_message.py` при следующем `--patch-ha`.
+
+**PR pending:** `dnevera/nmea2000` → `tomer-w/nmea2000`
+
+---
+
+### Bug 3 — HA registry накапливает мусор (старые device записи)
+
+**Симптом:** Несколько «Product Information (Yacht Devices - PC Gateway - ...)» в HA.
+
+**Причина:** До patch-v2 `device_instance` в `iso_name.name` менялся → другой MD5 → новая запись.
+Тест `next(d for d in devices if '902047' in str(d))` брал первый попавшийся (старый, 0 entities).
+
+**Диагностика:**
 ```bash
-scp /path/to/yacht-n2k-console/nmea_tcp_proxy.py user@gateway-host:/home/user/
-ssh user@gateway-host 'sudo mv /home/user/nmea_tcp_proxy.py /usr/local/bin/nmea_tcp_proxy.py \
-  && sudo systemctl restart nmea-tcp-proxy \
-  && sudo docker restart homeassistant'
+ssh user@<gateway-host> "sudo docker exec homeassistant python3 -c \"
+import json
+dr = json.load(open('/config/.storage/core.device_registry'))
+er = json.load(open('/config/.storage/core.entity_registry'))
+nmea = [d for d in dr['data']['devices'] if '402047' in str(d) or '902047' in str(d)]
+print('NMEA devices:', len(nmea))
+for d in nmea:
+    ent = [e for e in er['data']['entities'] if e.get('device_id')==d['id']]
+    print('  %s → %d entities' % (d.get('name','?')[:70], len(ent)))
+\""
 ```
 
-### Запуск тестов прокси
+**Фикс:** `./deploy.sh --clean-ha` → удаляет все nmea2000 devices → HA пересоздаёт с нуля.
+
+**После patch-v2:** дубли больше не создаются. Одноразовая очистка решает проблему навсегда.
+
+---
+
+## 🔧 Деплой (deploy.sh)
+
+### Режимы
+
+```bash
+./deploy.sh                   # полный деплой: gateway + web + patch HA
+./deploy.sh --proxy           # только gateway + patch HA (без web restart)
+./deploy.sh --web             # только web (gateway и HA не трогается)
+./deploy.sh --patch-ha        # только патчи HA (без деплоя кода)
+./deploy.sh --clean-ha        # удалить мусорные NMEA devices из HA registry
+./deploy.sh --proxy --no-test # без post-deploy тестов
+./deploy.sh --no-diff         # пропустить pre-deploy diff
+```
+
+### patch_ha() — алгоритм (идемпотентный)
+
+```
+Patch 1 (ioclient EOF fix):
+  md5(local patches/nmea2000_ioclient.py) == md5(remote in container)?
+    YES → "already up to date — skipping"   [ha_changed остаётся false]
+    NO  → docker cp → applied ✓              [ha_changed=true]
+
+Patch 2 (message.py hash collision fix):
+  запустить scripts/patch_ha_nmea2000_message.py внутри контейнера
+  Сценарий A: PATCH_MARKER_V2 в файле  → "Already applied."             [ha_changed=false]
+  Сценарий B: PATCH_MARKER_V1 в файле  → upgrade .name→.unique_number    [ha_changed=true]
+  Сценарий C: оригинальный upstream     → fresh install                   [ha_changed=true]
+  Сценарий D: файл не найден            → ERROR (динамический discovery)
+
+HA restart: ТОЛЬКО если ha_changed=true
+```
+
+### requirements.txt — nmea2000 из git форка
+
+```
+# Устанавливается из нашего git-форка (не из PyPI!):
+git+https://github.com/dnevera/nmea2000.git@fix/pgn-126996-hash-collision-per-source#egg=nmea2000
+```
+
+**После merge PR в tomer-w:** заменить на `nmea2000>=<новая версия>`.
+
+### venv
 
 ```bash
 cd /Users/denn/Develop/yacht/yacht-n2k-console
-python3 -m pytest tests/test_nmea_tcp_proxy.py -v   # 18 тестов
+rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# Верификация: .venv/bin/python -c "from nmea2000 import message; import inspect; print(inspect.getfile(message))"
+# Ожидаем: .venv/lib/.../site-packages/nmea2000/message.py  (НЕ /opt/homebrew/...)
 ```
 
 ---
 
-## 🔌 Оборудование и физический слой NMEA 2000
+## 🧪 Тесты
 
-### Параметры шины
-- **Сопротивление:** 60 Ом между CAN-H и CAN-L (два терминатора по 120 Ом).
-- **Питание:** 12V DC через Power Tee.
+### Запуск (локально)
 
-### Yacht Devices YDNU-02 USB Gateway
-- **Linux порт:** `/dev/ttyACM0` (CDC ACM виртуальный COM-порт).
-- **VID:** `0x0483` (STMicroelectronics), **PID:** `0xA217`.
-- Скорость порта (baud rate) **не имеет значения** для USB CDC ACM.
-- NMEA bus шлёт ~0.4 фрейма/сек при почти пустой шине.
+```bash
+# Unit тесты (без live HA и service_mode):
+.venv/bin/python -m pytest tests/ \
+  --ignore=tests/test_live_ha_integration.py \
+  --ignore=tests/test_service_mode.py -q
+# → 221 passed, 10 skipped
+
+# Live тесты (требуют Pi + HA + running gateway):
+.venv/bin/python -m pytest tests/test_live_ha_integration.py -v
+# → 7 passed
+
+# test_service_mode.py → PermissionError socket.bind — sandbox ограничение, не баг
+```
+
+### Ключевые тесты
+
+| Тест | Что проверяет |
+|------|--------------|
+| `test_pk_hash_uniqueness_per_device_source` | SA=64 и SA=200 дают разные MD5 |
+| `test_announce_all_devices_emits_both_sa64_and_sa200_frames` | оба устройства в анонсе |
+| `test_ha_live_registry_strict_device_and_entities_check` | оба device в HA имеют >0 entities |
+| `test_virtual_gateway_device_info_complete` | virtual gateway device правильно зарегистрирован |
+
+### announce_all_devices() в тестах
+
+```python
+# Тесты вызывают БЕЗ аргументов (синхронный, delay=0.0 по умолчанию):
+self.hub.announce_all_devices()          # виден ВЕСЬ output сразу
+
+# Production: send_iso_request() передаёт задержку явно:
+self.announce_all_devices(product_info_delay=ANNOUNCE_PRODUCT_INFO_DELAY)  # 0.6s Timer
+```
+
+---
+
+## 📡 Живая диагностика
+
+### Состояние
+
+```bash
+# Сервисы на Pi
+ssh user@<gateway-host> 'systemctl is-active ydnu02-tcp-gateway ydnu02-web'
+
+# Соединения (должно быть 2+ ESTAB на :4001)
+ssh user@<gateway-host> 'ss -tnp | grep 4001'
+
+# Живые NMEA фреймы
+ssh user@<gateway-host> 'timeout 5 bash -c "nc localhost 4001" | head -10'
+
+# Лог gateway (двухфазный анонс)
+ssh user@<gateway-host> 'sudo journalctl -u ydnu02-tcp-gateway -n 30 --no-pager | grep -E "Phase|client|ISO"'
+```
+
+### Патчи в HA
+
+```bash
+# Какой маркер применён?
+ssh user@<gateway-host> "sudo docker exec homeassistant grep 'yacht-n2k-console-patch' \
+  /usr/local/lib/python3.14/site-packages/nmea2000/message.py"
+# Ожидаем: yacht-n2k-console-patch-v2
+
+# source_id использует unique_number?
+ssh user@<gateway-host> "sudo docker exec homeassistant grep 'source_iso_name\.' \
+  /usr/local/lib/python3.14/site-packages/nmea2000/message.py"
+# Ожидаем: self.source_iso_name.unique_number
+```
+
+### Дубли в HA → clean-ha
+
+```bash
+cd /Users/denn/Develop/yacht/yacht-n2k-console && ./deploy.sh --clean-ha
+# После: .venv/bin/python -m pytest tests/test_live_ha_integration.py -v
+```
+
+---
+
+## 🔌 Оборудование
+
+### Yacht Devices YDNU-02
+
+- **Linux порт:** `/dev/ttyACM0` (CDC ACM)
+- **SA на шине:** 64 (0x40)
+- **unique_number:** 402047 (прошит, неизменный)
+- **⚠️ device_instance** (в iso_name.name) меняется при каждой переинициализации шины!
+
+### TCP-GW Virtual Device
+
+- **SA:** 200 (0xC8) — виртуальный
+- **unique_number:** 902047 (synthetic)
+
+### NMEA 2000 ISO NAME структура (64-бит)
+
+```
+Bits 63-43: unique_number (21 bits)  ← прошит производителем, NEVER changes
+Bits 42-32: manufacturer_code (11 bits)
+Bits 31-28: device_instance_upper (4 bits)  ← МЕНЯЕТСЯ при рестарте!
+Bits 27-21: device_instance_lower (7 bits)  ← МЕНЯЕТСЯ при рестарте!
+Bits 20-16: device_function (5 bits)
+...
+```
+
+**Вывод:** Использовать только `unique_number` для стабильных идентификаторов.
 
 ### Gobius C NMEA 2000
-- **BLE Name:** `GOBIUS C`, **MAC:** `2C:A7:74:21:56:D8`
-- **N2K PGN 127505:** Source: 92, Instance: 0, ~2.5s interval
 
-#### ⚠️ Ключевая проблема PGN 127505 fluid_type
-**Прошивка Gobius C** PGN 127505 byte[0] **всегда передаёт 0x00 (Fuel)**, независимо от настройки FFF2.
-Workaround: `fluid_type` хранится в registry как user-configured override.
-**BLE — это ТОЛЬКО настройка. NMEA 2000 — ВСЕГДА основной источник данных.**
+- **SA:** 92 (0x5C), **unique_number:** 697207
+- **BLE:** `GOBIUS C`, MAC `2C:A7:74:21:56:D8`
+- **PGN 127505:** interval ~2.5s
+- **⚠️ Баг прошивки:** fluid_type в PGN 127505 всегда 0x00 (Fuel)
 
----
+#### BLE GATT
 
-### 📡 Gobius C BLE GATT Protocol Reference
-**Source:** "GOBIUS C Bluetooth Protocol & Functional Description", Issue 3, 2023-08-08, Gobius Sensor Technology AB.
-**All multi-byte values: Big-Endian (MSB first) per spec §8.2.4.**
+| UUID | Имя | R/W | Описание |
+|------|-----|-----|----------|
+| `0xFFE6` | User Config | R/W | dist_empty/full mm, LP filters |
+| `0xFFE7` | Command | W | 3-byte command (calibrate, reset, adv, info write) |
+| `0xFFE8` | Status | R | state, uptime, temp, voltage, MAC, range |
+| `0xFFE9` | Measurement | R+Notify | fill ‰, distance mm, inclination |
+| `0xFFEB` | Info 1 | R/W | User label (20 bytes) |
+| `0xFFEC` | Info 2 | R/W | User comment (20 bytes) |
+| `0xFFF2` | N2K Config | R/W | N2K enable, instance, fluid type, volume (max 255L!) |
+| `0xFFF3` | N2K Status | R | n2k_state, n2k_src |
 
-#### GATT Characteristic Map
+**⚠️ Опасные команды (0xFFE7):**
+- `b'\x69\x00\x00'` (`i`) → factory reset!
+- `b'\x6F\x00\x00'` (`o`) → BLE off, переподключение в течение 10 сек
 
-| UUID     | Имя            | R/W      | Описание |
-|:---------|:---------------|:---------|:---------|
-| `0xFFE6` | **User Config**  | R/W    | geometry (dist_empty/full mm), LP filters |
-| `0xFFE7` | **Command**      | W      | 3-byte command frame (calibrate, start/stop, adv, initialize, write_info) |
-| `0xFFE8` | **Status**       | R      | state, uptime, temp, voltage, MAC, range, errors |
-| `0xFFE9` | **Measurement**  | R+Notify | fill ‰, distance mm, inclination, envelopes |
-| `0xFFEB` | **Info 1**       | R/W    | User label (20 bytes ASCII, space-padded) |
-| `0xFFEC` | **Info 2**       | R/W    | User comment (20 bytes ASCII, space-padded) |
-| `0xFFF2` | **N2K Config**   | R/W    | N2K enable, instance, fluid type, volume |
-| `0xFFF3` | **N2K Status**   | R      | n2k_state, n2k_src (N2K firmware extension) |
-
----
-
-#### 0xFFE8 Status (20 bytes) — Table 26
+**Info write sequence:**
 ```
-[0]     ST_ST   State
-          0=Start-Up  1=Self-Test  2=Uninit  3=Uncalibrated
-          4=Calibration  5=Active  6=Error  7=Production-Test  8=HW-Test
-[1]     ST_SB   Status bits (bitmask)
-[2:6]   ST_T    Uptime since power-on [s]  uint32 BE
-[6]     ST_ER1  General error code
-[7]     ST_ER2  Hardware error code
-[8]     ST_T    Processor temperature [°C]  int8 signed
-[9:11]  ST_V    Supply voltage [mV]  uint16 BE  →  voltage_v = raw_mv / 1000.0
-[11:17] ST_ID   BLE MAC address (6 bytes)
-[17]    ST_ER3  Extended HW error
-[18]    ST_ERR  Radar comm error counter
-[19]    ST_RNG  Current measurement range
-          0=Zero  1=Near  2=Mid  3=Far
-```
-Parser: `gobius_parsers.parse_status(data)` → `GobiusCSensor.update_from_ble_status()`
-
----
-
-#### 0xFFE9 Measurement (20 bytes) — Table 27
-```
-[0]     M_ST    State (copy of status byte[0])
-[1]     M_SB    Status bits
-[2]     M_VD    Level validity  0=invalid  1=valid
-[3:5]   M_FL    Fill level ‰ [0-1000]  uint16 BE  →  fill_pct = raw / 10.0
-[5]     M_INC   Sensor inclination [0-90°]
-[6:8]   M_DIST  Distance sensor→fluid surface [mm]  uint16 BE
-[8:10]  M_SZR   Envelope size Zero Range
-[10:12] M_SNR   Envelope size Near Range
-[12:14] M_SMR   Envelope size Mid Range
-[14:16] M_SFR   Envelope size Far Range
-[16:20] Reserved
-```
-Sensor pushes FFE9 via BLE Notify — subscribe once after connect.
-Parser: `gobius_parsers.parse_measurement(data)` → `GobiusCSensor.update_from_ble_measurement()`
-
----
-
-#### 0xFFE6 User Config (20 bytes) — Table 23
-```
-[0:2]   UC_DE    Distance for tank EMPTY [mm]  uint16 BE  clamp [20..2000]
-[2:4]   UC_DF    Distance for tank FULL  [mm]  uint16 BE  clamp [20..2000]
-[4]     UC_LPN   LP filter size  (0=disabled, range 0..100)
-[5]     UC_LPK   LP filter threshold [%]  range [1..100]
-[6]     UC_BITS  Config bits (Table 17)
-[7]     UC_O1T   Output 1 threshold [%]  0..100
-[8]     UC_O1H   Output 1 hysteresis [%]  0..100
-[9]     UC_O2T   Output 2 threshold [%]  0..100
-[10]    UC_O2H   Output 2 hysteresis [%]  0..100
-[11]    UC_R0    Resistive Ω at 0%
-[12]    UC_R25   Resistive Ω at 25%
-[13]    UC_R50   Resistive Ω at 50%
-[14]    UC_R75   Resistive Ω at 75%
-[15]    UC_R100  Resistive Ω at 100%
-[16]    UC_VE    Voltage empty (unit 25mV)
-[17]    UC_VF    Voltage full (unit 25mV)
-[18]    UC_AOF   Advertise-off time [10..255 s]
-[19]    Reserved
-```
-**Write pattern:** `read_char(0xFFE6)` → patch bytes → `write_char(0xFFE6)` → verify with `read_char`
-
-Parser: `gobius_parsers.parse_user_cfg(data)` → `GobiusCSensor.update_from_ble_user_cfg()`
-
-Fill level formula:
-```
-fill% = (dist_empty_mm - distance_mm) / (dist_empty_mm - dist_full_mm) * 100
+1. write_char(0xFFEB, info1)
+2. write_char(0xFFEC, info2)
+3. write_char(0xFFE7, b'\x77\x00\x00')  ← commit обязателен!
 ```
 
----
+### Mopeka Pro 200 BLE
 
-#### 0xFFF2 N2K Config (20 bytes) — N2K firmware extension
-```
-[0]     enabled      0x00=off  /  0x01=on
-[1]     instance     fluid instance  nibble &0x0F  range [0..15]
-[2]     fluid_type   NMEA fluid type code:
-                       0=Fuel  1=Fresh Water  2=Gray Water  3=Live Well
-                       4=Oil   5=Black Water  6=Gasoline
-[3..8]  Reserved
-[9]     volume_l     Tank volume [L]  uint8  clamp [1..255]  (max 255L!)
-[10:20] Reserved
-```
-**Write pattern:** `read_char(0xFFF2)` → patch bytes → `write_char(0xFFF2)` → verify
-
-> ⚠️ volume_l is a single byte — **max 255 litres.** Values > 255 must be clamped before write.
-
-Parser: `gobius_parsers.parse_n2k_cfg(data)` → `GobiusCSensor.update_from_ble_n2k_cfg()`
-
----
-
-#### 0xFFF3 N2K Status (20 bytes) — N2K firmware extension
-```
-[0]   n2k_state   0=off  2=active
-[1]   n2k_src     NMEA 2000 source address (default 92 = 0x5C)
-```
-
----
-
-#### 0xFFE7 Command (3 bytes) — Table 18
-```
-[0]     cmd_code   ASCII character
-[1:3]   param      uint16 BE  (0x0000 if unused)
-```
-
-| Code | ASCII | Command       | Danger? |
-|:-----|:------|:--------------|:--------|
-| 0x62 | `b`   | start         | —       |
-| 0x61 | `a`   | stop          | —       |
-| 0x63 | `c`   | calibrate     | —       |
-| 0x69 | `i`   | initialize    | ⚠️ FACTORY RESET — all settings erased |
-| 0x6E | `n`   | adv_normal    | —       |
-| 0x6F | `o`   | adv_off       | ⚠️ BLE connection lost immediately. To re-enable: power cycle → reconnect **within 10 seconds** |
-| 0x77 | `w`   | write_info    | MUST follow info1/info2 writes |
-| 0x73 | `s`   | secure        | —       |
-| 0x75 | `u`   | unsecure      | —       |
-
----
-
-#### 0xFFEB / 0xFFEC Info 1/2 (20 bytes each)
-- UTF-8 string, right-padded with spaces to exactly 20 bytes
-- Read back: `bytes.decode('utf-8', errors='replace').strip()`
-
-**Info write sequence — MUST follow this exact order:**
-```
-1. write_char(0xFFEB, info1_20_bytes)
-2. write_char(0xFFEC, info2_20_bytes)
-3. write_char(0xFFE7, b'\x77\x00\x00')   ← write_info commit command ('w')
-```
-Skipping step 3 = changes NOT persisted to sensor flash.
-
----
-
-#### BLE Architecture Rules
-- **BLE and NMEA are independent channels** — never mix writes
-- **One BLE connection** owned by `GobiusBLEPoller` — all reads/writes go through it
-- **No other code** creates BLE connections to Gobius
-- `write_char` from routes goes through `poller.write_char()` under `_lock`
-- Polling: FFE8+FFF3 every 30s (status), FFE9 via notify (measurement push)
-
-#### Real Sensor Dumps (Verified)
-```python
-REAL_FFE8 = "05080000749a00001c2ec02ca7742156d8000001"
-# State=Active(5), uptime=29850s, temp=28°C, voltage=11.968V, MAC=2C:A7:74:21:56:D8
-
-REAL_FFE9 = "0508010318050066005e0087017902d300000000"
-# fill=79.2% (792‰), dist=102mm, incl=5°, env: 94/135/377/723
-
-REAL_FFE6 = "012c003203151032053205000000000000000a00"
-# dist_empty=300mm, dist_full=50mm, LP=3/21, advertise_off=10s
-
-REAL_FFF2_ON  = "0100010000000000009600000000000000000000"
-# enabled=True, instance=0, fluid_type=1(Fresh Water), volume=150L
-
-REAL_FFF3 = "025c000000000000000000000000000000000000"
-# n2k_state=2(active), n2k_src=92(0x5C)
-```
-
-
-### Mopeka Pro 200 (BLE)
-- **MAC:** `F1:FD:CB:6C:B2:CC`, passive advertisement only
-- **BLE Manufacturer ID:** `0x0059` (Nordic Semiconductor)
+- **MAC:** `F1:FD:CB:6C:B2:CC`, passive advertisement
 - `fill_level_pct = ((tank_depth - distance_mm) / tank_depth) × 100`
 
 ---
 
-## 💻 Двухуровневая система команд YDNU-02
+## 📦 Форк nmea2000
 
-### ⚠️ КРИТИЧЕСКИ ВАЖНО
-У YDNU-02 **ДВА ОТДЕЛЬНЫХ УРОВНЯ** управления:
-1. **OS Shell** — `echo "YDNU MODE ..." > /dev/ttyACM0`
-2. **Service Menu** — только после `YDNU MODE SERVICE`, через serial terminal
+**Путь:** `/Users/denn/Develop/yacht/nmea2000`
+**Ветка:** `fix/pgn-126996-hash-collision-per-source`
 
-**Через прокси:** OS Shell команды → `pcc.passthrough_write(b"YDNU MODE SERVICE\r\n")`
-(прокси держит serial — прямой `echo > /dev/ttyACM0` работать не будет!)
+### Изменения относительно upstream
 
-#### OS Shell команды
+| Файл | Изменение | Статус PR |
+|------|-----------|-----------|
+| `nmea2000/message.py` | `source_id = unique_number` (было `.name`) | pending |
+| `nmea2000/ioclient.py` | EOF → `ConnectionError` | merged PR #61 |
+| `nmea2000/decoder.py` | архитектурная документация | — |
 
-| Команда | Эффект | EEPROM |
-|:---|:---|:---|
-| `YDNU MODE AUTO/0183/RAW/N2K` | Смена режима | ✅ |
-| `YDNU MODE SERVICE` | Вход в сервисный режим | ❌ |
-| `YDNU SILENT ON/OFF` | Silent mode | ✅ |
+### Тесты форка
 
-#### Service Menu команды
-`HELP`, `MODE`, `FILTER`, `SET`, `RESET SETTINGS/FILTERS`, `DIAG ALL/USB_RX/USB_TX/N2K_RX/N2K_TX`
-
----
-
-## 📡 RAW Mode (Appendix E)
-```
-Incoming: hh:mm:ss.ddd R msgid b0 b1 ... b7<CR><LF>
-Outgoing: msgid b0 b1 ... b7<CR><LF>   (без timestamp!)
-```
-
----
-
-## 🌐 ydnu02-web (yacht-n2k-console)
-
-### Структура
-```
-yacht-n2k-console/
-├── nmea_tcp_proxy.py     # ← ОСНОВНОЙ: держит /dev/ttyACM0, broadcast :4001, ctrl :4002
-├── device_manager.py     # TCPProxyConnection + ProxyControlClient
-├── ydnu02.py             # Hardware controller (passthrough support)
-├── tests/
-│   └── test_nmea_tcp_proxy.py  # 18 тестов (pytest)
-
-ha/nmea2000/              # FastAPI веб-приложение
-├── app.py
-├── device_manager.py
-├── ydnu02.py
-├── routes/               # device, service, maintenance, firmware, gobius, mopeka, sensors, websockets
-└── static/               # SPA, 7 tabs, dark theme
-```
-
-### DeviceManager Patterns (через TCP)
-
-| Паттерн | Использование |
-|:---|:---|
-| `TCPProxyConnection` | Читает NMEA из :4001, reconnect backoff |
-| `ProxyControlClient` | Управляет :4002 для service/firmware |
-| `_service_operation(func)` | lock → enter_service → func → exit_service |
-
-### Firmware OTA
-1. `GET /api/firmware/latest` → парсит yachtd.com
-2. `POST /api/firmware/download` → ZIP → .BIN
-3. `POST /api/firmware/flash/{filename}` → validate + backup + chunked write
-4. `GET /api/firmware/progress` → polling
-
----
-
-## 🐳 Signal K в Docker
 ```bash
-cd ~/ha/nmea2000 && docker compose up -d
+cd /Users/denn/Develop/yacht/nmea2000
+python3 -m pytest tests/ -v   # test_decoder.py проверяет хэши SA=64 и SA=200
 ```
-Веб: `http://192.168.68.56:3000`
+
+---
+
+## ⚠️ Правила
+
+1. **Никогда не трогать тесты** без явного подтверждения бага в тесте (из AGENTS.md)
+2. **Перед деплоем** — pre_deploy_diff показывается автоматически
+3. **После --patch-ha** — HA перезапускается только если что-то реально изменилось
+4. **После --clean-ha** — обязательно запустить live тесты
+5. **При появлении дублей** в HA → deploy.sh --clean-ha (patch-v2 предотвращает новые дубли)
+6. **test_service_mode.py** падает в sandbox (socket.bind) — это нормально, не баг кода
+7. **nmea2000 устанавливается из git форка** (requirements.txt) — не из PyPI upstream
