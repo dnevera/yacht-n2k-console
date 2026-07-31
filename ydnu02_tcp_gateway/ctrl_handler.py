@@ -181,10 +181,10 @@ class CtrlHandler:
                         raw = cmd_bytes + b"\n"
                         with self._serial_lock:
                             ser = self._get_serial()
-                            if ser and ser.is_open:
+                            if ser and getattr(ser, "is_open", False) and getattr(ser, "fd", None) is not None:
                                 try:
                                     ser.write(raw)
-                                except serial.SerialException as e:
+                                except (serial.SerialException, OSError, TypeError, AttributeError) as e:
                                     ctrl_send(conn, f"ERROR: serial write: {e}")
 
                     else:

@@ -104,6 +104,15 @@ class GobiusBLEPoller:
                 # try to disconnect it so device becomes discoverable again
                 print(f"[Gobius BLE] Device {mac} not found — clearing stale BlueZ connection")
                 try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "bluetoothctl", "disconnect", mac,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL
+                    )
+                    await asyncio.wait_for(proc.wait(), timeout=3.0)
+                except Exception:
+                    pass
+                try:
                     stale = BleakClient(mac, timeout=5.0)
                     await stale.connect()
                     await stale.disconnect()

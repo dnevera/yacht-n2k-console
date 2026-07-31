@@ -73,7 +73,7 @@ class DataHub:
         with self._serial_lock:
             ser = self._get_serial()
 
-        if ser is None or not ser.is_open or self._get_service_mode():
+        if ser is None or not getattr(ser, "is_open", False) or getattr(ser, "fd", None) is None or self._get_service_mode():
             return
 
         frame_claim = b"00:00:00.000 T 18EAFFFE 00 EE 00\r\n"
@@ -82,7 +82,7 @@ class DataHub:
             ser.write(frame_claim)
             ser.write(frame_prod)
             print("[data] ISO Requests (Address Claim + Product Info) TX sent to serial", flush=True)
-        except serial.SerialException as e:
+        except (serial.SerialException, OSError, TypeError, AttributeError) as e:
             print(f"[data] ISO Request TX error: {e}", flush=True)
 
         tcp_iso_req_claim = fmt_frame('18EAFFFE', b'\x00\xee\x00')
