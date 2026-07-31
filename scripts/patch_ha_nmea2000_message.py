@@ -53,7 +53,7 @@ USAGE (inside HA Docker container):
   python3 /tmp/patch_ha_nmea2000_message.py
 
 USAGE (from Mac via SSH — used by deploy.sh):
-  ssh user@<gateway-host> "sudo docker cp /tmp/patch_ha_nmea2000_message.py homeassistant:/tmp/ && \\
+  ssh user@gateway-host "sudo docker cp /tmp/patch_ha_nmea2000_message.py homeassistant:/tmp/ && \\
     sudo docker exec homeassistant python3 /tmp/patch_ha_nmea2000_message.py"
 
 RELATED:

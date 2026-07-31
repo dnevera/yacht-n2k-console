@@ -37,7 +37,7 @@ yacht-n2k-console/
 └── pyproject.toml
 
 Смежный репозиторий:
-/Users/denn/Develop/yacht/nmea2000/   # форк tomer-w/nmea2000
+/path/to/yacht/nmea2000/   # форк tomer-w/nmea2000
   ветка: fix/pgn-126996-hash-collision-per-source
   nmea2000/message.py  — исправлен primary_key (unique_number fix)
   nmea2000/ioclient.py — исправлен EOF spin-loop (PR уже merged в upstream)
@@ -322,7 +322,7 @@ ssh user@<gateway-host> "sudo docker exec homeassistant grep 'source_iso_name\.'
 ### Дубли в HA → clean-ha
 
 ```bash
-cd /Users/denn/Develop/yacht/yacht-n2k-console && ./deploy.sh --clean-ha
+./deploy.sh --clean-ha
 # После: .venv/bin/python -m pytest tests/test_live_ha_integration.py -v
 ```
 

@@ -52,8 +52,23 @@ class HALiveChecker:
         except Exception:
             return None
 
-    def fetch_from_ssh(self, host: str = 'user@<gateway-host>') -> Optional[Dict[str, Any]]:
-        """Fetch HA device and entity registries directly from remote Pi via SSH."""
+    def fetch_from_ssh(self, host: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Fetch registry files directly from Home Assistant container via SSH."""
+        if not host:
+            # Try loading host from deploy.conf
+            deploy_conf = Path(__file__).parent.parent / "deploy.conf"
+            if deploy_conf.exists():
+                conf = {}
+                for line in deploy_conf.read_text().splitlines():
+                    if "=" in line and not line.startswith("#"):
+                        k, v = line.split("=", 1)
+                        conf[k.strip()] = v.strip().strip("'\"")
+                if "REMOTE_HOST" in conf:
+                    user = conf.get("REMOTE_USER", "user")
+                    host = f"{user}@{conf['REMOTE_HOST']}"
+        if not host:
+            logger.error("No SSH host provided and deploy.conf unavailable")
+            return None
         import subprocess
         try:
             cmd_dev = f"ssh -o ConnectTimeout=5 {host} \"sudo docker exec homeassistant cat /config/.storage/core.device_registry 2>/dev/null\""

@@ -15,7 +15,7 @@
 #
 # USAGE:
 #   ./scripts/apply_ha_patch.sh
-#   ./scripts/apply_ha_patch.sh user@<gateway-host>   # override SSH host
+#   ./scripts/apply_ha_patch.sh user@gateway-host   # override SSH host
 #
 # RELATED FILES:
 #   scripts/patch_ha_nmea2000_message.py  — the actual patch logic
@@ -25,14 +25,27 @@
 # BUG BEING FIXED (summary):
 #   nmea2000/message.py add_data(): primary_key = f"{self.id}" — no source identity.
 #   For PGN 126996 (productInformation) all devices share MD5 818d9516db08fd90ffd1967e3c403bed.
-#   Second device in HA gets 0 entities. Fix: include source_iso_name.name in primary_key.
+#   Second device in HA gets 0 entities. Fix: include source_iso_name.unique_number in primary_key.
 
 set -euo pipefail
 
-HA_HOST="${1:-user@<gateway-host>}"
-CONTAINER="homeassistant"
-PATCH_SCRIPT="$(dirname "$0")/patch_ha_nmea2000_message.py"
-REMOTE_TMP="/tmp/patch_ha_nmea2000_message.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Load deploy.conf if present
+if [ -f "${PROJECT_DIR}/deploy.conf" ]; then
+    # shellcheck disable=SC1091
+    source "${PROJECT_DIR}/deploy.conf"
+fi
+
+DEFAULT_HOST="${REMOTE_USER:-user}@${REMOTE_HOST:-<gateway-host>}"
+HA_HOST="${1:-${DEFAULT_HOST}}"
+
+if [ "${HA_HOST}" = "user@<gateway-host>" ] || [ -z "${HA_HOST}" ]; then
+    echo "ERROR: Target host not specified and deploy.conf not found or incomplete." >&2
+    echo "Usage: $0 [user@gateway-host]" >&2
+    exit 1
+fi
 
 echo "[apply_ha_patch] Host:      ${HA_HOST}"
 echo "[apply_ha_patch] Container: ${CONTAINER}"
