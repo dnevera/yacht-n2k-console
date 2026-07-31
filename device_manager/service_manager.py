@@ -46,7 +46,9 @@ class ServiceManager:
             return self._info_cache
 
         def _do(ctrl):
-            welcome = ctrl._send_terminal_command("HELP", wait=2.0)
+            welcome = getattr(ctrl, "_welcome_text", "")
+            if not welcome or "Firmware version" not in welcome:
+                welcome = ctrl._send_terminal_command("HELP", wait=2.0)
             info = ctrl._parse_welcome_screen(welcome)
             info["port"] = ctrl.port
             info["state"] = "online"

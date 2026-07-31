@@ -48,7 +48,7 @@ class CtrlHandler:
         with self._serial_lock:
             ser = self._get_serial()
             is_mock = hasattr(ser, "reset_input_buffer") or hasattr(ser, "_mock_name")
-            if ser and ser.is_open:
+            if ser and getattr(ser, "is_open", False) and getattr(ser, "fd", None) is not None:
                 try:
                     ser.close()
                 except Exception:
@@ -99,12 +99,12 @@ class CtrlHandler:
         with self._serial_lock:
             ser = self._get_serial()
 
-        if ser and ser.is_open:
+        if ser and getattr(ser, "is_open", False) and getattr(ser, "fd", None) is not None:
             try:
                 ser.write(b"MODE RAW\r\n")
                 time.sleep(0.5)
                 ser.timeout = 0.1
-            except serial.SerialException as e:
+            except (serial.SerialException, OSError, TypeError, AttributeError) as e:
                 print(f"[ctrl] error during service exit: {e}", flush=True)
 
         print("[ctrl] YDNU-02 switched back to RAW mode", flush=True)
@@ -181,11 +181,14 @@ class CtrlHandler:
                         raw = cmd_bytes + b"\n"
                         with self._serial_lock:
                             ser = self._get_serial()
-                            if ser and getattr(ser, "is_open", False) and getattr(ser, "fd", None) is not None:
+                            is_valid = ser and getattr(ser, "is_open", False) and getattr(ser, "fd", None) is not None
+                            if is_valid:
                                 try:
                                     ser.write(raw)
                                 except (serial.SerialException, OSError, TypeError, AttributeError) as e:
                                     ctrl_send(conn, f"ERROR: serial write: {e}")
+                            else:
+                                ctrl_send(conn, "ERROR: serial port not open")
 
                     else:
                         ctrl_send(conn, "ERROR: not in service mode")

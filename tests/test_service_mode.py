@@ -791,5 +791,70 @@ class TestDeviceManagerService(unittest.TestCase):
             f'Expected 2 results, got {len(results)}: {results}')
 
 
+class TestTypeErrorDefensiveGuards(unittest.TestCase):
+    """
+    Guarantees that TypeError / NoneType fd during PySerial write or read operations
+    does not crash the CTRL handler or serial reader threads.
+    """
+
+    def setUp(self):
+        self.ctrl_port = _free_port()
+        self.fake_ser  = _make_fake_serial()
+        # Simulate PySerial object where fd is None or raises TypeError on write
+        self.fake_ser.fd = None
+        self.fake_ser.write.side_effect = TypeError("'NoneType' object cannot be interpreted as an integer")
+        self.mod       = _load_proxy_module(ctrl_port=self.ctrl_port)
+        self.stop      = _start_ctrl_server(self.mod, self.ctrl_port, self.fake_ser)
+
+    def tearDown(self):
+        self.stop.set()
+        self.mod.service_mode.clear()
+        with self.mod.service_conn_lock:
+            self.mod.service_conn = None
+
+    def test_exit_service_mode_with_none_fd_does_not_crash(self):
+        """
+        Calling exit_service_mode_on_device when ser.fd is None must not raise TypeError.
+        """
+        try:
+            self.mod._ctrl_handler.exit_service_mode_on_device()
+        except TypeError as e:
+            self.fail(f"exit_service_mode_on_device raised TypeError: {e}")
+
+    def test_passthrough_cmd_write_with_type_error_handled_gracefully(self):
+        """
+        Sending a command over CTRL socket when ser.write raises TypeError must not crash the CTRL thread.
+        """
+        with _tcp_connect(self.ctrl_port) as sock:
+            sock.sendall(b'SERVICE_START\n')
+            _recv_line(sock)  # READY
+            sock.sendall(b'HELP\n')
+            # The handler catches TypeError and sends an ERROR response back
+            reply = _recv_line(sock)
+            self.assertIn('ERROR', reply)
+
+    def test_get_info_parses_welcome_screen(self):
+        """
+        Verify that YDNU02Controller._parse_welcome_screen correctly extracts
+        firmware_version, serial_number, silent_mode, and previous_mode.
+        """
+        welcome_screen = (
+            "******************************************************************\n"
+            "*           Yacht Devices YDNU-02 NMEA 2000 USB Gateway          *\n"
+            "*             Firmware version : 1.15 05/12/2021                *\n"
+            "*             Serial number    : 00050123                        *\n"
+            "*             NMEA 2000 silent : OFF                             *\n"
+            "*             Previous mode    : RAW                             *\n"
+            "******************************************************************\n"
+        )
+        from ydnu02.controller import YDNU02Controller
+        ctrl = YDNU02Controller()
+        info = ctrl._parse_welcome_screen(welcome_screen)
+        self.assertEqual(info.get("firmware_version"), "1.15 05/12/2021")
+        self.assertEqual(info.get("serial_number"), "00050123")
+        self.assertEqual(info.get("silent_mode"), "OFF")
+        self.assertEqual(info.get("previous_mode"), "RAW")
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

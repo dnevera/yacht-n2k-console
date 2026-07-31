@@ -74,8 +74,8 @@ class OperationRunner:
                 with self._controller_lock:
                     ctrl = self._get_ctrl()
                     try:
-                        ctrl._passthrough = pcc
-                        ctrl.enter_service_mode()
+                        welcome = ctrl.enter_service_mode()
+                        ctrl._welcome_text = welcome
                         result = func(ctrl)
                         ctrl.exit_service_mode(exit_mode)
                         ctrl._passthrough = None

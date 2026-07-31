@@ -50,15 +50,18 @@ class SerialReader:
 
                 init_data = b""
 
-                ser.write(b"YDNU MODE RAW\r\n")
-                time.sleep(2.0)
-                if ser.in_waiting:
-                    init_data += ser.read(ser.in_waiting)
-                ser.write(b"0\n")
-                time.sleep(0.5)
-                if ser.in_waiting:
-                    init_data += ser.read(ser.in_waiting)
-                print("[serial] YDNU-02 initialized in RAW mode", flush=True)
+                try:
+                    ser.write(b"YDNU MODE RAW\r\n")
+                    time.sleep(2.0)
+                    if getattr(ser, "in_waiting", 0):
+                        init_data += ser.read(ser.in_waiting)
+                    ser.write(b"0\n")
+                    time.sleep(0.5)
+                    if getattr(ser, "in_waiting", 0):
+                        init_data += ser.read(ser.in_waiting)
+                    print("[serial] YDNU-02 initialized in RAW mode", flush=True)
+                except (serial.SerialException, OSError, TypeError, AttributeError) as e:
+                    print(f"[serial] init sequence error: {e}", flush=True)
 
                 for raw_line in init_data.split(b"\n"):
                     if not raw_line:
