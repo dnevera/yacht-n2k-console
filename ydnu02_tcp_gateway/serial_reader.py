@@ -8,8 +8,7 @@ import time
 import threading
 import serial
 from typing import Optional, Callable
-from ydnu02_tcp_gateway.frame_utils import NMEA_LINE_RE, get_pgn_sa
-from ydnu02_tcp_gateway.device_cache import DeviceFrameCache
+from ydnu02_tcp_gateway.frame_utils import NMEA_LINE_RE
 
 
 class SerialReader:
@@ -24,8 +23,7 @@ class SerialReader:
                  serial_ready: threading.Event,
                  service_mode: threading.Event,
                  broadcast: Callable[[bytes], None],
-                 send_iso_request: Callable[[], None],
-                 device_cache: DeviceFrameCache):
+                 send_iso_request: Callable[[], None]):
         self.serial_port = serial_port
         self.serial_baud = serial_baud
         self._get_serial = get_serial_instance
@@ -35,7 +33,6 @@ class SerialReader:
         self.service_mode = service_mode
         self.broadcast = broadcast
         self.send_iso_request = send_iso_request
-        self.device_cache = device_cache
 
     def run(self) -> None:
         """Main serial loop (runs forever)."""
@@ -62,14 +59,6 @@ class SerialReader:
                     print("[serial] YDNU-02 initialized in RAW mode", flush=True)
                 except (serial.SerialException, OSError, TypeError, AttributeError) as e:
                     print(f"[serial] init sequence error: {e}", flush=True)
-
-                for raw_line in init_data.split(b"\n"):
-                    if not raw_line:
-                        continue
-                    line = raw_line.rstrip(b"\r") + b"\n"
-                    if not NMEA_LINE_RE.match(line):
-                        continue
-                    self.device_cache.update_from_line(line)
 
                 self.serial_ready.set()
                 self.send_iso_request()

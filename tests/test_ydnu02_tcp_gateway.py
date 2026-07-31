@@ -25,7 +25,7 @@ import threading
 import time
 import types
 import unittest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -115,27 +115,33 @@ class TestFmtFrame(unittest.TestCase):
         self.mod = _load_gateway()
 
     def test_output_ends_with_lf(self):
+        """Verify that formatted output ends with a newline."""
         result = self.mod._fmt_frame('18EEFFC8', b'\x39\x30\xA0\x5C\x74\x21\xA7\x2C')
         self.assertTrue(result.endswith(b'\n'))
 
     def test_no_cr_in_output(self):
+        """Verify that formatted output contains no carriage return."""
         result = self.mod._fmt_frame('18EEFFC8', b'\x39\x30\xA0\x5C')
         self.assertNotIn(b'\r', result)
 
     def test_format_contains_r_direction(self):
+        """Verify that formatted output includes the R direction indicator."""
         result = self.mod._fmt_frame('18EEFFC8', b'\x00\x01')
         self.assertIn(b' R ', result)
 
     def test_can_id_hex_present(self):
+        """Verify that formatted output includes the CAN ID in hex."""
         result = self.mod._fmt_frame('18EEFFC8', b'\x00')
         self.assertIn(b'18EEFFC8', result)
 
     def test_data_bytes_hex_present(self):
+        """Verify that formatted output includes the data bytes in hex."""
         result = self.mod._fmt_frame('00000000', b'\xAB\xCD')
         self.assertIn(b'AB', result)
         self.assertIn(b'CD', result)
 
     def test_matches_nmea_regex(self):
+        """Verify that formatted frame matches the NMEA regex."""
         result = self.mod._fmt_frame('18EEFFC8', b'\x39\x30\xA0\x5C\x74\x21\xA7\x2C')
         self.assertIsNotNone(self.mod._NMEA_LINE_RE.match(result))
 
@@ -150,26 +156,33 @@ class TestNMEARegex(unittest.TestCase):
         self.re = self.mod._NMEA_LINE_RE
 
     def test_valid_r_frame_matches(self):
+        """Verify that valid received frames match the regex."""
         self.assertIsNotNone(self.re.match(VALID_LINE))
 
     def test_valid_t_frame_matches(self):
+        """Verify that valid transmitted frames match the regex."""
         line = b'00:00:00.000 T 18EAFFFE 00 EE 00\n'
         self.assertIsNotNone(self.re.match(line))
 
     def test_cr_in_frame_rejected(self):
+        """Verify that frames containing carriage returns are rejected."""
         line = b'01:43:22.648 R 19F2115C 00 30 5C 64\r\n'
         self.assertIsNone(self.re.match(line))
 
     def test_empty_line_rejected(self):
+        """Verify that empty lines are rejected."""
         self.assertIsNone(self.re.match(b'\n'))
 
     def test_text_line_rejected(self):
+        """Verify that plain text lines are rejected."""
         self.assertIsNone(self.re.match(b'YDNU MODE RAW\n'))
 
     def test_truncated_can_id_rejected(self):
+        """Verify that frames with truncated CAN IDs are rejected."""
         self.assertIsNone(self.re.match(b'01:23:45.678 R 1F2115C 00\n'))
 
     def test_valid_8byte_payload_matches(self):
+        """Verify that valid 8-byte payload frames match the regex."""
         line = b'00:00:01.000 R 18EEFF5C 39 30 A0 5C 74 21 A7 2C\n'
         self.assertIsNotNone(self.re.match(line))
 
@@ -189,24 +202,31 @@ class TestTXLineRegex(unittest.TestCase):
         self.re = self.mod._TX_LINE_RE
 
     def test_tx_frame_crlf_matches(self):
+        """Verify that CRLF-terminated TX frames match the regex."""
         self.assertIsNotNone(self.re.match(b'18EEFFC8 39 30 A0 5C 74 21 A7 2C\r\n'))
 
     def test_tx_frame_lf_only_matches(self):
+        """Verify that LF-terminated TX frames match the regex."""
         self.assertIsNotNone(self.re.match(b'18EEFFC8 39 30 A0 5C\n'))
 
     def test_tx_single_byte_matches(self):
+        """Verify that single-byte TX frames match the regex."""
         self.assertIsNotNone(self.re.match(b'18EAFFFE 00\r\n'))
 
     def test_rx_format_rejected(self):
+        """Verify that RX-formatted frames are rejected by TX regex."""
         self.assertIsNone(self.re.match(b'01:43:22.648 R 19F2115C 00 30\n'))
 
     def test_text_rejected(self):
+        """Verify that plain text is rejected by TX regex."""
         self.assertIsNone(self.re.match(b'YDNU MODE OK\r\n'))
 
     def test_truncated_can_id_rejected(self):
+        """Verify that truncated CAN IDs are rejected by TX regex."""
         self.assertIsNone(self.re.match(b'18EEFFC 39 30\r\n'))  # 7 hex chars
 
     def test_iso_claim_tx_format(self):
+        """Verify that ISO claim frames in TX format match the regex."""
         self.assertIsNotNone(self.re.match(b'18EEFFC8 39 30 A0 5C 74 21 A7 2C\r\n'))
 
 
@@ -219,12 +239,14 @@ class TestGetPgnSa(unittest.TestCase):
         self.mod = _load_gateway()
 
     def test_iso_claim_pgn_and_sa(self):
+        """Verify extraction of PGN and SA from an ISO claim CAN ID."""
         # CAN ID 18EEFF5C: PGN=60928 (0xEE00), SA=0x5C=92
         pgn, sa = self.mod._get_pgn_sa(b'18EEFF5C')
         self.assertEqual(pgn, 60928)
         self.assertEqual(sa, 92)
 
     def test_product_info_pgn(self):
+        """Verify extraction of PGN and SA from a Product Info CAN ID."""
         # PGN 126996 = 0x1F014, CAN ID with PF=0xF0, PS=0x14
         # CAN ID: priority=6, DP=1, PF=0xF0, PS=0x14, SA=0xC8
         # = (6<<26)|(1<<24)|(0xF0<<16)|(0x14<<8)|0xC8 = 0x19F014C8
@@ -233,11 +255,13 @@ class TestGetPgnSa(unittest.TestCase):
         self.assertEqual(sa, 0xC8)
 
     def test_temperature_pgn(self):
+        """Verify extraction of PGN from a Temperature CAN ID."""
         # PGN 130312 = 0x1FD08, CAN ID 19FD08C8
         pgn, sa = self.mod._get_pgn_sa(b'19FD08C8')
         self.assertEqual(pgn, 130312)
 
     def test_invalid_raises(self):
+        """Verify that invalid CAN ID input raises an exception."""
         with self.assertRaises((ValueError, IndexError)):
             self.mod._get_pgn_sa(b'ZZZZZZZZ')
 
@@ -265,12 +289,14 @@ class TestBroadcast(unittest.TestCase):
         return conns, received
 
     def test_broadcast_to_all_clients(self):
+        """Verify that messages are broadcast to all connected clients."""
         conns, received = self._make_clients(3)
         self.mod._broadcast(VALID_LINE)
         for i in range(3):
             self.assertEqual(received[i], [VALID_LINE])
 
     def test_broadcast_excludes_sender(self):
+        """Verify that broadcast excludes the sender client."""
         conns, received = self._make_clients(3)
         sender = conns[1]
         self.mod._broadcast(VALID_LINE, exclude=sender)
@@ -279,12 +305,14 @@ class TestBroadcast(unittest.TestCase):
         self.assertEqual(received[2], [VALID_LINE], 'client 2 must receive')
 
     def test_broadcast_exclude_none_sends_to_all(self):
+        """Verify that broadcast with exclude=None sends to all clients."""
         conns, received = self._make_clients(2)
         self.mod._broadcast(VALID_LINE, exclude=None)
         self.assertEqual(received[0], [VALID_LINE])
         self.assertEqual(received[1], [VALID_LINE])
 
     def test_dead_client_removed(self):
+        """Verify that disconnected clients are removed during broadcast."""
         class DeadConn:
             def sendall(self, data):
                 raise OSError('broken pipe')
@@ -301,14 +329,12 @@ class TestBroadcast(unittest.TestCase):
         self.assertIn(good, self.mod.clients)
         self.assertEqual(good.received, [VALID_LINE])
 
-    def test_broadcast_caches_iso_claim(self):
-        """ISO Claim frame (PGN 60928) must be cached in _device_frame_cache."""
-        self.mod.clients = set()
+    def test_broadcast_fans_out_without_caching(self):
+        """Broadcast fans out line to all connected clients directly."""
+        conns, received = self._make_clients(2)
         self.mod._broadcast(ISO_CLAIM_LINE)
-        cache = self.mod._device_frame_cache
-        # SA=0x5C=92 for the test fixture CAN ID 18EEFF5C
-        self.assertIn(92, cache)
-        self.assertIn('iso_claim', cache[92])
+        self.assertEqual(received[0], [ISO_CLAIM_LINE])
+        self.assertEqual(received[1], [ISO_CLAIM_LINE])
 
 
 # ── bidirectional hub: handle_data_client ────────────────────────────────────
@@ -434,9 +460,10 @@ class TestBidirectionalHub(unittest.TestCase):
         self.assertIn(b'18EEFFC8', received[0])
 
     @NEEDS_NETWORK
-    def test_tx_iso_claim_cached(self):
-        """ISO Claim in TX format from N2KDevice must land in _device_frame_cache."""
-        self.mod.clients = set()
+    def test_tx_iso_claim_broadcast(self):
+        """ISO Claim in TX format from N2KDevice is broadcast to TCP clients."""
+        c_conn, c_client = self._make_pipe()
+        self.mod.clients = {c_conn}
         conn, client = self._make_pipe()
         t = threading.Thread(
             target=self.mod.handle_data_client,
@@ -450,9 +477,13 @@ class TestBidirectionalHub(unittest.TestCase):
         client.close()
         t.join(timeout=1.0)
 
-        cache = self.mod._device_frame_cache
-        self.assertIn(200, cache, 'SA=200 must be in cache after TX ISO Claim')
-        self.assertIn('iso_claim', cache[200])
+        received = c_client.recv(4096)
+        c_conn.close()
+        c_client.close()
+
+        # Verified: TX ISO Claim frame is broadcast to other clients in formatted RX line
+        self.assertTrue(len(received) > 0)
+        self.assertIn(b'18EEFFC8', received)
 
 
 # ── _send_iso_request ─────────────────────────────────────────────────────────
@@ -473,6 +504,7 @@ class TestISORequestBroadcast(unittest.TestCase):
         return mock_ser
 
     def test_sends_to_serial(self):
+        """Verify that ISO request frames are written to serial."""
         mock_ser = self._setup_serial()
         self.mod.clients = set()
         self.mod._send_iso_request()
@@ -510,6 +542,7 @@ class TestISORequestBroadcast(unittest.TestCase):
         self.assertEqual(mock_ser.write.call_count, 2, 'Must be rate-limited to 1 request set (2 writes)')
 
     def test_no_write_when_serial_not_ready(self):
+        """Verify that ISO request is not sent when serial is not ready."""
         mock_ser = self._setup_serial()
         self.mod._serial_ready.clear()
         self.mod.clients = set()
@@ -517,6 +550,7 @@ class TestISORequestBroadcast(unittest.TestCase):
         mock_ser.write.assert_not_called()
 
     def test_no_write_in_service_mode(self):
+        """Verify that ISO request is not sent in service mode."""
         mock_ser = self._setup_serial()
         self.mod.service_mode.set()
         self.mod.clients = set()
@@ -554,6 +588,7 @@ class TestSerialFanout(unittest.TestCase):
         return received[0] if received else None
 
     def test_crlf_stripped(self):
+        """Verify that CRLF line endings are stripped from serial input."""
         raw = b'01:43:22.648 R 19F2115C 00 30 5C 64 00 00 00 FF\r\n'
         result = self._fanout(raw)
         self.assertIsNotNone(result)
@@ -561,27 +596,34 @@ class TestSerialFanout(unittest.TestCase):
         self.assertTrue(result.endswith(b'\n'))
 
     def test_lf_only_passthrough(self):
+        """Verify that LF line endings pass through intact."""
         result = self._fanout(b'01:43:22.648 R 19F2115C 00 30 5C 64 00 00 00 FF\n')
         self.assertEqual(result, b'01:43:22.648 R 19F2115C 00 30 5C 64 00 00 00 FF\n')
 
     def test_empty_line_filtered(self):
+        """Verify that empty lines from serial are filtered out."""
         self.assertIsNone(self._fanout(b'\r\n'))
 
     def test_whitespace_only_filtered(self):
+        """Verify that whitespace-only lines are filtered out."""
         self.assertIsNone(self._fanout(b'   \r\n'))
 
     def test_empty_bytes_filtered(self):
+        """Verify that empty byte inputs are filtered out."""
         self.assertIsNone(self._fanout(b''))
 
     def test_text_line_filtered_by_regex(self):
+        """Verify that non-NMEA text lines are filtered out."""
         self.assertIsNone(self._fanout(b'YDNU MODE RAW OK\r\n'))
 
     def test_data_content_preserved(self):
+        """Verify that payload data content is preserved during fanout."""
         payload = b'01:43:22.648 R 19F2115C 00 30 5C 64 00 00 00 FF'
         result = self._fanout(payload + b'\r\n')
         self.assertTrue(result.startswith(payload))
 
     def test_fanout_to_multiple_clients(self):
+        """Verify that serial lines are fanned out to all clients."""
         received = {i: [] for i in range(3)}
 
         class FakeConn:
@@ -634,6 +676,7 @@ class TestGatewayDevice(unittest.TestCase):
         self.assertEqual(result, '0.0.0')
 
     def test_read_version_reads_file(self):
+        """Verify that _read_version reads version string from file."""
         mock_open = unittest.mock.mock_open(read_data='1.2.3\n')
         with patch('builtins.open', mock_open):
             result = self.dev._read_version()
@@ -746,8 +789,8 @@ class TestFeedToLib(unittest.TestCase):
         self._skip_if_no_lib()
         parsed = {'info': {}, 'data': b''}
         result = N2KPGNDecoder.feed_to_lib(parsed)
-        # Decoding empty CAN ID 0x00000000 may return None or a result — must not raise
-        self.assertIn(result, [None, result])  # any result is acceptable
+        # Decoding empty CAN ID 0x00000000 may return None or a result — must not raise.
+        # No assertion on result value: the goal is crash-safety, not a specific return.
 
 
 # ── NMEA format compatibility (library-level) ─────────────────────────────────

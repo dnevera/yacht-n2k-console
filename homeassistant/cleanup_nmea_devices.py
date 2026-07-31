@@ -65,24 +65,14 @@ def find_nmea_entry_ids(config_data: dict) -> set[str]:
 
 
 def is_garbage_device(device: dict, nmea_entries: set[str]) -> bool:
-    """True if device should be deleted."""
-    # Must be linked to nmea2000
+    """True if device belongs to our TCP-GW and should be cleaned up."""
     linked = set(device.get('config_entries', [])) & nmea_entries
     if not linked:
         return False
 
-    if REMOVE_ALL:
-        return True
-
-    # Remove if manufacturer name looks like our broken code artefact
-    mfr = device.get('manufacturer') or ''
-    if any(g in mfr for g in GARBAGE_MANUFACTURERS):
-        return True
-
-    # Remove if model contains garbage fingerprints
-    model = device.get('model') or ''
-    if 'PK:' in str(device.get('name_by_user') or '') or \
-       'PK:' in str(device.get('name') or ''):
+    dev_str = str(device)
+    # Safely match only our TCP-GW device entries (902047, 402047, legacy 12345, or PC Gateway)
+    if any(k in dev_str for k in ('902047', '402047', '12345', 'PC Gateway')):
         return True
 
     return False

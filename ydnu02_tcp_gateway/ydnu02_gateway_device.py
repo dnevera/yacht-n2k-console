@@ -43,14 +43,14 @@ IDENTITY (ISO 11783 NAME)
   +---------------------+--------+-------------------------------------------------+
 
 BROADCASTS (periodic)
-  +-------------------+----------+--------------------------------------------+
-  | PGN               | Interval | Description                                |
-  +-------------------+----------+--------------------------------------------+
-  | 60928 (ISO Claim) | on start | Address claim — handled by N2KDevice lib   |
-  | 126996 (Prod Info) | on start | Product Information — explicit + on request |
-  | 126993 (Heartbeat) | 10s     | Liveness heartbeat — managed by library    |
-  | 130312 (Temp)      | 3s      | CPU temperature from sysfs thermal_zone    |
-  +-------------------+----------+--------------------------------------------+
+  +--------------------+----------+--------------------------------------------+
+  | PGN                | Interval | Description                                |
+  +--------------------+----------+--------------------------------------------+
+  | 60928 (ISO Claim)  | on start | Address claim — handled by N2KDevice lib   |
+  | 126996 (Prod Info) | 60s      | Product Info — startup + periodic rebrcast  |
+  | 126993 (Heartbeat) | 10s      | Liveness heartbeat — managed by library    |
+  | 130312 (Temp)      | 3s       | CPU temperature from sysfs thermal_zone    |
+  +--------------------+----------+--------------------------------------------+
 
 STARTUP SEQUENCE
   1. ``start_in_thread()`` launches a daemon thread that sleeps 5s for port 4001
@@ -93,6 +93,9 @@ ISSUES:
   - ISSUE(private-api): ``device._build_product_information_message()`` uses a
     private method of N2KDevice. If the nmea2000 library changes its internal API,
     this call will break silently. Pin the library version or add a try/except.
+    The N2KDevice library handles ISO Request (PGN 59904) automatically via its
+    internal receive loop started in connect(). Our periodic broadcast is a
+    proactive measure for passive listeners (e.g. HA) that do not send ISO Requests.
   - ISSUE(claim-timeout): If address claim times out (15s), ``_run_device()``
     returns immediately without entering the temperature loop. The 15s restart
     delay means up to 30s of downtime. Consider retrying the claim instead.
@@ -102,6 +105,126 @@ ISSUES:
   - ISSUE(temp-unavailable): On non-Linux platforms (macOS dev), _read_cpu_temp()
     always returns None. The temperature loop logs a warning every 3s indefinitely.
     Consider a backoff or one-time log after initial detection.
+
+KNOWN ISSUES / WORKAROUNDS
+==========================
+
+  KI-001 (ha-format-none) — Home Assistant drops all N2K PGNs on restart
+  -----------------------------------------------------------------------
+  Root cause (two cooperating bugs):
+
+    1. HA ``hub.py`` line ~241 creates ``TextNmea2000Gateway(host, port)`` WITHOUT
+       the ``format`` parameter → gateway is in auto-sense mode (``format=None``).
+       In auto-sense mode the gateway can DECODE incoming frames (format is detected
+       from the first received byte) but cannot ENCODE outgoing frames.
+
+    2. ``AsyncIOClient._seed_network_map()`` runs on every ``connect()`` and tries to
+       send three ISO Request frames (PGN 59904) for PGN 60928 / 126996 / 126998.
+       It calls ``self.send()`` → ``_encode_impl()`` → raises ``ValueError:
+       "Cannot encode: this gateway was created with format=None (auto-sense mode)"``.
+       The ISO Requests never leave HA.
+
+    3. ``nmea2000.decoder.py`` has a 10-minute window: if ``build_network_map=True``
+       (HA default) and no PGN 60928 has been received for a source address SA, the
+       decoder silently returns ``None`` for ALL other PGNs from that SA for the first
+       10 minutes after startup (``started_at < now - 10min``). Result: PGN 130312
+       (temperature), PGN 126996 (Product Info), etc. are all dropped before the
+       ``receive_callback`` is ever called.
+
+  Correct fix (in HA integration):
+    Edit ``/config/custom_components/nmea2000/hub.py``, line ~241::
+
+        from nmea2000.ioclient import N2KFormat
+        self.gateway = TextNmea2000Gateway(
+            host=ip, port=port,
+            format=N2KFormat.CAN_FRAME_ASCII,   # ← add this
+            **common_kwargs,
+        )
+
+  Workaround (implemented here — controlled via ``GatewaySettings``):
+    On startup and periodically (default 60s, configurable), re-broadcast:
+      • PGN 60928 (ISO Address Claim) for every known SA on the bus
+      • PGN 126996 (Product Information) for our own virtual device SA=200
+    HA receives these passively, populates ``source_to_iso_name[sa]``, and
+    stops dropping PGNs from those source addresses.
+
+    Toggle via web UI → Service tab → «NMEA Gateway Settings».
+    API: ``GET/POST /api/gw-settings``
+
+  Skill — check if HA is logging the encode error::
+
+      sudo docker exec homeassistant \
+          grep "Cannot encode" /config/home-assistant.log | tail -5
+
+  Skill — check which SA HA has in its iso-name map (via HA logs)::
+
+      sudo docker exec homeassistant \
+          grep "No ISO name found" /config/home-assistant.log | tail -20
+
+  Skill — manually trigger ISO replay via API::
+
+      curl -s http://gateway.local:8080/api/gw-settings | python3 -m json.tool
+      curl -X POST http://gateway.local:8080/api/gw-settings \
+           -H 'Content-Type: application/json' \
+           -d '{"ha_iso_replay_enabled": true, "ha_iso_replay_interval_s": 30}'
+
+  Skill — disable ISO replay (e.g. after proper hub.py fix is deployed)::
+
+      curl -X POST http://gateway.local:8080/api/gw-settings \
+           -H 'Content-Type: application/json' \
+           -d '{"ha_iso_replay_enabled": false}'
+
+  Skill — watch ISO replay events in gateway logs::
+
+      ssh user@gateway.local \
+          'journalctl -u ydnu02-tcp-gateway -f | grep "ISO replay"'
+
+SKILLS (diagnostic mini-prompts)
+================================
+
+  Skill — verify virtual device is visible on N2K bus::
+
+      # Check that SA=200 appears in the CAN frame stream:
+      ssh user@gateway.local 'nc -q1 localhost 4001 | grep -m5 "200"'
+
+  Skill — check CPU temperature broadcast from sysfs::
+
+      ssh user@gateway.local \
+          'cat /sys/class/thermal/thermal_zone0/temp'
+      # Output: 52300  → 52.3 °C. Divide by 1000.
+
+  Skill — verify Product Info is on the bus::
+
+      # Decode PGN 126996 frames from TCP hub (CAN_FRAME_ASCII format):
+      ssh user@gateway.local \
+          'nc -q5 localhost 4001 | grep -m3 "^:126996:"'
+
+  Skill — check N2K address claim of virtual device::
+
+      # PGN 60928 frames contain the ISO NAME; SA=200 → source field = C8 hex:
+      ssh user@gateway.local \
+          'nc -q5 localhost 4001 | grep -m3 "^:60928:"'
+
+  Skill — read current GatewaySettings from disk::
+
+      ssh user@gateway.local \
+          'cat ~/.config/ydnu02/gateway_settings.json'
+
+  Skill — watch gateway device daemon logs in real time::
+
+      ssh user@gateway.local \
+          'journalctl -u ydnu02-tcp-gateway -f -n 40'
+
+  Skill — restart gateway daemon to force address re-claim::
+
+      ssh user@gateway.local \
+          'sudo systemctl restart ydnu02-tcp-gateway'
+
+  Skill — check heartbeat interval (PGN 126993) on bus::
+
+      # Heartbeat appears every GW_HEARTBEAT_S (10s); SA=200:
+      ssh user@gateway.local \
+          'nc -q15 localhost 4001 | grep "^:126993:" | head -3'
 """
 
 import asyncio
@@ -114,7 +237,9 @@ from datetime import datetime
 from nmea2000.device import N2KDevice
 from nmea2000.input_formats import N2KFormat
 from nmea2000.message import NMEA2000Message, NMEA2000Field
-from nmea2000.consts import FieldTypes
+
+
+from ydnu02_tcp_gateway.gateway_settings import GatewaySettings
 
 logger = logging.getLogger(__name__)
 
@@ -136,8 +261,8 @@ GW_PREFERRED_SA    = 200
 physical devices which typically use SA 0–99. If another device claims SA=200,
 the N2KDevice library performs ISO address claim arbitration per J1939-81."""
 
-GW_UNIQUE_NUMBER   = 402047
-"""21-bit unique number for ISO NAME address claim arbitration."""
+GW_UNIQUE_NUMBER   = 902047
+"""21-bit unique number for ISO NAME address claim arbitration (902047 = Virtual TCP Gateway)."""
 
 GW_MANUFACTURER    = 2047
 """Manufacturer code: 2047 = Custom / Experimental (NMEA 2000 reserved for virtual/custom software devices)."""
@@ -167,6 +292,28 @@ PGN 126993 at this interval. HA uses heartbeat absence to detect device offline.
 GW_TEMP_INTERVAL_S = 3.0
 """CPU temperature broadcast interval in seconds. PGN 130312 is sent at this rate.
 3s provides near-realtime thermal monitoring without excessive bus load."""
+
+GW_PRODUCT_INFO_INTERVAL_S = 60.0
+"""Interval for periodic re-broadcast of Product Information (PGN 126996) in seconds.
+
+HA and other passive listeners do not send ISO Request (PGN 59904) on reconnect
+(KI-001: TextNmea2000Gateway created with format=None → cannot encode ISO Requests).
+We proactively re-broadcast PGN 60928 + PGN 126996 so HA populates
+``source_to_iso_name`` and stops dropping PGNs from our SA.
+
+This value is the DEFAULT. At runtime the value from ``GatewaySettings`` takes precedence
+and can be changed without restarting the daemon via the web UI or API.
+
+Skill — change interval at runtime without daemon restart::
+
+    curl -X POST http://gateway.local:8080/api/gw-settings \\
+         -H 'Content-Type: application/json' \\
+         -d '{"ha_iso_replay_enabled": true, "ha_iso_replay_interval_s": 30}'
+
+Skill — verify current runtime value::
+
+    curl -s http://gateway.local:8080/api/gw-settings | python3 -m json.tool
+"""
 
 # PGN 130312 temperature source: 2 = "Inside Temperature"
 # (closest N2K type for a device/board/CPU temperature)
@@ -397,6 +544,14 @@ async def _run_device() -> None:
         # [gwdev] Address claimed: SA=200  model="YDNU-02 TCP-GW"  version=1.2.3
         # [gwdev] Device loop crashed: ... Restarting in 15s.
 
+    KI-001 (ha-format-none) workaround — ISO Replay:
+      HA creates TextNmea2000Gateway(format=None) → cannot send ISO Requests →
+      decoder.py drops all PGNs from unknown SA for 10 min. Workaround: this
+      loop re-broadcasts PGN 60928 (ISO Claim) for cached physical devices and
+      PGN 126996 (Product Info) for our own SA at GW_PRODUCT_INFO_INTERVAL_S.
+      Controlled by GatewaySettings.ha_iso_replay_enabled (web UI toggle).
+      See module-level KNOWN ISSUES for full root-cause analysis.
+
     ISSUE(claim-failure): If wait_ready() times out, we return immediately.
       The outer loop restarts after 15s, but there's no incremental backoff.
       Repeated claim failures could spam logs.
@@ -425,6 +580,7 @@ async def _run_device() -> None:
         software_version_code=version,
         model_serial_code=f"SW-GW-{GW_UNIQUE_NUMBER:08d}",
         heartbeat_interval=GW_HEARTBEAT_S,
+        persistence_path=os.path.expanduser('~/.config/ydnu02/n2k_gateway_device.json'),
     )
 
     await device.start()
@@ -440,20 +596,81 @@ async def _run_device() -> None:
     logger.warning('[gwdev] Address claimed: SA=%d  model="%s"  version=%s',
                    device.address, GW_MODEL_ID, version)
 
-    # Broadcast Product Information (PGN 126996) on startup once address claim completes.
-    # ISSUE(private-api): _build_product_information_message() is a private method.
-    # Pin the nmea2000 library version to avoid breakage on updates.
-    try:
-        prod_msg = device._build_product_information_message()
-        prod_msg.source = device.address
-        await device.send(prod_msg)
-        logger.warning('[gwdev] Broadcast Product Info (PGN 126996) for SA=%d', device.address)
-    except Exception as exc:
-        logger.warning('[gwdev] Failed to broadcast Product Info on startup: %s', exc)
+    async def _replay_iso_presence() -> None:
+        """Broadcast own presence and prompt all physical devices via ISO Request (PGN 59904).
+
+        KI-001 workaround:
+          1. Broadcast OUR virtual device PGN 60928 (Address Claim) so HA populates
+             source_to_iso_name[200].
+          2. Broadcast OUR virtual device PGN 126996 (Product Info).
+          3. Send PGN 59904 (ISO Request) for PGN 60928 to Destination=255 (Broadcast).
+             This prompts all physical devices on the bus (like YDNU-02) to re-claim
+             their address and send their PGN 60928.
+          4. Send PGN 59904 (ISO Request) for PGN 126996 to Destination=255 (Broadcast).
+             This prompts physical devices to announce their Product Info.
+
+          HA receives all these physical responses passively and populates its network map.
+        """
+        # 1. Our virtual device — PGN 60928 (Address Claim)
+        try:
+            claim_msg = device._build_address_claim_message()
+            claim_msg.source = device.address
+            await device.send(claim_msg)
+            logger.warning('[gwdev] ISO replay: broadcast PGN 60928 for virtual SA=%d', device.address)
+        except Exception as exc:
+            logger.warning('[gwdev] ISO replay: failed PGN 60928 (own): %s', exc)
+
+        await asyncio.sleep(0.1)
+
+        # 2. Our virtual device — PGN 126996 (Product Info)
+        try:
+            prod_msg = device._build_product_information_message()
+            prod_msg.source = device.address
+            await device.send(prod_msg)
+            logger.warning('[gwdev] ISO replay: broadcast PGN 126996 for virtual SA=%d', device.address)
+        except Exception as exc:
+            logger.warning('[gwdev] ISO replay: failed PGN 126996 (own): %s', exc)
+
+        await asyncio.sleep(0.1)
+
+        # 3. Canonical N2K Request: Prompt all physical devices on bus to announce PGN 60928
+        try:
+            req_claim = device._build_iso_request_message(60928, destination=255)
+            req_claim.source = device.address
+            await device.send(req_claim)
+            logger.warning('[gwdev] ISO Request: prompted bus for PGN 60928 (ISO Claim)')
+        except Exception as exc:
+            logger.warning('[gwdev] ISO Request for PGN 60928 failed: %s', exc)
+
+        # 4. Canonical N2K Request: Prompt all physical devices on bus to announce PGN 126996
+        try:
+            req_prod = device._build_iso_request_message(126996, destination=255)
+            req_prod.source = device.address
+            await device.send(req_prod)
+            logger.warning('[gwdev] ISO Request: prompted bus for PGN 126996 (Product Info)')
+        except Exception as exc:
+            logger.warning('[gwdev] ISO Request for PGN 126996 failed: %s', exc)
+
+    # Startup replay — run once after address claim, before entering the main loop.
+    await asyncio.sleep(1.0)
+    await _replay_iso_presence()
+
 
     sid = 0
+    _last_replay_t = time.monotonic()  # track last ISO replay broadcast time
     while True:
         await asyncio.sleep(GW_TEMP_INTERVAL_S)
+
+        # Periodic ISO replay (KI-001 workaround) — controlled by GatewaySettings.
+        # Settings are read dynamically so changes via web UI take effect within
+        # GW_TEMP_INTERVAL_S (~3s) without restarting the daemon.
+        settings = GatewaySettings.instance()
+        now = time.monotonic()
+        replay_interval = settings.ha_iso_replay_interval_s
+        if settings.ha_iso_replay_enabled and (now - _last_replay_t >= replay_interval):
+            _last_replay_t = now
+            await _replay_iso_presence()
+
         temp = _read_cpu_temp()
         if temp is not None:
             try:

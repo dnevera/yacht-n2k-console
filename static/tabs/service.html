@@ -45,4 +45,32 @@ Type a command or use quick buttons.
                     </div>
                 </div>
             </div>
-        
+
+            <!-- NMEA Gateway Settings (KI-001 ISO Replay workaround) -->
+            <div class="card" style="margin-top:1.2rem">
+                <div class="card-head">
+                    <h2>🔄 NMEA Gateway Settings</h2>
+                    <span id="gw-settings-status" class="muted"></span>
+                </div>
+                <p class="muted" style="margin-bottom:1rem;font-size:0.85rem">
+                    Workaround for Home Assistant NMEA integration bug (KI-001):
+                    periodically re-broadcasts ISO Address Claim (PGN 60928) and
+                    Product Info (PGN 126996) so HA recognises all devices after restart.
+                </p>
+                <div class="field-row" style="align-items:center;gap:1rem;flex-wrap:wrap">
+                    <label class="toggle-label" for="gw-iso-replay-enabled" style="display:flex;align-items:center;gap:0.6rem;cursor:pointer">
+                        <input type="checkbox" id="gw-iso-replay-enabled" style="width:1.1rem;height:1.1rem;accent-color:var(--teal);cursor:pointer">
+                        <span>Broadcast Product Info to NMEA network</span>
+                    </label>
+                </div>
+                <div class="field-row" style="margin-top:0.8rem;align-items:center;gap:0.8rem;flex-wrap:wrap">
+                    <label for="gw-iso-replay-interval" style="color:var(--muted);font-size:0.9rem;min-width:130px">Refresh interval:</label>
+                    <input type="number" id="gw-iso-replay-interval" class="input" min="5" max="3600" step="5"
+                           style="width:100px" placeholder="60">
+                    <span class="muted" style="font-size:0.85rem">seconds (5–3600)</span>
+                </div>
+                <div class="btn-row" style="margin-top:1rem;justify-content:flex-end">
+                    <button class="btn accent" id="btn-gw-settings-save" onclick="App.saveGwSettings(this)">💾 Save Settings</button>
+                </div>
+            </div>
+

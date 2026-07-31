@@ -7,10 +7,11 @@ Object.assign(App, {
     termHistory: [],
     termHistoryIdx: -1,
 
-    /** Called on Service tab switch — loads I/O state and service mode state */
+    /** Called on Service tab switch — loads I/O state, service mode state, and GW settings */
     async refreshServiceState() {
         await this.ioRefreshState();
         await this._refreshSvcState();
+        await this.loadGwSettings();
     },
 
     /** Quick-command buttons (HELP, HELP SET, etc.) */
@@ -19,9 +20,10 @@ Object.assign(App, {
         this.sendServiceCmd();
     },
 
-    /** Enter/Send button alias */
+    /** Submit terminal command from input field */
     termSubmit() { this.sendServiceCmd(); },
 
+    /** Toggle I/O pause/resume state */
     async ioToggle(btnEl) {
         if (this._ioPaused) {
             await this.ioResume(btnEl);
@@ -30,6 +32,7 @@ Object.assign(App, {
         }
     },
 
+    /** Pause I/O forwarding */
     async ioPause(btnEl) {
         await this.withButton(btnEl, '⏸ Stop', async () => {
             const data = await this.api('/api/io/pause', 'POST');
@@ -38,6 +41,7 @@ Object.assign(App, {
         });
     },
 
+    /** Resume I/O forwarding */
     async ioResume(btnEl) {
         await this.withButton(btnEl, '▶ Resume', async () => {
             const data = await this.api('/api/io/resume', 'POST');
@@ -46,6 +50,7 @@ Object.assign(App, {
         });
     },
 
+    /** Refresh current I/O state from API */
     async ioRefreshState() {
         try {
             const data = await this.api('/api/io/state');
@@ -60,6 +65,7 @@ Object.assign(App, {
         this._ioPollingTimer = setInterval(() => this.ioRefreshState(), 5000);
     },
 
+    /** Apply I/O state data to UI elements */
     _applyIoState(data) {
         this._ioPaused = data.paused;
         
@@ -90,6 +96,7 @@ Object.assign(App, {
         this.setOnline(!this._ioPaused);
     },
 
+    /** Update service state badge in UI */
     _setIoServiceState(elId, state) {
         const el = document.getElementById(elId);
         if (!el) return;
@@ -103,6 +110,7 @@ Object.assign(App, {
     // ==================================================================
     //  SERVICE — FILTERS
     // ==================================================================
+    /** Load and display active CAN filters */
     async loadFilters(btnEl) {
         const box = document.getElementById('filters-box');
         box.innerHTML = '<span class="muted">Loading filters...</span>';
@@ -126,6 +134,7 @@ Object.assign(App, {
     // ==================================================================
     //  SERVICE — DIAGNOSTICS
     // ==================================================================
+    /** Load diagnostics for selected scope */
     async loadDiag(btnEl) {
         const scope = document.getElementById('diag-scope').value;
         const out = document.getElementById('diag-out');
@@ -140,6 +149,7 @@ Object.assign(App, {
     // ==================================================================
     //  SERVICE — TERMINAL
     // ==================================================================
+    /** Initialize terminal keyboard event handlers */
     initTermKey() {
         const inp = document.getElementById('term-in');
         if (!inp) return;
@@ -163,6 +173,7 @@ Object.assign(App, {
         });
     },
 
+    /** Send raw command to service terminal */
     async sendServiceCmd() {
         const inp = document.getElementById('term-in');
         const out = document.getElementById('term-out');
@@ -181,6 +192,7 @@ Object.assign(App, {
         out.scrollTop = out.scrollHeight;
     },
 
+    /** Enter YDNU-02 service/firmware mode */
     async enterService(btnEl) {
         await this.withButton(btnEl, '🔌 Enter', async () => {
             const data = await this.api('/api/service/enter', 'POST');
@@ -189,6 +201,7 @@ Object.assign(App, {
         });
     },
 
+    /** Exit service mode and resume normal operation */
     async exitService(btnEl) {
         await this.withButton(btnEl, '⏏ Exit', async () => {
             const data = await this.api('/api/service/exit', 'POST');
@@ -211,5 +224,57 @@ Object.assign(App, {
         if (!el) return;
         el.textContent = state || 'IDLE';
         el.className = state === 'SERVICE' ? 'val-green' : 'muted';
+    },
+
+    // ==================================================================
+    //  GATEWAY SETTINGS — KI-001 NMEA ISO Replay workaround
+    // ==================================================================
+
+    /** Load current GatewaySettings from API and populate the UI controls. */
+    async loadGwSettings() {
+        try {
+            const data = await this.api('/api/gw-settings');
+            const cb  = document.getElementById('gw-iso-replay-enabled');
+            const inp = document.getElementById('gw-iso-replay-interval');
+            const st  = document.getElementById('gw-settings-status');
+            if (cb)  cb.checked = !!data.ha_iso_replay_enabled;
+            if (inp) inp.value  = data.ha_iso_replay_interval_s ?? 60;
+            if (st)  {
+                st.textContent = data.ha_iso_replay_enabled
+                    ? `Active · every ${data.ha_iso_replay_interval_s}s`
+                    : 'Disabled';
+                st.className = data.ha_iso_replay_enabled ? 'val-green' : 'muted';
+            }
+        } catch (e) {
+            // Non-fatal — settings card will just be empty
+            console.warn('loadGwSettings failed:', e);
+        }
+    },
+
+    /** Save GatewaySettings from UI controls via API. */
+    async saveGwSettings(btnEl) {
+        const cb  = document.getElementById('gw-iso-replay-enabled');
+        const inp = document.getElementById('gw-iso-replay-interval');
+        if (!cb || !inp) return;
+
+        const payload = {
+            ha_iso_replay_enabled:    cb.checked,
+            ha_iso_replay_interval_s: parseFloat(inp.value) || 60,
+        };
+
+        await this.withButton(btnEl, 'Save Settings', async () => {
+            const data = await this.api('/api/gw-settings', 'POST', payload);
+            // Sync UI back from actual saved values
+            const st = document.getElementById('gw-settings-status');
+            if (st) {
+                st.textContent = data.ha_iso_replay_enabled
+                    ? `Active · every ${data.ha_iso_replay_interval_s}s`
+                    : 'Disabled';
+                st.className = data.ha_iso_replay_enabled ? 'val-green' : 'muted';
+            }
+            return { message: data.ha_iso_replay_enabled
+                ? `ISO Replay ON · ${data.ha_iso_replay_interval_s}s`
+                : 'ISO Replay disabled' };
+        });
     },
 });

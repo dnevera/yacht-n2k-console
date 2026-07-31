@@ -1,3 +1,5 @@
+"""Service tab API routes: I/O pause, service mode, diagnostics, gateway settings."""
+
 import asyncio
 import json
 import os
@@ -6,6 +8,8 @@ from fastapi.responses import JSONResponse
 from models import CmdRequest
 from routes import get_device_mgr, get_mopeka_scanner, get_gobius_poller
 
+from ydnu02_tcp_gateway.gateway_settings import GatewaySettings
+
 router = APIRouter()
 
 # --- Global I/O pause/resume state (persisted to disk) ---
@@ -13,6 +17,7 @@ _IO_STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__
 
 
 def _load_io_state() -> bool:
+    """Load persisted I/O pause state from disk."""
     try:
         with open(_IO_STATE_FILE) as f:
             return json.load(f).get("paused", False)
@@ -21,6 +26,7 @@ def _load_io_state() -> bool:
 
 
 def _save_io_state(paused: bool):
+    """Persist I/O pause state to disk."""
     with open(_IO_STATE_FILE, "w") as f:
         json.dump({"paused": paused}, f)
 
@@ -29,6 +35,7 @@ _io_paused = _load_io_state()
 
 
 def is_io_paused() -> bool:
+    """Return whether I/O is currently paused."""
     return _io_paused
 
 
@@ -99,6 +106,7 @@ async def api_io_state():
 
 
 def _build_io_state() -> dict:
+    """Construct current I/O state summary for serial and BLE devices."""
     dm = get_device_mgr()
     mopeka = get_mopeka_scanner()
     gobius = get_gobius_poller()
@@ -135,6 +143,7 @@ def _build_io_state() -> dict:
 
 @router.get("/filters")
 async def api_filters():
+    """Retrieve current N2K filter configurations."""
     if _io_paused: return io_paused_response()
     try:
         return await asyncio.to_thread(get_device_mgr().get_filters)
@@ -144,6 +153,7 @@ async def api_filters():
 
 @router.get("/settings")
 async def api_settings():
+    """Retrieve current device settings."""
     if _io_paused: return io_paused_response()
     try:
         return await asyncio.to_thread(get_device_mgr().get_settings)
@@ -153,6 +163,7 @@ async def api_settings():
 
 @router.get("/diag/{scope}")
 async def api_diag(scope: str):
+    """Retrieve diagnostic data for the specified scope."""
     if _io_paused: return io_paused_response()
     try:
         return await asyncio.to_thread(get_device_mgr().get_diag, scope)
@@ -162,6 +173,7 @@ async def api_diag(scope: str):
 
 @router.post("/service/cmd")
 async def api_service_cmd(req: CmdRequest):
+    """Execute a service command on the device manager."""
     if _io_paused: return io_paused_response()
     try:
         return await asyncio.to_thread(get_device_mgr().send_service_cmd, req.cmd)
@@ -173,6 +185,7 @@ async def api_service_cmd(req: CmdRequest):
 
 @router.post("/service/enter")
 async def api_service_enter():
+    """Enter device service mode."""
     if _io_paused: return io_paused_response()
     try:
         return await asyncio.to_thread(get_device_mgr().enter_service)
@@ -182,6 +195,7 @@ async def api_service_enter():
 
 @router.post("/service/exit")
 async def api_service_exit():
+    """Exit device service mode."""
     if _io_paused: return io_paused_response()
     try:
         return await asyncio.to_thread(get_device_mgr().exit_service)
@@ -191,4 +205,60 @@ async def api_service_exit():
 
 @router.get("/service/state")
 async def api_service_state():
+    """Get the current service mode state."""
     return {"state": "STOPPED" if _io_paused else get_device_mgr().get_state()}
+
+
+# ===========================================================================
+#  GATEWAY SETTINGS — KI-001 ISO Replay workaround
+# ===========================================================================
+
+@router.get("/gw-settings")
+async def api_gw_settings_get():
+    """Return current GatewaySettings as JSON.
+
+    Response::
+
+        {
+          "ha_iso_replay_enabled":    true,
+          "ha_iso_replay_interval_s": 60.0
+        }
+
+    Skill — read via curl::
+
+        curl -s http://gateway.local:8080/api/gw-settings | python3 -m json.tool
+    """
+    return GatewaySettings.instance().to_dict()
+
+
+@router.post("/gw-settings")
+async def api_gw_settings_post(body: dict):
+    """Update GatewaySettings. Accepts a partial dict — only provided keys are updated.
+
+    Changes take effect within ~3s (next GW_TEMP_INTERVAL_S loop iteration)
+    without restarting the daemon.
+
+    Request body (all fields optional)::
+
+        {
+          "ha_iso_replay_enabled":    true,
+          "ha_iso_replay_interval_s": 60.0   // range: 5–3600 seconds
+        }
+
+    Skill — disable ISO replay::
+
+        curl -X POST http://gateway.local:8080/api/gw-settings \\
+             -H 'Content-Type: application/json' \\
+             -d '{"ha_iso_replay_enabled": false}'
+
+    Skill — set 30s interval::
+
+        curl -X POST http://gateway.local:8080/api/gw-settings \\
+             -H 'Content-Type: application/json' \\
+             -d '{"ha_iso_replay_interval_s": 30}'
+    """
+    try:
+        updated = GatewaySettings.instance().apply_from_dict(body)
+        return updated
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})

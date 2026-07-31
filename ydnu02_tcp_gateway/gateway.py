@@ -7,9 +7,8 @@ and TCP servers on ports 4001 (DATA) and 4002 (CTRL).
 import sys
 import socket
 import threading
-from typing import Optional, Callable
+from typing import Callable
 
-from ydnu02_tcp_gateway.device_cache import DeviceFrameCache
 from ydnu02_tcp_gateway.data_hub import DataHub
 from ydnu02_tcp_gateway.ctrl_handler import CtrlHandler
 from ydnu02_tcp_gateway.serial_reader import SerialReader
@@ -58,10 +57,7 @@ class Gateway:
         self.service_mode = threading.Event()
         self.serial_ready = threading.Event()
 
-        self.device_cache = DeviceFrameCache()
-
         self.data_hub = DataHub(
-            device_cache=self.device_cache,
             get_serial_instance=lambda: self.serial_instance,
             get_serial_ready=lambda: self.serial_ready.is_set(),
             get_service_mode=lambda: self.service_mode.is_set(),
@@ -90,7 +86,6 @@ class Gateway:
             service_mode=self.service_mode,
             broadcast=self.data_hub.broadcast,
             send_iso_request=self.data_hub.send_iso_request,
-            device_cache=self.device_cache,
         )
 
     def start(self, start_gateway_device: bool = True) -> None:

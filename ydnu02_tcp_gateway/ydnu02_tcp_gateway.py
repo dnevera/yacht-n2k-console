@@ -96,20 +96,33 @@ THREAD MODEL
     5. _iso_request_lock
     6. service_conn_lock
 
-DEVICE FRAME CACHE
-  The gateway caches ISO Address Claims (PGN 60928) and Product Information
-  (PGN 126996) for every N2K device seen in live traffic.  On each new TCP
-  client connect the full cache is replayed so HA immediately builds its network
-  map without requiring a manual rescan or device power-cycle.
+ACTIVE ONBOARDING (NO CACHING ARCHITECTURE)
+  We do NOT use a passive frame cache for device discovery.
+  Instead, on every new TCP client connection:
+    1. Virtual Identity: N2KDevice (SA=200) broadcasts its PGN 60928 + PGN 126996.
+    2. Physical Bus Prompt: The gateway sends PGN 59904 (ISO Request) to the serial bus.
+       Physical devices (like YDNU-02) reply with their own authentic PGN 60928/126996.
 
-  Structure: {sa_int: {'iso_claim': bytes, 'product_info': [bytes, ...]}}
+  This guarantees Zero Stale Data and eliminates entity duplication in Home Assistant.
 
-  Pre-seeded: The gateway virtual device (SA=200) frames are injected into the
-  cache when N2KDevice connects to port 4001 and broadcasts its claims.
+SKILLS (DIAGNOSTIC MINI-PROMPTS)
+================================
+  Skill — monitor raw frame traffic on TCP port 4001::
 
-  Fast-packet reassembly: PGN 126996 uses ISO 11783-3 fast-packet transport
-  (multiple CAN frames for a single PGN). Frames are reassembled in _fp_buf
-  before being stored in _device_frame_cache.
+      ssh user@gateway.local 'nc localhost 4001 | head -n 30'
+
+  Skill — inspect gateway systemd logs::
+
+      ssh user@gateway.local 'journalctl -u ydnu02-tcp-gateway -n 50 --no-pager'
+
+  Skill — test client connection and ISO Request trigger::
+
+      python3 -c "
+      import socket
+      s = socket.create_connection(('localhost', 4001))
+      print('Connected to 4001')
+      s.close()
+      "
 
 GATEWAY VIRTUAL IDENTITY
   The gateway registers itself as a virtual N2K device (SA=200) so Home Assistant
@@ -164,10 +177,7 @@ ISSUES:
     not require strict ordering for most PGNs.
 """
 import os
-import re
 import socket
-import struct
-import subprocess
 import serial
 import sys
 import threading
@@ -179,9 +189,8 @@ from ydnu02_tcp_gateway.frame_utils import (
     fmt_frame as _fmt_frame,
     get_pgn_sa as _get_pgn_sa,
 )
-from ydnu02_tcp_gateway.device_cache import DeviceFrameCache
 from ydnu02_tcp_gateway.data_hub import DataHub
-from ydnu02_tcp_gateway.ctrl_handler import CtrlHandler, ctrl_send as _ctrl_send
+from ydnu02_tcp_gateway.ctrl_handler import CtrlHandler
 from ydnu02_tcp_gateway.serial_reader import SerialReader
 
 # ── Configuration (env vars) ──────────────────────────────────────────────────
@@ -252,33 +261,14 @@ ISO Request transmission until the device is ready."""
 
 
 
-# ── Device frame cache ────────────────────────────────────────────────────────
+# ── Active Onboarding Data Hub (No Caching) ──────────────────────────────────
 #
-# Per-SA storage of device identification frames for replay to new TCP clients.
-# Pre-seeded with gateway synthetic frames; continuously updated from live traffic.
-#
-# Structure: {sa_int: {'iso_claim': bytes, 'product_info': [bytes, ...]}}
-#
-# Why cache? Home Assistant builds its N2K device list from ISO Address Claims and
-# Product Information frames. These are only broadcast once (on device power-up or
-# ISO Request). Without caching, HA would need to wait for a manual rescan or device
-# restart to discover devices. The cache provides instant device discovery.
-#
-# ISSUE(stale-entries): Cache entries are never evicted. If a device is removed from
-# the bus, its entry persists indefinitely. HA shows it as "offline" via heartbeat
-# timeout, but the cache still replays its claim to new clients.
+# DataHub handles frame broadcast to all TCP clients and triggers ISO Requests
+# on new client connection. Passive frame caching is omitted in favor of active
+# ISO Request prompts to prevent entity duplication in Home Assistant.
 
-_device_cache = DeviceFrameCache()
-_device_frame_cache = _device_cache.cache
-_device_frame_lock = _device_cache.lock
-_fp_buf = _device_cache._fp_buf
-_fp_lock = _device_cache._fp_lock
-
-clients: set = set()
-clients_lock = threading.Lock()
 
 _data_hub = DataHub(
-    device_cache=_device_cache,
     get_serial_instance=lambda: serial_instance,
     get_serial_ready=lambda: _serial_ready.is_set(),
     get_service_mode=lambda: service_mode.is_set(),
@@ -291,18 +281,22 @@ _iso_request_lock = _data_hub._iso_request_lock
 
 
 def _broadcast(line: bytes, exclude: socket.socket | None = None) -> None:
+    """Thin wrapper delegating to DataHub.broadcast."""
     _data_hub.broadcast(line, exclude=exclude)
 
 
 def _send_iso_request() -> None:
+    """Thin wrapper delegating to DataHub.send_iso_request."""
     _data_hub.send_iso_request()
 
 
 def handle_data_client(conn: socket.socket, addr) -> None:
+    """Thin wrapper delegating to DataHub.handle_client."""
     _data_hub.handle_client(conn, addr)
 
 
 def _set_serial_instance(ser):
+    """Set the module-level serial_instance variable."""
     global serial_instance
     serial_instance = ser
 
@@ -318,6 +312,7 @@ _ctrl_handler = CtrlHandler(
 
 
 def handle_ctrl_client(conn: socket.socket, addr) -> None:
+    """Thin wrapper delegating to CtrlHandler.handle_client."""
     _ctrl_handler.handle_client(conn, addr)
 
 
@@ -331,17 +326,17 @@ _serial_reader_worker = SerialReader(
     service_mode=service_mode,
     broadcast=_broadcast,
     send_iso_request=_send_iso_request,
-    device_cache=_device_cache,
 )
 
 
 def serial_reader() -> None:
+    """Thin wrapper delegating to SerialReader.run."""
     _serial_reader_worker.run()
 
 
 # ── TCP servers ───────────────────────────────────────────────────────────────
 
-from ydnu02_tcp_gateway.gateway import make_server as _make_server, accept_loop as _accept_loop, Gateway
+from ydnu02_tcp_gateway.gateway import make_server as _make_server, accept_loop as _accept_loop
 
 
 
