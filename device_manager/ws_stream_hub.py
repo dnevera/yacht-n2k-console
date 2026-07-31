@@ -65,10 +65,13 @@ class WSStreamHub:
         with self._queues_lock:
             self._monitor_queues.append(q)
 
-        if self._get_state() != "LISTENING":
-            await websocket.send_json({"type": "error", "message": "Bus worker not active — no NMEA data"})
-
-        await websocket.send_json({"type": "status", "message": "RAW monitoring started"})
+        state = self._get_state()
+        if state == "STOPPED":
+            await websocket.send_json({"type": "status", "message": "I/O is paused — resume from Dashboard to view live data"})
+        elif state == "NO_DEVICE":
+            await websocket.send_json({"type": "status", "message": "No serial gateway device connected"})
+        else:
+            await websocket.send_json({"type": "status", "message": "RAW monitoring started"})
 
         try:
             t0 = time.time()
