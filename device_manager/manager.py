@@ -238,6 +238,33 @@ class DeviceManager:
     def exit_service(self, target_mode: str = "AUTO") -> Dict[str, str]:
         return self._service_mgr.exit_service(target_mode=target_mode)
 
+    def send_raw_command(self, raw_cmd: str) -> bool:
+        """Send a raw NMEA CAN ASCII line to the proxy DATA port (:4001).
+
+        Used by N2K configuration routes to send PGN 126208 Read/Write Fields frames.
+        """
+        if not raw_cmd:
+            return False
+        if not raw_cmd.endswith("\n"):
+            raw_cmd = raw_cmd.rstrip("\r") + "\r\n"
+        data = raw_cmd.encode("ascii", errors="ignore")
+
+        # Primary path: write through active bus_worker TCP connection
+        if self._bus_worker_mgr and self._bus_worker_mgr._tcp and self._bus_worker_mgr._tcp.is_connected:
+            self._bus_worker_mgr._tcp.write(data)
+            return True
+
+        # Secondary path: open a temporary TCP connection to proxy DATA port (:4001)
+        try:
+            tcp = TCPProxyConnection(host=_PROXY_HOST, port=_PROXY_DATA_PORT)
+            tcp.connect()
+            tcp.write(data)
+            tcp.close()
+            return True
+        except (OSError, ConnectionRefusedError) as e:
+            print(f"[DeviceManager] send_raw_command error: {e}")
+            return False
+
     def get_state(self) -> str:
         return self._state
 

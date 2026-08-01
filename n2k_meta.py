@@ -140,10 +140,10 @@ def get_pgn_name(pgn: int) -> str:
     return f"PGN {pgn}"
 
 
-def build_iso_request_frame(requested_pgn: int, our_src: int = 16) -> str:
+def build_iso_request_frame(requested_pgn: int, our_src: int = 200) -> str:
     """Build ISO Request (PGN 59904) as CAN_FRAME_ASCII_RAW string.
 
-    Returns string like: '18EAFF10 00 EE 00'
+    Returns string like: '18EAFFC8 00 EE 00'
     """
     # Manual construction — always reliable
     p0 = requested_pgn & 0xFF
@@ -154,7 +154,7 @@ def build_iso_request_frame(requested_pgn: int, our_src: int = 16) -> str:
     return f"{can_id:08X} {p0:02X} {p1:02X} {p2:02X}"
 
 
-def build_read_fields_frame(target_src: int, target_pgn: int, our_src: int = 16) -> str:
+def build_read_fields_frame(target_src: int, target_pgn: int, our_src: int = 200) -> str:
     """Build PGN 126208 Read Fields Request as CAN_FRAME_ASCII_RAW string.
 
     Function code 3 = Read Fields Request.
@@ -184,7 +184,7 @@ def build_read_fields_frame(target_src: int, target_pgn: int, our_src: int = 16)
 
 
 def build_write_fields_frame(target_src: int, target_pgn: int,
-                              field_pairs: List[tuple], our_src: int = 16) -> str:
+                              field_pairs: List[tuple], our_src: int = 200) -> str:
     """Build PGN 126208 Write Fields as CAN_FRAME_ASCII_RAW string.
 
     Function code 5 = Write Fields.
@@ -217,7 +217,7 @@ def build_write_fields_frame(target_src: int, target_pgn: int,
 
 
 def build_command_frame(target_src: int, target_pgn: int,
-                         field_pairs: List[tuple], our_src: int = 16) -> str:
+                         field_pairs: List[tuple], our_src: int = 200) -> str:
     """Build PGN 126208 Command Group Function as CAN_FRAME_ASCII_RAW string.
 
     Function code 1 = Command.

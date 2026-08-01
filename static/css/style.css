@@ -362,14 +362,17 @@ h3 { font-size: 1rem; margin-bottom: 0.5rem; }
     background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
     display: flex; justify-content: center; align-items: center;
     z-index: 5000;
+    padding: 1.5rem; overflow-y: auto;
     opacity: 0; pointer-events: none; transition: opacity 0.2s;
 }
 .modal-bg.open { opacity: 1; pointer-events: auto; }
 .modal {
     background: var(--bg); border: 1px solid var(--border);
-    border-radius: 12px; padding: 2rem; max-width: 420px; width: 90%;
+    border-radius: 12px; padding: 1.75rem; max-width: 560px; width: 95%;
+    max-height: 88vh; overflow-y: auto; box-sizing: border-box;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.6);
 }
-.modal h3 { color: var(--red); margin-bottom: 1rem; }
+.modal h3 { color: var(--red); margin-bottom: 0.5rem; }
 .modal p { color: var(--muted); margin-bottom: 1rem; line-height: 1.5; }
 .modal label { margin-bottom: 0.5rem; }
 .modal .input { width: 100%; margin-bottom: 1rem; }

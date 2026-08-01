@@ -80,5 +80,5 @@ python3 -m pytest tests/test_live_ha_integration.py -v
 
 ### Deploy to Gateway Target:
 ```bash
-./deploy.sh
+./deploy.sh --no-test
 ```

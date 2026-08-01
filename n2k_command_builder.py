@@ -38,7 +38,7 @@ def build_pgn_126208_command(
     instance: int,
     fluid_type_code: Optional[int] = None,
     capacity_l: Optional[float] = None,
-    src_address: int = 16,
+    src_address: int = 200,
     target_pgn: int = 127505,
 ) -> Dict[str, Any]:
     """

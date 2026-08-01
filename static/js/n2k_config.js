@@ -24,9 +24,14 @@ Object.assign(App, {
         modal.className = 'modal-bg open';
         modal.id = 'modal-n2k-config';
         modal.innerHTML = `
-            <div class="modal" style="max-width:560px">
-                <h3>⚙️ Device Configuration</h3>
-                <p class="muted">Configure <b>${deviceName || 'Device'}</b> (SRC ${src})</p>
+            <div class="modal" style="max-width:560px; max-height:88vh; overflow-y:auto">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px">
+                    <div>
+                        <h3 style="margin:0">⚙️ Device Configuration</h3>
+                        <p class="muted" style="margin:4px 0 0 0">Configure <b>${deviceName || 'Device'}</b> (SRC ${src})</p>
+                    </div>
+                    <button type="button" aria-label="Close" onclick="App.closeN2KConfigModal()" style="background:none; border:none; color:var(--muted); font-size:1.6rem; cursor:pointer; line-height:1; padding:0 4px">&times;</button>
+                </div>
 
                 <div class="form-group" style="margin-top:12px">
                     <label>Target Source Address (SRC)</label>
@@ -47,16 +52,37 @@ Object.assign(App, {
                 <div id="n2k-cfg-status" style="margin-top:8px; display:none"></div>
 
                 <div class="modal-btns" style="margin-top:16px">
-                    <button class="btn" onclick="document.getElementById('modal-n2k-config').remove()">Cancel</button>
+                    <button class="btn" onclick="App.closeN2KConfigModal()">Cancel</button>
                     <button class="btn" id="btn-n2k-read" onclick="App.readN2KConfig(this)" style="display:none">📖 Read</button>
                     <button class="btn accent" id="btn-n2k-send" onclick="App.writeN2KConfig(this)" style="display:none">📡 Write</button>
                 </div>
             </div>
         `;
+
+        // Close on backdrop click (outside modal content)
+        modal.onclick = (e) => {
+            if (e.target === modal) App.closeN2KConfigModal();
+        };
+
+        // Close on Escape key press
+        this._n2kEscHandler = (e) => {
+            if (e.key === 'Escape') App.closeN2KConfigModal();
+        };
+        document.addEventListener('keydown', this._n2kEscHandler);
+
         document.body.appendChild(modal);
 
         // Discover configurable PGNs
         await this._loadPgnList(src, activePgns || []);
+    },
+
+    closeN2KConfigModal() {
+        const m = document.getElementById('modal-n2k-config');
+        if (m) m.remove();
+        if (this._n2kEscHandler) {
+            document.removeEventListener('keydown', this._n2kEscHandler);
+            this._n2kEscHandler = null;
+        }
     },
 
     /** Load PGN options into the select */
@@ -127,6 +153,9 @@ Object.assign(App, {
         this._renderDynamicFields(meta.fields);
         if (btnRead) btnRead.style.display = '';
         if (btnSend) btnSend.style.display = '';
+
+        // Auto-read current values from device / cache as soon as PGN is selected
+        this.readN2KConfig(btnRead);
     },
 
     /** Render fields dynamically from API metadata */

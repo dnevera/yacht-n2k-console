@@ -53,6 +53,34 @@ async def read_device_config(src: int, pgn: int):
         if src not in dev_mgr._discovered_bus_devices:
             raise HTTPException(404, f"Device SRC {src} not found on bus")
 
+    # Fast path: check cached sensor data in SensorRegistry for immediate return (e.g. Gobius C PGN 127505)
+    if pgn == 127505 and hasattr(dev_mgr, "sensors") and dev_mgr.sensors:
+        for sensor in dev_mgr.sensors.values():
+            s_src = getattr(sensor, "n2k_src", None)
+            if s_src is None and hasattr(sensor, "nmea"):
+                s_src = getattr(sensor.nmea, "src", None)
+            if s_src is None:
+                s_src = getattr(sensor, "src", None)
+
+            if s_src == src or (isinstance(s_src, dict) and s_src.get("src") == src):
+                type_val = getattr(sensor, "type_code", None)
+                if type_val is None and hasattr(sensor, "nmea"):
+                    type_val = getattr(sensor.nmea, "type_code", 0)
+
+                return {
+                    "status": "ok",
+                    "pgn": pgn,
+                    "src": src,
+                    "fields": {
+                        "instance": getattr(sensor, "instance", 0),
+                        "fluidType": type_val or 0,
+                        "fluid_type": type_val or 0,
+                        "type": type_val or 0,
+                        "level": getattr(sensor, "fill_level_pct", 0),
+                        "capacity": getattr(sensor, "capacity_l", None),
+                    },
+                }
+
     # Build and send Read Fields Request
     frame = n2k_meta.build_read_fields_frame(target_src=src, target_pgn=pgn)
     dev_mgr.send_raw_command(frame)
@@ -69,17 +97,28 @@ async def read_device_config(src: int, pgn: int):
                 remaining = max(0.1, deadline - time.monotonic())
                 frame_data = await asyncio.wait_for(q.get(), timeout=min(remaining, 1.0))
 
-                # Look for PGN 126208 from target device
-                if frame_data.get("pgn") == 126208 and frame_data.get("src") == src:
+                # Look for response from target device (either PGN 126208 Group Function or direct target PGN)
+                if frame_data.get("src") == src:
+                    frame_pgn = frame_data.get("pgn")
                     raw = frame_data.get("raw", "")
-                    decoded = n2k_meta.decode_raw_line(raw)
-                    if decoded and decoded.get("id") == "nmeaReadFieldsReplyGroupFunction":
-                        return {
-                            "status": "ok",
-                            "pgn": pgn,
-                            "src": src,
-                            "fields": decoded.get("fields", {}),
-                        }
+                    if frame_pgn == 126208:
+                        decoded = n2k_meta.decode_raw_line(raw)
+                        if decoded:
+                            return {
+                                "status": "ok",
+                                "pgn": pgn,
+                                "src": src,
+                                "fields": decoded.get("fields", {}),
+                            }
+                    elif frame_pgn == pgn:
+                        decoded = n2k_meta.decode_raw_line(raw)
+                        if decoded:
+                            return {
+                                "status": "ok",
+                                "pgn": pgn,
+                                "src": src,
+                                "fields": decoded.get("fields", {}),
+                            }
             except asyncio.TimeoutError:
                 continue
     finally:
@@ -140,14 +179,23 @@ async def write_device_config(src: int, pgn: int, request: WriteConfigRequest):
         if meta_entry and not meta_entry.get('configurable', True):
             raise HTTPException(400, f"Field '{field_id}' is read-only")
 
-        raw_val = int(value)
-        # Determine byte length from value range
-        if raw_val <= 0xFF:
-            val_bytes = bytes([raw_val & 0xFF])
-        elif raw_val <= 0xFFFF:
-            val_bytes = (raw_val & 0xFFFF).to_bytes(2, 'little')
+        # Convert value to bytes based on field type and N2K scaling
+        if field_id == "capacity":
+            # Capacity in PGN 127505 is 0.1L units (4 bytes uint32 LE)
+            cap_raw = int(round(float(value) * 10))
+            val_bytes = (cap_raw & 0xFFFFFFFF).to_bytes(4, 'little')
+        elif field_id == "level":
+            # Level in PGN 127505 is 0.004% units (2 bytes uint16 LE)
+            lvl_raw = int(round(float(value) / 0.004))
+            val_bytes = (lvl_raw & 0xFFFF).to_bytes(2, 'little')
         else:
-            val_bytes = (raw_val & 0xFFFFFFFF).to_bytes(4, 'little')
+            raw_val = int(value)
+            if raw_val <= 0xFF:
+                val_bytes = bytes([raw_val & 0xFF])
+            elif raw_val <= 0xFFFF:
+                val_bytes = (raw_val & 0xFFFF).to_bytes(2, 'little')
+            else:
+                val_bytes = (raw_val & 0xFFFFFFFF).to_bytes(4, 'little')
 
         field_pairs.append((idx, val_bytes))
 
