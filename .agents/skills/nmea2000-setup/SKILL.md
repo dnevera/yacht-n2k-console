@@ -319,12 +319,107 @@ ssh user@<gateway-host> "sudo docker exec homeassistant grep 'source_iso_name\.'
 # Ожидаем: self.source_iso_name.unique_number
 ```
 
-### Дубли в HA → clean-ha
+---
+
+## 📦 Форк nmea2000
+
+**Путь:** `/Users/denn/Develop/yacht/nmea2000`
+**Ветка:** `fix/pgn-126996-hash-collision-per-source`
+
+### Изменения относительно upstream
+
+| Файл | Изменение | Статус PR |
+|------|-----------|-----------|
+| `nmea2000/message.py` | `source_id = unique_number` (было `.name`) | pending |
+| `nmea2000/ioclient.py` | EOF → `ConnectionError` | merged PR #61 |
+| `nmea2000/decoder.py` | архитектурная документация | — |
+
+### Тесты форка
 
 ```bash
-./deploy.sh --clean-ha
-# После: .venv/bin/python -m pytest tests/test_live_ha_integration.py -v
+cd /Users/denn/Develop/yacht/nmea2000
+python3 -m pytest tests/ -v   # test_decoder.py проверяет хэши SA=64 и SA=200
 ```
+
+---
+
+## ⚡ FastPacket Assembly — КРИТИЧЕСКОЕ ПРАВИЛО
+
+### _n2k_decoder singleton — stateful, НЕ thread-safe
+
+`ydnu02/pgn_decoder.py` содержит модульный синглтон `_n2k_decoder = NMEA2000Decoder()`.
+Это **stateful** объект — он accumulates FastPacket sub-frames и собирает полный пакет
+только когда приходит **последний** sub-frame в последовательности.
+
+### ⛔ ЗАПРЕТ: двойной вызов decode() на один фрейм
+
+**НИКОГДА** не кормить один и тот же CAN frame в `_n2k_decoder.decode()` дважды.
+Двойной вызов отравляет sequence counter → assembly **ВСЕГДА** ломается → 0 собранных пакетов.
+
+Точки вызова `_n2k_decoder.decode()`:
+1. `decode_pgn()` — для human-readable строк (Monitor tab)
+2. `_decode_via_lib()` — для PGN 60928 field extraction
+3. `feed_to_lib()` — для FastPacket assembly (PGN 126996 Product Info)
+
+**Правило разделения:**
+- `decode_pgn()` **пропускает** FastPacket PGNs и возвращает raw hex строку
+- `feed_to_lib()` — **единственная** точка входа для FastPacket assembly
+- `_decode_via_lib()` — только для single-frame PGNs (60928 и т.д.)
+
+### FastPacket PGNs (multi-frame)
+```python
+_FAST_PACKET_PGNS = {126996, 126998, 129029, 129540, 130567, 130577}
+```
+
+### Поток данных SensorRegistry.update()
+```
+BusWorker → parse_raw_line(line) → update(parsed)
+  ├─ PGN 60928: parse_device_info() → claimed, manufacturer, function_name, unique_id
+  ├─ ALL frames: feed_to_lib(parsed) → FastPacket assembly
+  │   └─ if assembled PGN 126996: → model, firmware, serial, model_version
+  └─ PGN 127505: → fluid level
+```
+
+---
+
+## 🏷️ Device Card Display — цепочка имён
+
+### DisplayName fallback (network.js)
+```
+model → modelVersion → funcName → cleanMfr → "Device (SRC N)"
+```
+
+- `model` = из PGN 126996 `modelId` (например `YDNU-02 TCP-GW`)
+- `modelVersion` = из PGN 126996 `modelVersion` (например `yacht-n2k-console`)
+- `funcName` = из PGN 60928 `device_function` (например `PC Gateway`)
+- `cleanMfr` = manufacturer, **но** отфильтрованы сырые строки `MfgCode N`, `Custom / Reserved (N)`
+- Fallback = `Device (SRC N)`
+
+### Badge (тип устройства)
+```javascript
+model/func contains 'tcp'     → 'TCP GW'
+func contains 'gateway'       → 'USB GW'
+mfr contains 'gobius'         → 'GOBIUS'
+```
+
+### unique_id=0 (SA=0)
+`unique_id=0` — **валидный** N2K адрес. Проверка `fullyIdentified` использует
+`uniqueId !== null && uniqueId !== undefined` вместо `!!uniqueId`.
+
+---
+
+## ⚠️ Правила
+
+1. **Никогда не трогать тесты** без явного подтверждения бага в тесте (из AGENTS.md)
+2. **Перед деплоем** — pre_deploy_diff показывается автоматически
+3. **После --patch-ha** — HA перезапускается только если что-то реально изменилось
+4. **После --clean-ha** — обязательно запустить live тесты
+5. **При появлении дублей** в HA → deploy.sh --clean-ha (patch-v2 предотвращает новые дубли)
+6. **test_service_mode.py** падает в sandbox (socket.bind) — это нормально, не баг кода
+7. **nmea2000 устанавливается из git форка** (requirements.txt) — не из PyPI upstream
+8. **systemd ExecStart** — ОБЯЗАТЕЛЬНО через `python3 -m ydnu02_tcp_gateway.ydnu02_tcp_gateway` (НЕ прямой путь к .py в пакете — Python не распознает package, импорты сломаются)
+9. **decode_pgn()** — НИКОГДА не кормить FastPacket PGNs в `_n2k_decoder` (двойной feed = assembly ломается)
+10. **deploy.sh** — если менялись файлы из proxy И web групп — нужен полный деплой (без флагов)
 
 ---
 
@@ -391,36 +486,3 @@ Bits 20-16: device_function (5 bits)
 - **MAC:** `F1:FD:CB:6C:B2:CC`, passive advertisement
 - `fill_level_pct = ((tank_depth - distance_mm) / tank_depth) × 100`
 
----
-
-## 📦 Форк nmea2000
-
-**Путь:** `/Users/denn/Develop/yacht/nmea2000`
-**Ветка:** `fix/pgn-126996-hash-collision-per-source`
-
-### Изменения относительно upstream
-
-| Файл | Изменение | Статус PR |
-|------|-----------|-----------|
-| `nmea2000/message.py` | `source_id = unique_number` (было `.name`) | pending |
-| `nmea2000/ioclient.py` | EOF → `ConnectionError` | merged PR #61 |
-| `nmea2000/decoder.py` | архитектурная документация | — |
-
-### Тесты форка
-
-```bash
-cd /Users/denn/Develop/yacht/nmea2000
-python3 -m pytest tests/ -v   # test_decoder.py проверяет хэши SA=64 и SA=200
-```
-
----
-
-## ⚠️ Правила
-
-1. **Никогда не трогать тесты** без явного подтверждения бага в тесте (из AGENTS.md)
-2. **Перед деплоем** — pre_deploy_diff показывается автоматически
-3. **После --patch-ha** — HA перезапускается только если что-то реально изменилось
-4. **После --clean-ha** — обязательно запустить live тесты
-5. **При появлении дублей** в HA → deploy.sh --clean-ha (patch-v2 предотвращает новые дубли)
-6. **test_service_mode.py** падает в sandbox (socket.bind) — это нормально, не баг кода
-7. **nmea2000 устанавливается из git форка** (requirements.txt) — не из PyPI upstream
