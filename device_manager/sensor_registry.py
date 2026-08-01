@@ -68,17 +68,28 @@ class SensorRegistry:
                     dev_info = N2KPGNDecoder.parse_device_info(parsed)
                     if dev_info:
                         new_uid = dev_info.get("unique_id")
-                        # If device claimed a new address, purge stale old entry for same unique_id
-                        if new_uid:
+                        # Per NMEA 2000 ISO 11783-5, valid unique_id MUST be > 0.
+                        # unique_id == 0 indicates a transient startup frame before address claim.
+                        if new_uid and int(new_uid) > 0:
+                            new_uid_int = int(new_uid)
+                            mfg_str = dev_info.get("manufacturer", "")
+                            # Purge stale old entries for same unique_id OR transient src=0 ghosts
                             stale_srcs = [
                                 old_src for old_src, old_dev in self.discovered_bus_devices.items()
-                                if old_src != src and old_dev.get("unique_id") == new_uid
+                                if old_src != src and (
+                                    old_dev.get("unique_id") == new_uid_int or
+                                    (old_src == 0 and old_dev.get("unique_id") == 0 and old_dev.get("manufacturer") == mfg_str)
+                                )
                             ]
                             for stale in stale_srcs:
                                 del self.discovered_bus_devices[stale]
 
-                        dev = self.discovered_bus_devices[src]
-                        dev["claimed"] = True  # ISO Address Claim received — device is fully identified
+                            dev = self.discovered_bus_devices[src]
+                            dev["claimed"] = True  # ISO Address Claim with valid unique_id received
+                        else:
+                            dev = self.discovered_bus_devices[src]
+                            dev["claimed"] = False
+
                         for key in ("manufacturer", "function_name", "device_class_name",
                                     "model_version", "unique_id"):
                             if key in dev_info and dev_info[key]:

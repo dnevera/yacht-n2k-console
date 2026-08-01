@@ -206,7 +206,7 @@ class N2KDeviceRegistry:
 
             if msg.PGN == 60928:
                 uid = fields.get("uniqueNumber")
-                if uid is not None:
+                if uid is not None and int(uid) > 0:
                     dev.unique_id = int(uid)
                 mfg = fields.get("manufacturerCode")
                 if isinstance(mfg, (int, float)):

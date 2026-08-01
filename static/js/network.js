@@ -146,11 +146,11 @@ Object.assign(App, {
                                   rows += `<tr><td>Active PGNs</td><td><code>${activePgns.join(', ')}</code></td></tr>`;
 
             // ── Claim status indicator ──────────────────────────────────────
-            // fully identified: claimed=true + unique_id  → normal card, full buttons
-            // ISO claim only:   claimed=true + no unique_id → blue badge "⚠ No Product Info"
-            // unclaimed:        claimed=false              → amber badge "⚠ No ISO Claim"
-            // unique_id=0 is valid for SA=0; use explicit null/undefined check
-            const hasUniqueId     = uniqueId !== null && uniqueId !== undefined && uniqueId !== '';
+            // fully identified: claimed=true + valid unique_id (>0) → normal card, full buttons
+            // ISO claim only:   claimed=true + no unique_id        → blue badge "⚠ No Product Info"
+            // unclaimed:        claimed=false                     → amber badge "⚠ No ISO Claim"
+            // unique_id=0 is an unassigned/transient claim (ISO 11783-5), not a valid unique identity
+            const hasUniqueId     = uniqueId !== null && uniqueId !== undefined && uniqueId !== '' && Number(uniqueId) > 0;
             const fullyIdentified = claimed && hasUniqueId;
             const isoOnly         = claimed && !hasUniqueId;
 
