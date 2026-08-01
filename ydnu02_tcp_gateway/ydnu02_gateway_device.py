@@ -49,7 +49,11 @@ BROADCASTS (periodic)
   | 60928 (ISO Claim)  | on start | Address claim — handled by N2KDevice lib   |
   | 126996 (Prod Info) | 60s      | Product Info — startup + periodic rebrcast  |
   | 126993 (Heartbeat) | 10s      | Liveness heartbeat — managed by library    |
-  | 130312 (Temp)      | 3s       | CPU temperature from sysfs thermal_zone    |
+  | 130312 (Temp)      | cfg 3s   | CPU temperature from sysfs thermal_zone;   |
+  |                    |          | TCP hub interval = settings.n2k_tcp_temp_  |
+  |                    |          | interval_s; forwarding to physical serial   |
+  |                    |          | is throttled independently by data_hub.py  |
+  |                    |          | via settings.n2k_serial_temp_interval_s     |
   +--------------------+----------+--------------------------------------------+
 
 STARTUP SEQUENCE
@@ -58,7 +62,8 @@ STARTUP SEQUENCE
   2. ``_run_device()`` creates N2KDevice, calls ``device.start()`` → TCP connect.
   3. ``device.wait_ready(timeout=15)`` blocks until ISO Address Claim completes.
   4. Product Info (PGN 126996) is explicitly broadcast once.
-  5. Temperature loop broadcasts PGN 130312 every ``GW_TEMP_INTERVAL_S`` seconds.
+  5. Temperature loop broadcasts PGN 130312 every ``settings.n2k_tcp_temp_interval_s``
+     seconds (read dynamically from ``GatewaySettings``; default 3.0s).
 
 RECONNECTION
   If ``_run_device()`` raises (TCP disconnect, address claim timeout), the outer
@@ -302,8 +307,13 @@ GW_HEARTBEAT_S     = 10.0
 PGN 126993 at this interval. HA uses heartbeat absence to detect device offline."""
 
 GW_TEMP_INTERVAL_S = 3.0
-"""CPU temperature broadcast interval in seconds. PGN 130312 is sent at this rate.
-3s provides near-realtime thermal monitoring without excessive bus load."""
+"""Legacy fallback tick length (seconds) for the main daemon loop.
+
+The actual CPU temperature (PGN 130312) broadcast rate is now configurable
+via ``GatewaySettings.n2k_tcp_temp_interval_s`` (default 3.0s, read dynamically
+on every loop iteration) — see ``_run_device()``. Physical serial forwarding of
+the same PGN is throttled independently via ``n2k_serial_temp_interval_s`` in
+``data_hub.py``. This constant only bounds the loop's sleep granularity."""
 
 GW_PRODUCT_INFO_INTERVAL_S = 60.0
 """Interval for periodic re-broadcast of Product Information (PGN 126996) in seconds.
@@ -508,7 +518,8 @@ async def _run_device() -> None:
       2. Start the device (opens TCP connection, begins ISO address claim).
       3. Wait for address claim to complete (up to 15s timeout).
       4. Broadcast Product Information (PGN 126996) once on startup.
-      5. Enter infinite loop broadcasting CPU temperature every GW_TEMP_INTERVAL_S.
+      5. Enter infinite loop broadcasting CPU temperature every
+         ``settings.n2k_tcp_temp_interval_s`` seconds (read dynamically).
 
     On any exception (TCP disconnect, encoding error), this function either
     raises (caught by the outer _loop() wrapper) or logs and continues.
@@ -680,12 +691,16 @@ async def _run_device() -> None:
 
     sid = 0
     _last_replay_t = time.monotonic()  # track last ISO replay broadcast time
+    _last_tcp_temp_t = time.monotonic()  # track last CPU temp broadcast time (TCP hub)
     while True:
-        await asyncio.sleep(GW_TEMP_INTERVAL_S)
+        # Tick at a small, fixed rate so both the ISO replay timer and the
+        # CPU-temp broadcast timer (now configurable via GatewaySettings)
+        # can be evaluated independently and responsively.
+        await asyncio.sleep(min(1.0, GW_TEMP_INTERVAL_S))
 
         # Periodic ISO replay (KI-001 workaround) — controlled by GatewaySettings.
         # Settings are read dynamically so changes via web UI take effect within
-        # GW_TEMP_INTERVAL_S (~3s) without restarting the daemon.
+        # one tick (~1s) without restarting the daemon.
         settings = GatewaySettings.instance()
         now = time.monotonic()
         replay_interval = settings.ha_iso_replay_interval_s
@@ -693,18 +708,26 @@ async def _run_device() -> None:
             _last_replay_t = now
             await _replay_iso_presence()
 
-        temp = _read_cpu_temp()
-        if temp is not None:
-            try:
-                msg = _make_temp_message(temp, sid)
-                await device.send(msg)
-                sid = (sid + 1) % 252
-            except Exception as exc:
-                logger.warning('[gwdev] Temperature send failed: %s', exc)
-        else:
-            # ISSUE(log-spam): On non-Linux, this fires every GW_TEMP_INTERVAL_S.
-            # TODO: Detect once and suppress further warnings.
-            logger.warning('[gwdev] CPU temp unavailable (non-Linux platform?)')
+        # CPU temperature broadcast (PGN 130312) to the TCP hub — throttled by
+        # settings.n2k_tcp_temp_interval_s (default 3.0s), read dynamically so
+        # changes via the web UI take effect without restarting the daemon.
+        # Physical serial forwarding of this same PGN is throttled independently
+        # by data_hub.py using settings.n2k_serial_temp_interval_s.
+        tcp_temp_interval = settings.n2k_tcp_temp_interval_s
+        if now - _last_tcp_temp_t >= tcp_temp_interval:
+            _last_tcp_temp_t = now
+            temp = _read_cpu_temp()
+            if temp is not None:
+                try:
+                    msg = _make_temp_message(temp, sid)
+                    await device.send(msg)
+                    sid = (sid + 1) % 252
+                except Exception as exc:
+                    logger.warning('[gwdev] Temperature send failed: %s', exc)
+            else:
+                # ISSUE(log-spam): On non-Linux, this fires every tcp_temp_interval.
+                # TODO: Detect once and suppress further warnings.
+                logger.warning('[gwdev] CPU temp unavailable (non-Linux platform?)')
 
 
 def start_in_thread() -> threading.Thread:

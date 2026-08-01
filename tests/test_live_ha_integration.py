@@ -128,10 +128,17 @@ class TestLiveHAIntegration(unittest.TestCase):
         checker = HALiveChecker(ha_url=os.getenv('HA_URL'))
         ha_data = checker.get_ha_data()
 
-        if ha_data is None:
+        if ha_data is None or not ha_data.get('registry_available'):
+            # NOTE: get_ha_data() can return a non-None result carrying ONLY REST
+            # API 'states' (e.g. HA_TOKEN is set but SSH/storage access to the
+            # device registry is not configured/reachable). In that case
+            # 'devices'/'entities' are genuinely absent, not an empty registry —
+            # asserting device presence would be a false failure, not a real
+            # audit finding. Skip instead, matching the storage/SSH-unreachable case.
             self.skipTest(
-                "Live Home Assistant API/storage not reachable on HA_URL. "
-                "To run live Home Assistant audit, set HA_URL and HA_TOKEN in your local .env file."
+                "Live Home Assistant device/entity registry not reachable (need SSH_HOST/HA_HOST "
+                "or local .storage access, not just HA_URL/HA_TOKEN for REST states). "
+                "To run live Home Assistant registry audit, configure SSH access to the HA host."
             )
 
         devices = ha_data.get('devices', [])

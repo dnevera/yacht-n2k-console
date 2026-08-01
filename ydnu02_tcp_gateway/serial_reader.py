@@ -51,7 +51,8 @@ class SerialReader:
                  serial_ready: threading.Event,
                  service_mode: threading.Event,
                  broadcast: Callable[[bytes], None],
-                 send_iso_request: Callable[[], None]):
+                 send_iso_request: Callable[[], None],
+                 check_tx_echo: Optional[Callable[[str], None]] = None):
         self.serial_port = serial_port
         self.serial_baud = serial_baud
         self._get_serial = get_serial_instance
@@ -61,6 +62,19 @@ class SerialReader:
         self.service_mode = service_mode
         self.broadcast = broadcast
         self.send_iso_request = send_iso_request
+        # EXPERIMENTAL / RESEARCH: diagnostic echo-logging callback, invoked with
+        # the CAN ID of every frame read back from the physical bus, so DataHub can
+        # log a pseudo-ACK for recently written TX frames (see
+        # DataHub.record_tx_echo_candidate/check_tx_echo). Optional — defaults to a
+        # no-op so this stays purely diagnostic and never affects the read loop.
+        #
+        # EMPIRICAL NOTE (real YDNU-02 hardware, Pi5 @ <gateway-host>.local, 2026-08-01):
+        # this callback fires for every line read here, but in practice it NEVER
+        # matches a pending TX echo — the physical device does not reflect its own
+        # TX writes back over USB in RAW mode (confirmed via 20+ min of live
+        # journalctl monitoring, dozens of TX writes, zero "[data] echo: ..." log
+        # lines). Kept only in case future hardware/firmware behaves differently.
+        self.check_tx_echo = check_tx_echo or (lambda can_id: None)
 
     def run(self) -> None:
         """Main serial loop (runs forever)."""
@@ -110,6 +124,16 @@ class SerialReader:
 
                     self.broadcast(line)
 
+                    # Diagnostic echo-logging (test/troubleshooting aid only, not a
+                    # protocol-level ACK): if this CAN ID matches something we
+                    # recently wrote to serial, log a pseudo-ACK.
+                    try:
+                        parts = line.strip().split(b' ')
+                        if len(parts) >= 3:
+                            self.check_tx_echo(parts[2].decode('ascii', errors='ignore'))
+                    except (ValueError, IndexError):
+                        pass
+
             except serial.SerialException as e:
                 print(f"[serial] error: {e} — retrying in 5s", flush=True)
                 self.serial_ready.clear()
@@ -118,5 +142,14 @@ class SerialReader:
                 self.service_mode.clear()
                 time.sleep(5)
             except Exception as e:
+                # OBSERVED ON REAL HARDWARE (Pi5 @ <gateway-host>.local, 2026-08-01):
+                # "argument must be an int, or have a fileno() method" was seen
+                # here once, immediately after exiting CTRL/service mode back to
+                # RAW mode — the port recovered automatically on the next retry
+                # (5s later) with no further issues. Root cause not yet
+                # investigated (likely a stale/half-reassigned `ser` handle
+                # racing with ctrl_handler's service-mode port swap); flagged
+                # here for a future dedicated investigation, not fixed as part
+                # of the echo-logging research.
                 print(f"[serial] unexpected error: {e} — retrying in 5s", flush=True)
                 time.sleep(5)

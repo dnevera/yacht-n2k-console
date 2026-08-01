@@ -84,6 +84,7 @@ import socket
 import threading
 import serial
 from typing import Set, Tuple, Optional, Callable, Dict, Any
+from ydnu02_tcp_gateway.gateway_settings import GatewaySettings
 from ydnu02_tcp_gateway.device_contract import (
     N2KDeviceRegistry,
     N2KDeviceInfo,
@@ -99,6 +100,42 @@ _ISO_REQUEST_MIN_INTERVAL = 5.0
 # Required so the HA nmea2000 decoder builds source_to_iso_name before receiving Product Info.
 # See docstring above for full explanation.
 ANNOUNCE_PRODUCT_INFO_DELAY = 0.6  # seconds
+
+# Source addresses (SA) of the gateway's own virtual devices — they never sit
+# physically on the CAN bus. TX frames whose CAN ID encodes one of these SAs
+# must never be forwarded to the physical serial bus (would create a phantom
+# source / potential feedback loop), regardless of n2k_serial_tx_enabled.
+# The legitimate ISO Request broadcast (PGN 59904) is exempt from this guard.
+_VIRTUAL_DEVICE_SA = {64, 200}  # 64 = YDNU-02 (physical bridge id), 200 = TCP-GW
+
+# --- EXPERIMENTAL / RESEARCH FEATURE -----------------------------------------
+# Diagnostic echo-logging: how long (seconds) a TX frame's CAN ID is remembered
+# while waiting for a matching frame to be read back from serial (self-reception
+# on the physical CAN bus). Purely a testing/diagnostic aid — logs a pseudo-ACK,
+# never blocks or alters forwarding decisions.
+#
+# WHY THIS EXISTS: the official YDNU-02 RAW-mode protocol (Appendix E of the
+# manual) has NO delivery-confirmation/ACK mechanism at all — writing a TX
+# string to the USB port only means it was handed to the device, not that it
+# was actually put on the physical CAN bus. On a generic CAN controller, self-
+# reception (a device seeing its own transmitted frames echoed back on RX) is
+# common, so this feature was built to opportunistically use that as a
+# poor-man's pseudo-ACK for local testing/diagnostics.
+#
+# EMPIRICAL FINDING (real hardware, YDNU-02 on Raspberry Pi 5 @ <gateway-host>.local,
+# 2026-08-01, firmware/service uptime 20+ minutes, dozens of TX writes — CPU-temp
+# telemetry broadcasts every 3-5s plus ISO Request/Address-Claim at startup):
+# NOT A SINGLE "[data] echo: ..." line was ever logged. record_tx_echo_candidate()
+# and check_tx_echo() were both confirmed to be wired up and invoked correctly
+# (verified via journalctl on the live service), so the absence is not a wiring
+# bug — the physical YDNU-02 device in RAW mode simply does NOT echo its own TX
+# frames back to the host over USB. Either its firmware filters out
+# self-originated frames before generating 'R' lines for the host, or the RAW
+# UART bridge has no self-reception path at all. CONCLUSION: on this hardware,
+# echo-based pseudo-ACK will ALWAYS be silent — do not rely on it as a delivery
+# indicator; it is kept purely as a diagnostic/experimental aid in case future
+# hardware/firmware revisions behave differently.
+_TX_ECHO_WINDOW_S = 3.0
 
 
 class DataHub:
@@ -139,6 +176,10 @@ class DataHub:
         self.clients_lock = clients_lock if clients_lock is not None else threading.Lock()
         self._iso_request_lock = threading.Lock()
         self._iso_request_last_sent: float = 0.0
+        self._serial_temp_lock = threading.Lock()
+        self._last_serial_temp_t: float = 0.0
+        self._tx_echo_lock = threading.Lock()
+        self._pending_tx_echo: Dict[str, float] = {}
 
         # Unified N2K Device Registry: tracks physical + virtual devices
         self.device_registry = N2KDeviceRegistry()
@@ -289,6 +330,7 @@ class DataHub:
         try:
             ser.write(frame_claim)
             ser.write(frame_prod)
+            self.record_tx_echo_candidate('18EAFFFE')
             print("[data] ISO Requests (Address Claim + Product Info) TX sent to serial", flush=True)
         except (serial.SerialException, OSError, TypeError, AttributeError) as e:
             print(f"[data] ISO Request TX error: {e}", flush=True)
@@ -300,6 +342,97 @@ class DataHub:
 
         # Two-phase announcement: PGN 60928 now, PGN 126996 after ANNOUNCE_PRODUCT_INFO_DELAY
         self.announce_all_devices(product_info_delay=ANNOUNCE_PRODUCT_INFO_DELAY)
+
+    def _should_forward_to_serial(self, pgn: int, sa: int, settings: "GatewaySettings") -> bool:
+        """Decide whether a client TX frame (format B) should be forwarded to the
+        physical serial bus.
+
+        Rules (evaluated in order):
+          1. ISO Request (PGN 59904) is always forwarded — legitimate regardless
+             of ``n2k_serial_tx_enabled`` or SA (this is existing behavior).
+          2. SA-guard: frames whose source address belongs to the gateway's own
+             virtual devices (``_VIRTUAL_DEVICE_SA``) are never forwarded here —
+             they don't physically exist on the CAN bus, so echoing them back
+             would create a phantom source / potential feedback loop. Virtual
+             device telemetry reaches serial exclusively via
+             ``_should_forward_virtual_broadcast_to_serial()`` (format A).
+          3. Otherwise, forwarding requires ``settings.n2k_serial_tx_enabled``.
+        """
+        if pgn == 59904:
+            return True
+        if sa in _VIRTUAL_DEVICE_SA:
+            return False
+        return bool(settings.n2k_serial_tx_enabled)
+
+    def _should_forward_virtual_broadcast_to_serial(self, pgn: int, sa: int, settings: "GatewaySettings") -> bool:
+        """Decide whether a broadcast frame (format A, ``NMEA_LINE_RE``) received
+        from a TCP client should be forwarded to the physical serial bus.
+
+        Unlike ``_should_forward_to_serial()`` (client TX writes), this path exists
+        specifically to relay OUR OWN virtual devices' broadcasts (SA=64 YDNU-02,
+        SA=200 TCP-GW — e.g. the CPU-temperature telemetry sent by
+        ``ydnu02_gateway_device.py``) onto the physical bus. Frames from any other
+        (physical) source address are never forwarded here — they either already
+        originated on the physical bus or are not ours to relay, and blindly
+        echoing them back would be pointless and risks a feedback loop.
+
+        Rules (evaluated in order):
+          1. Only SA in ``_VIRTUAL_DEVICE_SA`` is eligible at all.
+          2. Forwarding requires ``settings.n2k_serial_tx_enabled``.
+          3. CPU temperature broadcasts (PGN 130312) are additionally throttled to
+             ``settings.n2k_serial_temp_interval_s`` — independent from how often
+             the TCP hub itself receives/sends this PGN
+             (``settings.n2k_tcp_temp_interval_s``).
+        """
+        if sa not in _VIRTUAL_DEVICE_SA:
+            return False
+        if not settings.n2k_serial_tx_enabled:
+            return False
+        if pgn == 130312:
+            now = time.monotonic()
+            with self._serial_temp_lock:
+                if now - self._last_serial_temp_t < settings.n2k_serial_temp_interval_s:
+                    return False
+                self._last_serial_temp_t = now
+        return True
+
+    def record_tx_echo_candidate(self, can_id: str) -> None:
+        """Diagnostic echo-logging: remember a CAN ID we just wrote to physical
+        serial, so ``check_tx_echo()`` can log a pseudo-ACK when SerialReader
+        reads the same CAN ID back off the bus (CAN self-reception). Purely a
+        testing/diagnostic aid — never blocks or alters forwarding decisions.
+
+        Args:
+            can_id: 8-char uppercase hex CAN ID, as written to serial (TX_LINE_RE format).
+        """
+        now = time.monotonic()
+        with self._tx_echo_lock:
+            self._pending_tx_echo[can_id.upper()] = now
+            # Opportunistic cleanup of stale entries (avoid unbounded growth)
+            stale = [cid for cid, t in self._pending_tx_echo.items() if now - t > _TX_ECHO_WINDOW_S]
+            for cid in stale:
+                del self._pending_tx_echo[cid]
+
+    def check_tx_echo(self, can_id: str) -> None:
+        """Diagnostic echo-logging: called by SerialReader for every CAN ID read
+        back from the physical bus. If it matches a CAN ID we recently wrote via
+        ``record_tx_echo_candidate()`` (within ``_TX_ECHO_WINDOW_S``), logs a
+        pseudo-ACK confirming the frame was actually seen on the physical CAN bus.
+
+        This is a diagnostic convenience only (test/troubleshooting aid) — it does
+        NOT constitute a real NMEA 2000/YDNU-02 delivery acknowledgment; the RAW
+        mode protocol has no built-in ACK for TX writes (see frame_utils.py).
+
+        Args:
+            can_id: 8-char hex CAN ID read back from serial.
+        """
+        key = can_id.upper()
+        now = time.monotonic()
+        with self._tx_echo_lock:
+            sent_at = self._pending_tx_echo.pop(key, None)
+        if sent_at is not None and (now - sent_at) <= _TX_ECHO_WINDOW_S:
+            print(f"[data] echo: TX frame {key} confirmed on physical bus "
+                  f"after {now - sent_at:.3f}s (diagnostic pseudo-ACK, not a protocol ACK)", flush=True)
 
     def handle_client(self, conn: socket.socket, addr: Tuple[str, int]) -> None:
         """Handle lifecycle and bidirectional frame loop for a single connected TCP client.
@@ -339,6 +472,22 @@ class DataHub:
                     if NMEA_LINE_RE.match(line):
                         self.broadcast(line, exclude=conn)
 
+                        settings = GatewaySettings.instance()
+                        if not self._get_service_mode():
+                            parts = line.strip().split(b' ')
+                            if len(parts) >= 4 and parts[1] in (b'R', b'T'):
+                                raw_tx = parts[2] + b' ' + b' '.join(parts[3:]) + b'\r\n'
+                                try:
+                                    pgn, sa = get_pgn_sa(parts[2])
+                                    if self._should_forward_virtual_broadcast_to_serial(pgn, sa, settings):
+                                        with self._serial_lock:
+                                            ser = self._get_serial()
+                                            if ser and getattr(ser, "is_open", False):
+                                                ser.write(raw_tx)
+                                                self.record_tx_echo_candidate(parts[2].decode('ascii', errors='ignore'))
+                                except (ValueError, IndexError):
+                                    pass
+
                     elif TX_LINE_RE.match(raw):
                         parts = raw.rstrip(b'\r\n').split(b' ')
                         can_id  = parts[0]
@@ -346,14 +495,16 @@ class DataHub:
                         rx_line = fmt_frame(can_id.decode(), data_bz)
                         self.broadcast(rx_line, exclude=conn)
 
+                        settings = GatewaySettings.instance()
                         try:
-                            pgn, _ = get_pgn_sa(can_id)
-                            if pgn == 59904 and not self._get_service_mode():
+                            pgn, sa = get_pgn_sa(can_id)
+                            if self._should_forward_to_serial(pgn, sa, settings) and not self._get_service_mode():
+                                raw_tx = can_id + b' ' + b' '.join(parts[1:]) + b'\r\n'
                                 with self._serial_lock:
                                     ser = self._get_serial()
-                                    if ser and ser.is_open:
-                                        ser.write(raw)
-                                print(f"[data] ISO Request forwarded to serial", flush=True)
+                                    if ser and getattr(ser, "is_open", False):
+                                        ser.write(raw_tx)
+                                        self.record_tx_echo_candidate(can_id.decode('ascii', errors='ignore'))
                         except (ValueError, IndexError):
                             pass
         except OSError:

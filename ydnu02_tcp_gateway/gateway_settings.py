@@ -6,8 +6,11 @@ gateway_settings.py — Runtime-configurable settings for the YDNU-02 TCP Gatewa
 PURPOSE
   Provides a thread-safe singleton ``GatewaySettings`` that persists user-facing
   daemon settings to JSON. Changes made via the web UI API (``POST /api/gw-settings``)
-  take effect within one ``GW_TEMP_INTERVAL_S`` loop iteration (~3s) without
-  restarting the daemon.
+  take effect within one daemon loop tick (~1s) without restarting the daemon —
+  including the two independent CPU-temperature (PGN 130312) broadcast intervals,
+  ``n2k_tcp_temp_interval_s`` (TCP hub) and ``n2k_serial_temp_interval_s``
+  (physical serial forwarding), which are read dynamically by
+  ``ydnu02_gateway_device.py`` and ``data_hub.py`` respectively.
 
 PERSISTENCE
   Settings are stored in ``~/.config/ydnu02/gateway_settings.json``.
@@ -56,8 +59,11 @@ _SETTINGS_DIR  = os.path.expanduser('~/.config/ydnu02')
 _SETTINGS_FILE = os.path.join(_SETTINGS_DIR, 'gateway_settings.json')
 
 _DEFAULTS: dict = {
-    'ha_iso_replay_enabled':    True,
-    'ha_iso_replay_interval_s': 60.0,
+    'ha_iso_replay_enabled':       True,
+    'ha_iso_replay_interval_s':    60.0,
+    'n2k_serial_tx_enabled':       True,
+    'n2k_serial_temp_interval_s':  5.0,
+    'n2k_tcp_temp_interval_s':     3.0,
 }
 
 # ── Singleton ─────────────────────────────────────────────────────────────────
@@ -125,6 +131,25 @@ class GatewaySettings:
         return float(self._data.get('ha_iso_replay_interval_s',
                                     _DEFAULTS['ha_iso_replay_interval_s']))
 
+    @property
+    def n2k_serial_tx_enabled(self) -> bool:
+        """Whether virtual gateway frames are forwarded to physical N2K serial bus."""
+        return bool(self._data.get('n2k_serial_tx_enabled', _DEFAULTS['n2k_serial_tx_enabled']))
+
+    @property
+    def n2k_serial_temp_interval_s(self) -> float:
+        """Interval in seconds for temperature telemetry forwarded to the physical N2K
+        serial bus (default 5.0). Enforced by ``DataHub._should_forward_to_serial()``
+        in ``data_hub.py``, independent of ``n2k_tcp_temp_interval_s``."""
+        return float(self._data.get('n2k_serial_temp_interval_s', _DEFAULTS['n2k_serial_temp_interval_s']))
+
+    @property
+    def n2k_tcp_temp_interval_s(self) -> float:
+        """Interval in seconds for temperature telemetry broadcast to the local TCP hub
+        (default 3.0). Read dynamically by ``ydnu02_gateway_device.py::_run_device()``,
+        independent of ``n2k_serial_temp_interval_s``."""
+        return float(self._data.get('n2k_tcp_temp_interval_s', _DEFAULTS['n2k_tcp_temp_interval_s']))
+
     # ── Serialisation ─────────────────────────────────────────────────────────
 
     def to_dict(self) -> dict:
@@ -137,8 +162,11 @@ class GatewaySettings:
 
         Only known keys from ``_DEFAULTS`` are accepted; unknown keys are ignored.
         Type coercions:
-          - ``ha_iso_replay_enabled``    → bool
-          - ``ha_iso_replay_interval_s`` → float, clamped to [5.0, 3600.0]
+          - ``ha_iso_replay_enabled``       → bool
+          - ``ha_iso_replay_interval_s``    → float, clamped to [5.0, 3600.0]
+          - ``n2k_serial_tx_enabled``       → bool
+          - ``n2k_serial_temp_interval_s``  → float, clamped to [1.0, 3600.0]
+          - ``n2k_tcp_temp_interval_s``     → float, clamped to [1.0, 3600.0]
 
         Args:
             updates: Partial dict with settings to update.
@@ -160,6 +188,25 @@ class GatewaySettings:
                         f'ha_iso_replay_interval_s must be 5–3600, got {val}'
                     )
                 self._data['ha_iso_replay_interval_s'] = val
+
+            if 'n2k_serial_tx_enabled' in updates:
+                self._data['n2k_serial_tx_enabled'] = bool(updates['n2k_serial_tx_enabled'])
+
+            if 'n2k_serial_temp_interval_s' in updates:
+                val = float(updates['n2k_serial_temp_interval_s'])
+                if not (1.0 <= val <= 3600.0):
+                    raise ValueError(
+                        f'n2k_serial_temp_interval_s must be 1–3600, got {val}'
+                    )
+                self._data['n2k_serial_temp_interval_s'] = val
+
+            if 'n2k_tcp_temp_interval_s' in updates:
+                val = float(updates['n2k_tcp_temp_interval_s'])
+                if not (1.0 <= val <= 3600.0):
+                    raise ValueError(
+                        f'n2k_tcp_temp_interval_s must be 1–3600, got {val}'
+                    )
+                self._data['n2k_tcp_temp_interval_s'] = val
 
             result = dict(self._data)
 

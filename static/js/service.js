@@ -234,47 +234,56 @@ Object.assign(App, {
     async loadGwSettings() {
         try {
             const data = await this.api('/api/gw-settings');
-            const cb  = document.getElementById('gw-iso-replay-enabled');
-            const inp = document.getElementById('gw-iso-replay-interval');
-            const st  = document.getElementById('gw-settings-status');
-            if (cb)  cb.checked = !!data.ha_iso_replay_enabled;
-            if (inp) inp.value  = data.ha_iso_replay_interval_s ?? 60;
-            if (st)  {
-                st.textContent = data.ha_iso_replay_enabled
-                    ? `Active · every ${data.ha_iso_replay_interval_s}s`
-                    : 'Disabled';
-                st.className = data.ha_iso_replay_enabled ? 'val-green' : 'muted';
+            const cbIso  = document.getElementById('gw-iso-replay-enabled');
+            const inpIso = document.getElementById('gw-iso-replay-interval');
+            const cbSer  = document.getElementById('gw-serial-tx-enabled');
+            const inpSer = document.getElementById('gw-serial-temp-interval');
+            const inpTcp = document.getElementById('gw-tcp-temp-interval');
+            const st     = document.getElementById('gw-settings-status');
+
+            if (cbIso)  cbIso.checked  = !!data.ha_iso_replay_enabled;
+            if (inpIso) inpIso.value   = data.ha_iso_replay_interval_s ?? 60;
+            if (cbSer)  cbSer.checked  = data.n2k_serial_tx_enabled !== false;
+            if (inpSer) inpSer.value   = data.n2k_serial_temp_interval_s ?? 5;
+            if (inpTcp) inpTcp.value   = data.n2k_tcp_temp_interval_s ?? 3;
+
+            if (st) {
+                st.textContent = data.n2k_serial_tx_enabled
+                    ? `Serial TX Active · Bus ${data.n2k_serial_temp_interval_s}s · TCP ${data.n2k_tcp_temp_interval_s}s`
+                    : 'Serial TX Disabled';
+                st.className = data.n2k_serial_tx_enabled ? 'val-green' : 'muted';
             }
         } catch (e) {
-            // Non-fatal — settings card will just be empty
             console.warn('loadGwSettings failed:', e);
         }
     },
 
     /** Save GatewaySettings from UI controls via API. */
     async saveGwSettings(btnEl) {
-        const cb  = document.getElementById('gw-iso-replay-enabled');
-        const inp = document.getElementById('gw-iso-replay-interval');
-        if (!cb || !inp) return;
+        const cbIso  = document.getElementById('gw-iso-replay-enabled');
+        const inpIso = document.getElementById('gw-iso-replay-interval');
+        const cbSer  = document.getElementById('gw-serial-tx-enabled');
+        const inpSer = document.getElementById('gw-serial-temp-interval');
+        const inpTcp = document.getElementById('gw-tcp-temp-interval');
 
         const payload = {
-            ha_iso_replay_enabled:    cb.checked,
-            ha_iso_replay_interval_s: parseFloat(inp.value) || 60,
+            ha_iso_replay_enabled:      cbIso ? cbIso.checked : true,
+            ha_iso_replay_interval_s:   inpIso ? (parseFloat(inpIso.value) || 60) : 60,
+            n2k_serial_tx_enabled:      cbSer ? cbSer.checked : true,
+            n2k_serial_temp_interval_s: inpSer ? (parseFloat(inpSer.value) || 5) : 5,
+            n2k_tcp_temp_interval_s:    inpTcp ? (parseFloat(inpTcp.value) || 3) : 3,
         };
 
         await this.withButton(btnEl, 'Save Settings', async () => {
             const data = await this.api('/api/gw-settings', 'POST', payload);
-            // Sync UI back from actual saved values
             const st = document.getElementById('gw-settings-status');
             if (st) {
-                st.textContent = data.ha_iso_replay_enabled
-                    ? `Active · every ${data.ha_iso_replay_interval_s}s`
-                    : 'Disabled';
-                st.className = data.ha_iso_replay_enabled ? 'val-green' : 'muted';
+                st.textContent = data.n2k_serial_tx_enabled
+                    ? `Serial TX Active · Bus ${data.n2k_serial_temp_interval_s}s · TCP ${data.n2k_tcp_temp_interval_s}s`
+                    : 'Serial TX Disabled';
+                st.className = data.n2k_serial_tx_enabled ? 'val-green' : 'muted';
             }
-            return { message: data.ha_iso_replay_enabled
-                ? `ISO Replay ON · ${data.ha_iso_replay_interval_s}s`
-                : 'ISO Replay disabled' };
+            return { message: 'Gateway Settings Saved' };
         });
     },
 });

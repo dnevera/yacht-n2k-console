@@ -240,7 +240,7 @@ git+https://github.com/dnevera/nmea2000.git@fix/pgn-126996-hash-collision-per-so
 ### venv
 
 ```bash
-cd /Users/denn/Develop/yacht/yacht-n2k-console
+cd <project-root>/yacht-n2k-console
 rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # Верификация: .venv/bin/python -c "from nmea2000 import message; import inspect; print(inspect.getfile(message))"
 # Ожидаем: .venv/lib/.../site-packages/nmea2000/message.py  (НЕ /opt/homebrew/...)
@@ -323,7 +323,7 @@ ssh user@<gateway-host> "sudo docker exec homeassistant grep 'source_iso_name\.'
 
 ## 📦 Форк nmea2000
 
-**Путь:** `/Users/denn/Develop/yacht/nmea2000`
+**Путь:** `<project-root>/nmea2000`
 **Ветка:** `fix/pgn-126996-hash-collision-per-source`
 
 ### Изменения относительно upstream
@@ -337,7 +337,7 @@ ssh user@<gateway-host> "sudo docker exec homeassistant grep 'source_iso_name\.'
 ### Тесты форка
 
 ```bash
-cd /Users/denn/Develop/yacht/nmea2000
+cd <project-root>/nmea2000
 python3 -m pytest tests/ -v   # test_decoder.py проверяет хэши SA=64 и SA=200
 ```
 
@@ -408,6 +408,34 @@ mfr contains 'gobius'         → 'GOBIUS'
 `SensorRegistry` и `N2KDeviceRegistry` устанавливают `claimed = True` строго при `unique_id > 0`.
 При получении валидного claim (например `src=64`, `unique_id=402047`), транзитные фантомные записи с `src=0` и `unique_id=0` автоматически зачищаются.
 Проверка `fullyIdentified` на фронтенде (`network.js`) также требует `Number(uniqueId) > 0`.
+
+---
+
+## ✅ Аудит соответствия официальному протоколу YDNU-02
+
+**Источник:** официальный User Manual YDNU-02 (60 стр., PDF с сайта yachtd.com,
+`https://www.yachtd.com/downloads/ydnu02.pdf`), Appendix E (RAW mode) и Appendix F (N2K/DLE mode).
+
+### RAW mode (Appendix E) — используется в проекте
+
+Официальный формат: `hh:mm:ss.ddd D msgid b0 b1 ... b7<CR><LF>`, где `D` = `R` (из шины) или `T` (в шину),
+`msgid` — 29-бит CAN ID в hex, данные — 1..8 байт в hex. Исходящие сообщения (host→устройство) —
+тот же формат, но без времени/направления, обязательно завершаются `<CR><LF>`.
+
+Сверка с кодом (`ydnu02_tcp_gateway/frame_utils.py`):
+- `NMEA_LINE_RE = rb"^\d{2}:\d{2}:\d{2}\.\d{3} [RT] [0-9A-Fa-f]{8}( [0-9A-Fa-f]{2})+\n$"` — **соответствует**.
+- `TX_LINE_RE = rb"^[0-9A-Fa-f]{8}( [0-9A-Fa-f]{2})+\r?\n$"` — **соответствует** (мануал требует `<CR><LF>` для записи в устройство).
+- `get_pgn_sa()` → `N2KPGNDecoder.parse_can_id()` корректно реализует стандартное извлечение
+  PGN/SA/DST из 29-бит CAN ID (PF<240 → PDU1/destination-specific, PF≥240 → PDU2/broadcast) —
+  соответствует NMEA 2000/J1939 стандарту, расхождений с мануалом нет.
+
+**Вывод:** реализация RAW-режима в проекте полностью соответствует официальной спецификации Yacht Devices.
+Расхождений между документацией, скиллом и исходным кодом не найдено.
+
+### N2K mode (Appendix F, DLE-encoding) — НЕ используется
+
+Бинарный режим на основе DLE/STX/ETX (совместим с ActiSense NGT / Garmin Serial Protocol) в проекте
+не реализован и не требуется — гейтвей и весь стек работают исключительно в RAW-режиме (текстовый ASCII).
 
 ---
 
@@ -499,4 +527,118 @@ Bits 20-16: device_function (5 bits)
    - Gobius C **не поддерживает запись конфигурации через N2K CAN bus (PGN 126208)** и игнорирует такие фреймы (не присылает ACK).
    - Для изменения емкости (`volume_l`) и типа жидкости Gobius C запись должна производиться по **Bluetooth LE через характеристику GATT `0xFFF2` (N2K Config)** или вкладку Gobius C.
 
+---
 
+## 📤 YDNU-02 Serial Write Format (физический USB порт `/dev/ttyACM0`)
+
+> ⚠️ **Критически важно:** YDNU-02 принимает для передачи в CAN-шину ТОЛЬКО строго специфицированный формат. Неверный формат = фрейм молча игнорируется железкой.
+
+### Форматы ASCII-фреймов в системе
+
+| Контекст | Направление | Формат | Regex |
+|----------|-------------|--------|-------|
+| Из YDNU-02 serial → DataHub (RX) | железо→нам | `HH:MM:SS.mmm R XXXXXXXX XX XX...\n` | `NMEA_LINE_RE` |
+| Из YDNU-02 serial → DataHub (TX iron echo) | железо→нам | `HH:MM:SS.mmm T XXXXXXXX XX XX...\n` | `NMEA_LINE_RE` |
+| TCP-клиент → DataHub (ISO Requests, command_builder) | клиент→хаб | `XXXXXXXX XX XX...\r\n` | `TX_LINE_RE` |
+| **DataHub → YDNU-02 serial (запись в шину)** | **нам→железо** | **`XXXXXXXX XX XX...\r\n`** | ← **единственный верный формат** |
+| DataHub → TCP-клиенты (broadcast) | хаб→клиенты | `HH:MM:SS.mmm R XXXXXXXX XX XX...\n` | `NMEA_LINE_RE` |
+
+### Правило формирования raw_tx для `ser.write()`
+
+**Откуда бы ни пришёл фрейм (NMEA_LINE_RE или TX_LINE_RE) — в `ser.write()` всегда передаётся:**
+
+```
+XXXXXXXX XX XX XX...\r\n
+└──────┘ └──────────┘
+CAN ID   DATA BYTES (hex uppercase, разделитель — пробел)
+         \r\n обязательны — YDNU-02 требует CRLF
+```
+
+**Примеры корректных строк:**
+
+```
+19FF04C8 05 00 02 91 7E FF FF 00\r\n   ← PGN 130312 CPU Temp, SA=200
+09EE00C8 EE 00 FF\r\n                  ← ISO Request PGN 59904, SA=200
+18EAFFC8 00 00 00 00 00 E8 FF 00\r\n   ← ISO Address Claim PGN 60928, SA=200
+```
+
+### Преобразование перед `ser.write()`
+
+#### Из NMEA_LINE_RE → raw_tx:
+```python
+# Вход: b"HH:MM:SS.mmm R 19FF04C8 05 00 02 7E FF FF 00\n"
+parts = line.strip().split(b' ')
+# parts[0]="HH:MM:SS.mmm"  ← отбрасывается
+# parts[1]="R" или "T"     ← отбрасывается
+# parts[2]="XXXXXXXX"      ← CAN ID
+# parts[3:]=[XX,...]       ← DATA bytes
+raw_tx = parts[2] + b' ' + b' '.join(parts[3:]) + b'\r\n'
+```
+
+#### Из TX_LINE_RE → raw_tx:
+```python
+# Вход: b"19FF04C8 05 00 02 7E FF FF 00\r\n"
+parts = raw.rstrip(b'\r\n').split(b' ')
+# parts[0]="XXXXXXXX"  ← CAN ID
+# parts[1:]=[XX,...]   ← DATA bytes
+raw_tx = parts[0] + b' ' + b' '.join(parts[1:]) + b'\r\n'
+```
+
+### ⚠️ Что YDNU-02 в serial НЕ принимает
+
+| Неверный формат | Проблема |
+|-----------------|----------|
+| `HH:MM:SS.mmm R XXXXXXXX XX\n` | таймштамп-префикс **запрещён** |
+| `XXXXXXXX XX XX\n` | только `\n` без `\r` — YDNU-02 требует **CRLF** |
+| `XXXXXXXX XX XX` | без терминатора — пакет **никогда не отправится** |
+| `19ff04c8 05 00` | lowercase hex — **не стандартизировано**, только UPPERCASE |
+
+### Защита от петли (loop prevention)
+
+Фреймы, пришедшие из самого `/dev/ttyACM0` через `SerialReader`, поступают в `DataHub.broadcast()` напрямую — они **минуют** `handle_client()` и никогда не попадают обратно в `ser.write()`.
+
+Таким образом, в физический serial пишутся **только фреймы от TCP-клиентов**:
+- Фреймы `N2KDevice SA=200` (ISO Claim, Product Info, CPU Temp, Heartbeat)
+- ISO Request (PGN 59904) от клиентов
+- PGN 126208 Write Config от `n2k_command_builder`
+
+### SA-guard (`data_hub.py::_VIRTUAL_DEVICE_SA = {64, 200}`)
+
+Перед `ser.write()` в обеих ветках `handle_client()` (`NMEA_LINE_RE` и `TX_LINE_RE`) проверяется source address (SA), извлечённый `get_pgn_sa()`:
+- `_should_forward_virtual_broadcast_to_serial()` (формат A/broadcast) — пропускает в serial **только** SA∈{64,200} (собственная телеметрия виртуальных устройств), с троттлингом PGN 130312 по `n2k_serial_temp_interval_s`.
+- `_should_forward_to_serial()` (формат B/TX от клиента) — **блокирует** SA∈{64,200} (кроме ISO Request PGN 59904), не даёт стороннему клиенту подделать чужой/виртуальный source на физической шине.
+
+Раздельные интервалы телеметрии CPU-temp (PGN 130312): TCP-цикл в `ydnu02_gateway_device.py::_run_device()` шлёт по `settings.n2k_tcp_temp_interval_s` (default 3.0s, читается динамически), форвардинг в serial из `data_hub.py` троттлится независимо по `settings.n2k_serial_temp_interval_s` (default 5.0s).
+
+---
+
+## 🔬 Диагностическое echo-логирование TX-фреймов (ИССЛЕДОВАТЕЛЬСКАЯ ФИЧА)
+
+> ⚠️ Это **не** реализация протокольного ACK — YDNU-02 в RAW-режиме (Appendix E официального мануала) **не имеет** механизма подтверждения доставки на запись в serial. Фича — чисто диагностический/тестовый инструмент, помечена в коде как экспериментальная (`data_hub.py`, `serial_reader.py`).
+
+### Как это работает
+
+1. `DataHub.record_tx_echo_candidate(can_id)` — вызывается сразу после `ser.write()` (в трёх местах: ISO Request, virtual-broadcast forward, client TX forward), запоминает CAN ID и `time.monotonic()` в `self._pending_tx_echo` (окно `_TX_ECHO_WINDOW_S = 3.0s`).
+2. `DataHub.check_tx_echo(can_id)` — вызывается `SerialReader` для **каждой** строки, прочитанной с физической шины. Если CAN ID совпадает с недавно записанным — логирует `[data] echo: TX frame ... confirmed on physical bus ... (diagnostic pseudo-ACK, not a protocol ACK)`.
+3. Подключено через `SerialReader.__init__(..., check_tx_echo=hub.check_tx_echo)` в `ydnu02_tcp_gateway.py`.
+
+### 🔎 Эмпирическая находка (реальное железо, Pi5 @ `<gateway-host>.local`, 2026-08-01)
+
+Проверено через `journalctl -u ydnu02-tcp-gateway` за 20+ минут работы сервиса (десятки TX-записей: CPU-temp телеметрия каждые 3-5с + ISO Request/Address Claim при старте):
+
+**Ни разу не было залогировано ни одной строки `[data] echo: ...`.**
+
+Проверено и подтверждено, что это не баг проводки:
+- `record_tx_echo_candidate()` реально вызывается при каждом TX-write (`data_hub.py`, 3 точки вызова).
+- `check_tx_echo()` реально вызывается для каждой прочитанной строки (`serial_reader.py:125`, было `123`).
+- Прочее логирование (`[data] client connected/disconnected`) работает нормально (31 совпадение за 200 строк лога) — то есть логи не теряются, просто `echo:` никогда не триггерится.
+
+**Вывод:** физическое устройство YDNU-02 в RAW-режиме **не отражает** (no self-reception) собственные TX-фреймы обратно хосту по USB — вопреки типичному поведению обычных CAN-контроллеров. Либо firmware фильтрует собственные исходящие кадры при формировании `R`-строк для хоста, либо RAW UART-мост вообще не имеет пути self-reception. **Полагаться на echo как индикатор реальной доставки на физическую шину нельзя** — на этом железе он будет молчать всегда. Фича оставлена в коде только как диагностический задел на случай другой прошивки/железа в будущем.
+
+### Побочная находка — единичная ошибка serial при выходе из service-mode
+
+В логах встретилась одноразовая ошибка сразу после переключения из CTRL/service-режима обратно в RAW:
+```
+[serial] unexpected error: argument must be an int, or have a fileno() method. — retrying in 5s
+```
+Порт переоткрылся штатно через 5с, без дальнейших проблем. Не расследовано глубже (вероятно гонка между `ctrl_handler` подменой `ser`-хендла и `SerialReader.run()`), помечено в коде (`serial_reader.py`, catch-all `except Exception`) как кандидат для отдельного расследования.

@@ -217,13 +217,20 @@ class TestHAEndToEndPublication(unittest.TestCase):
 
     def test_live_ha_comparison_audit(self):
         """Compare local published gateway entities against HA live or simulated state."""
-        expected_devs = [{"model": "YDNU-02 TCP-GW", "src": 200}]
-        expected_ents = [{"entity_id": "sensor.device_200_temperature", "expected_state": 52.3}]
+        expected_devs = [{"model": "YDNU-02 TCP-GW", "src": 200, "unique_number": 902047}]
+        expected_ents = [{
+            "entity_id": "sensor.device_200_temperature",
+            "unique_number": 902047,
+            "field_suffix": "actualtemperature",
+            "expected_state": 52.3,
+        }]
 
         checker = HALiveChecker()
         ha_data = checker.get_ha_data()
-        if ha_data is None:
-            # Fallback to simulated HA state when HA API/storage is unconfigured
+        if ha_data is None or not ha_data.get('registry_available'):
+            # Fallback to simulated HA state when HA API/storage is unconfigured, or
+            # when only REST API 'states' were fetched without device/entity registry
+            # access (registry_available=False) — 'devices' would otherwise be absent.
             ha_data = {
                 "devices": [{"model": "YDNU-02 TCP-GW", "name": "YDNU-02 TCP-GW"}],
                 "states": [{"entity_id": "sensor.device_200_temperature", "state": "52.3", "attributes": {"unit_of_measurement": "°C"}}]

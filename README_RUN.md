@@ -12,7 +12,7 @@ When cloning the repository from git, PyCharm initializes the environment 100% n
 Create your local `.env` file from `.env.example` (the `.env` file is git-ignored and holds your private credentials/addresses):
 
 ```bash
-cp .env.example .env
+cp .env.template .env
 ```
 
 Edit `.env` to configure your target gateway and Home Assistant addresses:

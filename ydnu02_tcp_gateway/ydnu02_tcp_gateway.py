@@ -326,6 +326,7 @@ _serial_reader_worker = SerialReader(
     service_mode=service_mode,
     broadcast=_broadcast,
     send_iso_request=_send_iso_request,
+    check_tx_echo=_data_hub.check_tx_echo,
 )
 
 
