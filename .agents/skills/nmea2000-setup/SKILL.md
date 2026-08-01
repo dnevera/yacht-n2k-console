@@ -489,3 +489,14 @@ Bits 20-16: device_function (5 bits)
 - **MAC:** `F1:FD:CB:6C:B2:CC`, passive advertisement
 - `fill_level_pct = ((tank_depth - distance_mm) / tank_depth) × 100`
 
+### N2K Config & Group Function (PGN 126208) Rules
+
+1. **Source Address (`our_src`):** Всегда использовать заявленный адрес виртуального гейтвея (`200` / `0xC8`) или физического YDNU-02 (`64` / `0x40`). Фреймы с невнятным незаявленным адресом (например, `16`) игнорируются устройствами на шине согласно ISO 11783-5.
+2. **PGN 127505 Scaling & Encoding:**
+   - `Capacity` (поле 4) кодируется в децилитрах (0.1L = 10x) и передаётся строго в **4 байтах uint32 Little-Endian**.
+   - `Level` (поле 3) кодируется в единицах 0.004% и передаётся в **2 байтах uint16 Little-Endian**.
+3. **Gobius C Write Restrictions:**
+   - Gobius C **не поддерживает запись конфигурации через N2K CAN bus (PGN 126208)** и игнорирует такие фреймы (не присылает ACK).
+   - Для изменения емкости (`volume_l`) и типа жидкости Gobius C запись должна производиться по **Bluetooth LE через характеристику GATT `0xFFF2` (N2K Config)** или вкладку Gobius C.
+
+
