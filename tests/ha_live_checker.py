@@ -11,8 +11,12 @@ Provides:
 """
 import json
 import os
-import urllib.request
+import logging
+from pathlib import Path
 from typing import Dict, Any, List, Optional
+import urllib.request
+
+logger = logging.getLogger(__name__)
 
 
 class HALiveChecker:
@@ -24,16 +28,17 @@ class HALiveChecker:
         self.token = token or os.getenv('HA_TOKEN', '')
 
     def fetch_from_api(self) -> Optional[Dict[str, Any]]:
-        """Fetch states, device registry, and entity registry via HA REST API."""
+        """Fetch states via HA REST API. Returns dict with 'states' key, or None on failure."""
         if not self.token:
             return None
         headers = {'Authorization': f'Bearer {self.token}', 'Content-Type': 'application/json'}
         try:
-            req_states = urllib.request.Request(f'{self.ha_url}/api/states', headers=headers)
-            with urllib.request.urlopen(req_states, timeout=5) as resp:
+            req = urllib.request.Request(f'{self.ha_url}/api/states', headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 states = json.loads(resp.read().decode('utf-8'))
             return {'states': states, 'source': 'api'}
-        except Exception:
+        except Exception as e:
+            logger.debug("fetch_from_api failed: %s", e)
             return None
 
     @staticmethod
@@ -54,6 +59,8 @@ class HALiveChecker:
 
     def fetch_from_ssh(self, host: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Fetch registry files directly from Home Assistant container via SSH."""
+        if not host:
+            host = os.getenv("HA_HOST") or os.getenv("SSH_HOST")
         if not host:
             # Try loading host from deploy.conf
             deploy_conf = Path(__file__).parent.parent / "deploy.conf"
@@ -80,19 +87,29 @@ class HALiveChecker:
                 devs = json.loads(res_dev.stdout).get('data', {}).get('devices', [])
                 ents = json.loads(res_ent.stdout).get('data', {}).get('entities', []) if res_ent.returncode == 0 and res_ent.stdout.strip() else []
                 return {'devices': devs, 'entities': ents, 'source': 'ssh'}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("fetch_from_ssh failed: %s", e)
         return None
 
     def get_ha_data(self) -> Optional[Dict[str, Any]]:
-        """Try API first, then storage, then SSH."""
-        data = self.fetch_from_api()
-        if data:
-            return data
-        data = self.fetch_from_storage()
-        if data:
-            return data
-        return self.fetch_from_ssh()
+        """Try API for states, SSH/storage for device+entity registry. Merge results."""
+        result = {}
+
+        # States from REST API
+        api_data = self.fetch_from_api()
+        if api_data:
+            result.update(api_data)
+
+        # Devices + entities from storage (Pi local) or SSH
+        registry = self.fetch_from_storage()
+        if not registry:
+            registry = self.fetch_from_ssh()
+        if registry:
+            result['devices']  = registry.get('devices', [])
+            result['entities'] = registry.get('entities', [])
+            result.setdefault('source', registry.get('source', 'unknown'))
+
+        return result if result else None
 
 
 def compare_published_with_ha(expected_devices: List[Dict[str, Any]],

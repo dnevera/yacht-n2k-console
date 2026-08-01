@@ -1,86 +1,75 @@
-"""WebSocket streaming for live CAN bus monitoring and device scanning.
+"""WebSocket stream hub — monitor_raw and scan_bus handlers."""
 
-Monitor: asyncio.Queue per subscriber, filled by BusWorker callbacks.
-Scan: independent TCP connection to proxy DATA port, ISO Requests, decoded responses.
-"""
-
-import time
 import asyncio
 import threading
-from typing import Dict, Any, List, Optional, Callable
+from typing import Callable, Dict, Any, List, Optional
+
 try:
     from fastapi import WebSocket, WebSocketDisconnect
 except ImportError:
-    WebSocket = Any  # type: ignore
+    WebSocket = Any          # type: ignore
     WebSocketDisconnect = Exception  # type: ignore
+
 from ydnu02 import N2KPGNDecoder
-from device_manager.tcp_connection import _PROXY_HOST, _PROXY_DATA_PORT
 
 try:
-    from nmea2000 import NMEA2000Decoder
+    from ydnu02 import NMEA2000Decoder
 except ImportError:
-    NMEA2000Decoder = None
+    NMEA2000Decoder = None   # type: ignore
 
 
 class WSStreamHub:
-    """Manages WebSocket frame broadcasting and bus scanning."""
+    """Handles WebSocket endpoints: raw frame monitor and CAN bus scanner."""
 
     def __init__(self,
                  queues_lock: threading.Lock,
                  monitor_queues: List[asyncio.Queue],
                  get_discovered_devices: Callable[[], Dict[int, Dict[str, Any]]],
                  get_state: Callable[[], str],
-                 proxy_host: str = _PROXY_HOST,
-                 proxy_port: int = _PROXY_DATA_PORT):
-        self._queues_lock = queues_lock
-        self._monitor_queues = monitor_queues
+                 proxy_host: str = "127.0.0.1",
+                 proxy_port: int = 4001):
+        self._queues_lock        = queues_lock
+        self._monitor_queues     = monitor_queues
         self._get_discovered_devices = get_discovered_devices
-        self._get_state = get_state
-        self._proxy_host = proxy_host
-        self._proxy_port = proxy_port
+        self._get_state          = get_state
+        self._proxy_host         = proxy_host
+        self._proxy_port         = proxy_port
 
-    def broadcast_frame(self, parsed: Dict[str, Any], event_loop: Optional[asyncio.AbstractEventLoop]) -> None:
-        """Push parsed frame to all active monitor queues (thread-safe)."""
-        if not event_loop or not event_loop.is_running():
+    def broadcast_frame(self,
+                        parsed: Dict[str, Any],
+                        event_loop: Optional[asyncio.AbstractEventLoop]) -> None:
+        """Push a parsed frame to all subscribed monitor queues (thread-safe)."""
+        if not event_loop:
             return
-
-        payload = {
-            "type": "frame",
-            "time": parsed.get("time"),
-            "pgn": parsed.get("info", {}).get("pgn"),
-            "src": parsed.get("info", {}).get("src"),
-            "decoded": parsed.get("decoded"),
-        }
-
         with self._queues_lock:
-            for q in list(self._monitor_queues):
-                try:
-                    event_loop.call_soon_threadsafe(q.put_nowait, payload)
-                except asyncio.QueueFull:
-                    pass    # drop frame for slow client
+            queues = list(self._monitor_queues)
+        for q in queues:
+            try:
+                event_loop.call_soon_threadsafe(q.put_nowait, parsed)
+            except asyncio.QueueFull:
+                pass
 
     async def monitor_raw(self, websocket: WebSocket, duration: float = 300.0) -> None:
-        """Stream live NMEA frames to a WebSocket client for duration seconds."""
+        """Stream raw NMEA frames to WebSocket client for `duration` seconds."""
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
         with self._queues_lock:
             self._monitor_queues.append(q)
-
-        state = self._get_state()
-        if state == "STOPPED":
-            await websocket.send_json({"type": "status", "message": "I/O is paused — resume from Dashboard to view live data"})
-        elif state == "NO_DEVICE":
-            await websocket.send_json({"type": "status", "message": "No serial gateway device connected"})
-        else:
-            await websocket.send_json({"type": "status", "message": "RAW monitoring started"})
-
         try:
-            t0 = time.time()
-            while time.time() - t0 < duration:
+            t0 = asyncio.get_event_loop().time()
+            while asyncio.get_event_loop().time() - t0 < duration:
                 try:
-                    frame = await asyncio.wait_for(q.get(), timeout=1.0)
-                    await websocket.send_json(frame)
+                    parsed = await asyncio.wait_for(q.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     continue
+                info    = parsed.get("info", {})
+                await websocket.send_json({
+                    "type":    "frame",
+                    "time":    parsed.get("time"),
+                    "pgn":     info.get("pgn"),
+                    "src":     info.get("src"),
+                    "decoded": parsed.get("decoded"),
+                    "raw":     parsed.get("raw"),
+                })
         except WebSocketDisconnect:
             pass
         finally:
@@ -93,8 +82,10 @@ class WSStreamHub:
         """Build clean device summary for scan_bus response."""
         return {
             "src":               dev.get("src", 0),
-            "manufacturer":      dev.get("manufacturer", "") or "NMEA 2000 Device",
+            "claimed":           dev.get("claimed", False),
+            "manufacturer":      dev.get("manufacturer", ""),
             "model":             dev.get("model", ""),
+            "model_version":     dev.get("model_version", ""),
             "serial":            dev.get("serial", ""),
             "firmware":          dev.get("firmware", ""),
             "unique_id":         dev.get("unique_id", 0),
@@ -102,10 +93,16 @@ class WSStreamHub:
             "device_class_name": dev.get("device_class_name", ""),
             "mfg_code":          dev.get("mfg_code", 0),
             "product_code":      dev.get("product_code", 0),
+            "active_pgns":       dev.get("active_pgns", []),
         }
 
     async def scan_bus(self, websocket: WebSocket, duration: float = 10.0) -> None:
-        """Scan N2K bus: ISO Requests → stream discovered devices."""
+        """Scan N2K bus: ISO Requests → stream discovered devices.
+
+        SensorRegistry (via BusWorker) is the single source of truth for device state.
+        This method handles: ISO request write, frame streaming to WS, and device push.
+        No local device dict — all state comes from _get_discovered_devices().
+        """
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(self._proxy_host, self._proxy_port),
@@ -118,13 +115,14 @@ class WSStreamHub:
         await websocket.send_json({"type": "status", "message": f"Scanning for {duration}s..."})
 
         try:
+            # Send ISO Address Claim + Product Info requests to trigger device announcements
             writer.write(b"18EAFFFE 00 EE 00\r\n")
             writer.write(b"18EAFFFE 14 F0 01\r\n")
             await writer.drain()
 
-            decoder = NMEA2000Decoder() if NMEA2000Decoder else None
-            devices: Dict[int, Dict[str, Any]] = {}
             frame_count = 0
+            # fingerprint per src: detected change → push device update to WS
+            seen: Dict[int, str] = {}
             t0 = asyncio.get_event_loop().time()
 
             while asyncio.get_event_loop().time() - t0 < duration:
@@ -159,61 +157,42 @@ class WSStreamHub:
                     "decoded": parsed.get("decoded"),
                 })
 
-                if src is None:
+                if src is None or src >= 254:
                     continue
 
-                if src not in devices:
-                    devices[src] = {"src": src}
-
+                # PGN 60928 = ISO Address Claim. BusWorker (thread) processes the same
+                # broadcast frame and sets claimed=True in SensorRegistry, but it runs
+                # in a separate thread and may lag behind this asyncio coroutine.
+                # Yield briefly so the thread has time to process before we read state.
                 if pgn == 60928:
-                    dev_info = N2KPGNDecoder.parse_device_info(parsed)
-                    if dev_info:
-                        devices[src].update(dev_info)
-                        await websocket.send_json({
-                            "type": "device",
-                            **self._build_device_msg(devices[src]),
-                        })
+                    await asyncio.sleep(0.05)
 
-                if decoder and line:
-                    lib_msg = decoder.decode(line)
-                    if lib_msg is not None and lib_msg.PGN == 126996:
-                        fields = {f.id: f for f in lib_msg.fields}
-                        dev = devices.setdefault(lib_msg.source, {"src": lib_msg.source})
-                        for field_id, attr in (
-                            ("modelId",            "model"),
-                            ("softwareVersionCode", "firmware"),
-                            ("modelSerialCode",     "serial"),
-                            ("modelVersion",        "model_version"),
-                        ):
-                            fld = fields.get(field_id)
-                            if fld and fld.value:
-                                dev[attr] = str(fld.value).strip()
-                        await websocket.send_json({
-                            "type": "device",
-                            **self._build_device_msg(dev),
-                        })
+                # SensorRegistry (BusWorker) already processed this frame — no duplicate parsing.
+                # Check if device state changed and push update if needed.
+                current = self._get_discovered_devices()
+                dev = current.get(src)
+                if dev is None:
+                    continue
 
-            discovered = self._get_discovered_devices()
-            for src in list(devices):
-                known = discovered.get(src, {})
-                for k in ("manufacturer", "model", "serial", "firmware",
-                          "function_name", "device_class_name",
-                          "unique_id", "mfg_code", "product_code", "model_version"):
-                    if known.get(k) and not devices[src].get(k):
-                        devices[src][k] = known[k]
-            for src, known in discovered.items():
-                if src not in devices:
-                    devices[src] = dict(known)
+                fingerprint = f"{dev.get('claimed')}:{dev.get('model')}:{dev.get('manufacturer')}"
+                if seen.get(src) != fingerprint:
+                    seen[src] = fingerprint
+                    await websocket.send_json({
+                        "type": "device",
+                        **self._build_device_msg(dev),
+                    })
 
-            for src, info in sorted(devices.items()):
+            # Final snapshot — push complete authoritative state from SensorRegistry
+            final = self._get_discovered_devices()
+            for src, dev in sorted(final.items()):
                 await websocket.send_json({
                     "type": "device",
-                    **self._build_device_msg(info),
+                    **self._build_device_msg(dev),
                 })
 
             await websocket.send_json({
                 "type":         "done",
-                "device_count": len(devices),
+                "device_count": len(final),
                 "frame_count":  frame_count,
             })
 

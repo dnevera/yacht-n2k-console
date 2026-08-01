@@ -145,6 +145,7 @@ section() { echo -e "${BLUE}[deploy]${NC} ── $* ──"; }
 
 SSH="ssh -o ConnectTimeout=15 -o ServerAliveInterval=5"
 SCP="scp -o ConnectTimeout=10"
+RSYNC="rsync -az --checksum --exclude=__pycache__ --exclude=*.pyc"
 
 DEPLOY_PROXY=true
 DEPLOY_WEB=true
@@ -347,11 +348,11 @@ if $DEPLOY_PROXY; then
     # Ensure remote package directories exist
     ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}/ydnu02_tcp_gateway ${REMOTE_DIR}/ydnu02 ${REMOTE_DIR}/device_manager"
 
-    # Upload gateway package files
+    # Upload gateway package files (rsync: only changed files transferred)
     ${SCP} "${LOCAL_DIR}/VERSION"                  "${HOST}:${REMOTE_DIR}/VERSION"
-    ${SCP} -r "${LOCAL_DIR}/ydnu02_tcp_gateway/"* "${HOST}:${REMOTE_DIR}/ydnu02_tcp_gateway/"
-    ${SCP} -r "${LOCAL_DIR}/ydnu02/"*             "${HOST}:${REMOTE_DIR}/ydnu02/"
-    ${SCP} -r "${LOCAL_DIR}/device_manager/"*      "${HOST}:${REMOTE_DIR}/device_manager/"
+    ${RSYNC} "${LOCAL_DIR}/ydnu02_tcp_gateway/"    "${HOST}:${REMOTE_DIR}/ydnu02_tcp_gateway/"
+    ${RSYNC} "${LOCAL_DIR}/ydnu02/"               "${HOST}:${REMOTE_DIR}/ydnu02/"
+    ${RSYNC} "${LOCAL_DIR}/device_manager/"       "${HOST}:${REMOTE_DIR}/device_manager/"
     ${SCP} "${LOCAL_DIR}/ydnu02_tcp_gateway/ydnu02-tcp-gateway.service" "${HOST}:/tmp/ydnu02-tcp-gateway.service"
 
     log "Installing ydnu02-tcp-gateway service..."
@@ -405,30 +406,30 @@ if $DEPLOY_WEB; then
       ${REMOTE_DIR}/static/tabs ${REMOTE_DIR}/tests ${REMOTE_DIR}/tests/specs \
       ${REMOTE_DIR}/sensors ${REMOTE_DIR}/routes"
 
-    # Core Python modules
-    for f in VERSION ydnu02.py app.py device_manager.py models.py \
-              gobius_parsers.py mopeka_parsers.py mopeka_scanner.py \
-              ble_registry.py gobius_ble_poller.py \
-              n2k_command_builder.py n2k_meta.py; do
-        ${SCP} "${LOCAL_DIR}/${f}" "${HOST}:${REMOTE_DIR}/${f}"
-    done
+    # Core Python modules (rsync batch: one SSH connection for all root files)
+    ${RSYNC} \
+        "${LOCAL_DIR}/VERSION" \
+        "${LOCAL_DIR}/ydnu02.py" \
+        "${LOCAL_DIR}/app.py" \
+        "${LOCAL_DIR}/device_manager.py" \
+        "${LOCAL_DIR}/models.py" \
+        "${LOCAL_DIR}/gobius_parsers.py" \
+        "${LOCAL_DIR}/mopeka_parsers.py" \
+        "${LOCAL_DIR}/mopeka_scanner.py" \
+        "${LOCAL_DIR}/ble_registry.py" \
+        "${LOCAL_DIR}/gobius_ble_poller.py" \
+        "${LOCAL_DIR}/n2k_command_builder.py" \
+        "${LOCAL_DIR}/n2k_meta.py" \
+        "${HOST}:${REMOTE_DIR}/"
 
-    # Sub-packages
-    ${SCP} -r "${LOCAL_DIR}/sensors/"*.py   "${HOST}:${REMOTE_DIR}/sensors/"
-    ${SCP} -r "${LOCAL_DIR}/routes/"*       "${HOST}:${REMOTE_DIR}/routes/"
+    # Sub-packages and assets (rsync: only changed files per directory)
+    ${RSYNC} "${LOCAL_DIR}/sensors/"  "${HOST}:${REMOTE_DIR}/sensors/"
+    ${RSYNC} "${LOCAL_DIR}/routes/"   "${HOST}:${REMOTE_DIR}/routes/"
+    ${RSYNC} "${LOCAL_DIR}/static/"   "${HOST}:${REMOTE_DIR}/static/"
+    ${RSYNC} "${LOCAL_DIR}/tests/"    "${HOST}:${REMOTE_DIR}/tests/"
 
-    # Static assets
-    ${SCP} "${LOCAL_DIR}/static/index.html"       "${HOST}:${REMOTE_DIR}/static/index.html"
-    ${SCP} "${LOCAL_DIR}/static/css/style.css"    "${HOST}:${REMOTE_DIR}/static/css/style.css"
-    ${SCP} "${LOCAL_DIR}/static/js/"*.js          "${HOST}:${REMOTE_DIR}/static/js/"
-    ${SCP} "${LOCAL_DIR}/static/tabs/"*.html      "${HOST}:${REMOTE_DIR}/static/tabs/"
-
-    # Tests
-    ${SCP} "${LOCAL_DIR}/tests/"*.py              "${HOST}:${REMOTE_DIR}/tests/"
-    ${SCP} "${LOCAL_DIR}/tests/specs/"*.py        "${HOST}:${REMOTE_DIR}/tests/specs/"
-
-    # Service unit
-    ${SCP} "${LOCAL_DIR}/ydnu02-web.service"      "${HOST}:${REMOTE_DIR}/ydnu02-web.service"
+    # Service unit (goes via /tmp → sudo cp — keep scp for this one)
+    ${SCP} "${LOCAL_DIR}/ydnu02-web.service" "${HOST}:${REMOTE_DIR}/ydnu02-web.service"
 
     log "Files uploaded ✓"
 

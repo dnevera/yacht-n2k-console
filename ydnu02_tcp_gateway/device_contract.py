@@ -234,9 +234,9 @@ class N2KDeviceRegistry:
         return None
 
     def register_device(self, info: N2KDeviceInfo) -> None:
-        """Register or update an explicit device definition."""
+        """Register or update an explicit device definition (stores a defensive copy)."""
         with self._lock:
-            self._devices[info.sa] = info
+            self._devices[info.sa] = N2KDeviceInfo(**info.__dict__)
 
     def get_device(self, sa: int) -> Optional[N2KDeviceInfo]:
         """Return a copy of N2KDeviceInfo for a given SA, or None."""

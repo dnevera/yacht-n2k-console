@@ -21,6 +21,30 @@ except ImportError:
     _HAS_N2K_LIB = False
 
 
+try:
+    from nmea2000.consts import ManufacturerCodes as _MFR_CODES
+except ImportError:
+    _MFR_CODES = []
+
+
+def resolve_manufacturer_name(mfg_code: Any) -> str:
+    """Dynamically resolve NMEA 2000 manufacturer name without hardcoded dicts.
+
+    Uses standard nmea2000 library ManufacturerCodes list.
+    0x7FF (2047) is the NMEA 2000 standard reserved/custom manufacturer code.
+    """
+    try:
+        code = int(mfg_code)
+    except (ValueError, TypeError):
+        return str(mfg_code) or "Unknown"
+
+    if 0 <= code < len(_MFR_CODES) and _MFR_CODES[code]:
+        return str(_MFR_CODES[code])
+    if code == 2047:
+        return "Custom / Reserved (2047)"
+    return f"MfgCode {code}"
+
+
 class N2KPGNDecoder:
     """Static PGN decoder for CAN frames."""
 
@@ -43,10 +67,10 @@ class N2KPGNDecoder:
                 result["device_class_name"] = str(iso.device_class)
                 result["function_name"] = str(iso.device_function)
                 mfr_field = lib_msg.get_field_by_id("manufacturerCode")
-                if mfr_field and mfr_field.value:
+                if mfr_field and mfr_field.value and not str(mfr_field.value).isdigit():
                     result["manufacturer"] = str(mfr_field.value)
                 else:
-                    result["manufacturer"] = f"MfgCode {iso.manufacturer_code}"
+                    result["manufacturer"] = resolve_manufacturer_name(iso.manufacturer_code)
             else:
                 val = int.from_bytes(data[:8], 'little')
                 result["unique_id"] = val & 0x1FFFFF
@@ -58,7 +82,7 @@ class N2KPGNDecoder:
                     (result["device_class"], result["function"]),
                     f"Function {result['function']}"
                 )
-                result["manufacturer"] = f"MfgCode {result['mfg_code']}"
+                result["manufacturer"] = resolve_manufacturer_name(result["mfg_code"])
 
         elif pgn == 126996 and len(data) >= 36:
             lib_msg = cls._decode_via_lib(parsed)
@@ -182,14 +206,21 @@ class N2KPGNDecoder:
         if not _HAS_N2K_LIB or not _n2k_decoder:
             return None
         try:
-            raw_line = parsed.get("raw")
-            if raw_line:
-                return _n2k_decoder.decode(raw_line)
             info = parsed.get("info", {})
             data = parsed.get("data", b"")
-            can_id = info.get("can_id", 0)
-            raw_str = f"{can_id:08X} " + " ".join(f"{b:02X}" for b in data)
-            return _n2k_decoder.decode(raw_str)
+            can_id = info.get("can_id")
+
+            if can_id is not None and data:
+                raw_str = f"{can_id:08X} " + " ".join(f"{b:02X}" for b in data)
+                return _n2k_decoder.decode(raw_str)
+
+            raw_line = parsed.get("raw", "")
+            if raw_line:
+                # Strip timestamp and direction prefix if present ("00:00:00.000 R ")
+                clean_line = normalize_frame(raw_line.encode("ascii", "ignore")).decode("ascii", "ignore").strip()
+                return _n2k_decoder.decode(clean_line)
+
+            return None
         except Exception:
             return None
 

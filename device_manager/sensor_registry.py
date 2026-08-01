@@ -39,10 +39,13 @@ class SensorRegistry:
 
         with self._lock:
             # ── Track all CAN-bus devices by source address ───────────────────
-            if src is not None:
+            # 254 (0xFE) is Cannot Claim / Null Address; 255 (0xFF) is Broadcast.
+            # Neither represents a valid physical bus device.
+            if src is not None and src < 254:
                 if src not in self.discovered_bus_devices:
                     self.discovered_bus_devices[src] = {
                         "src": src,
+                        "claimed": False,     # True only after PGN 60928 ISO Address Claim received
                         "manufacturer": "",   # filled by ISO Claim (PGN 60928)
                         "mfg_code": 0,        # filled by ISO Claim — raw manufacturer_code int
                         "model": "",          # filled by Product Info (PGN 126996)
@@ -64,26 +67,37 @@ class SensorRegistry:
                 if pgn == 60928:
                     dev_info = N2KPGNDecoder.parse_device_info(parsed)
                     if dev_info:
+                        new_uid = dev_info.get("unique_id")
+                        # If device claimed a new address, purge stale old entry for same unique_id
+                        if new_uid:
+                            stale_srcs = [
+                                old_src for old_src, old_dev in self.discovered_bus_devices.items()
+                                if old_src != src and old_dev.get("unique_id") == new_uid
+                            ]
+                            for stale in stale_srcs:
+                                del self.discovered_bus_devices[stale]
+
                         dev = self.discovered_bus_devices[src]
+                        dev["claimed"] = True  # ISO Address Claim received — device is fully identified
                         for key in ("manufacturer", "function_name", "device_class_name",
                                     "model_version", "unique_id"):
-                            if key in dev_info:
+                            if key in dev_info and dev_info[key]:
                                 dev[key] = dev_info[key]
-                        if "device_class" in dev_info:
+                        if "device_class" in dev_info and dev_info["device_class"]:
                             dev["device_class"] = dev_info.get("device_class_name",
                                                                str(dev_info["device_class"]))
                         # Raw integer fields needed for N2KDevice synthesis
-                        if "mfg_code" in dev_info:
+                        if "mfg_code" in dev_info and dev_info["mfg_code"]:
                             try:
                                 dev["mfg_code"] = int(dev_info["mfg_code"])
                             except (ValueError, TypeError):
                                 pass
-                        if "device_class" in dev_info:
+                        if "device_class" in dev_info and dev_info["device_class"]:
                             try:
                                 dev["device_class_int"] = int(dev_info["device_class"])
                             except (ValueError, TypeError):
                                 pass
-                        if "function" in dev_info:
+                        if "function" in dev_info and dev_info["function"]:
                             try:
                                 dev["device_function"] = int(dev_info["function"])
                             except (ValueError, TypeError):
@@ -95,9 +109,14 @@ class SensorRegistry:
                     fields = {f.id: f for f in lib_msg.fields}
                     dev = self.discovered_bus_devices.get(lib_msg.source)
                     if dev is None and lib_msg.source is not None:
-                        dev = self.discovered_bus_devices.setdefault(
-                            lib_msg.source, {"src": lib_msg.source}
-                        )
+                        # Guard: never create entries for null/broadcast addresses via PGN 126996
+                        if lib_msg.source >= 254:
+                            dev = None
+                        else:
+                            dev = self.discovered_bus_devices.setdefault(
+                                lib_msg.source, {"src": lib_msg.source, "claimed": False,
+                                                 "active_pgns": []}
+                            )
                     if dev is not None:
                         for field_id, attr in (
                             ("modelId",            "model"),
@@ -107,7 +126,10 @@ class SensorRegistry:
                         ):
                             fld = fields.get(field_id)
                             if fld and fld.value:
-                                dev[attr] = str(fld.value).strip()
+                                val_str = str(fld.value).strip()
+                                # Guard against empty/dummy strings overwriting valid data
+                                if val_str:
+                                    dev[attr] = val_str
 
             # ── PGN 127505: Fluid Level ───────────────────────────────────────
             if pgn == 127505 and len(data) >= 5:
