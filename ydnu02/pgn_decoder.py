@@ -166,6 +166,14 @@ class N2KPGNDecoder:
     @classmethod
     def decode_pgn(cls, pgn: int, src: int, data: bytes) -> str:
         """Decode a PGN payload into a human-readable string."""
+        # FastPacket PGNs (multi-frame): NEVER feed sub-frames to the shared
+        # _n2k_decoder here — doing so poisons the sequence counter and
+        # prevents feed_to_lib() from assembling the complete packet.
+        # Assembly is handled exclusively by feed_to_lib() in SensorRegistry.
+        _FAST_PACKET_PGNS = {126996, 126998, 129029, 129540, 130567, 130577}
+        if pgn in _FAST_PACKET_PGNS:
+            return f"[PGN {pgn}] Src:{src} Data:{data.hex(' ').upper()}"
+
         if _HAS_N2K_LIB and _n2k_decoder:
             try:
                 # Build a synthetic CAN ID accepted by the nmea2000 library decoder.
