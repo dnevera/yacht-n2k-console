@@ -46,7 +46,13 @@ def resolve_manufacturer_name(mfg_code: Any) -> str:
 
 
 class N2KPGNDecoder:
-    """Static PGN decoder for CAN frames."""
+    """Static PGN decoder for CAN frames.
+
+    Note:
+        The shared `_n2k_decoder` singleton is stateful for multi-frame (FastPacket)
+        reassembly. FastPacket PGNs must NEVER be fed to it from `decode_pgn()` —
+        only from `feed_to_lib()`.
+    """
 
     @classmethod
     def parse_device_info(cls, parsed: Dict[str, Any]) -> Dict[str, Any]:
@@ -196,7 +202,12 @@ class N2KPGNDecoder:
 
     @classmethod
     def _decode_via_lib(cls, parsed: Dict[str, Any]) -> Any:
-        """Decode a parsed CAN frame using the nmea2000 library."""
+        """Decode a parsed CAN frame using the nmea2000 library.
+
+        WARNING: This method feeds frames to the shared _n2k_decoder singleton.
+        For FastPacket PGNs, use feed_to_lib() instead — calling this on sub-frames
+        poisons the sequence counter.
+        """
         if not _HAS_N2K_LIB or not _n2k_decoder:
             return None
         try:
@@ -210,7 +221,11 @@ class N2KPGNDecoder:
 
     @classmethod
     def feed_to_lib(cls, parsed: Dict[str, Any]) -> Any:
-        """Feed any CAN frame to the library decoder (enables fast-packet reassembly)."""
+        """Feed any CAN frame to the library decoder (enables fast-packet reassembly).
+
+        This is the ONLY method that should feed frames to _n2k_decoder for FastPacket assembly.
+        decode_pgn() skips FastPacket PGNs to avoid double-feeding the stateful decoder.
+        """
         if not _HAS_N2K_LIB or not _n2k_decoder:
             return None
         try:

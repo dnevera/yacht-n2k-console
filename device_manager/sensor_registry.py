@@ -104,6 +104,10 @@ class SensorRegistry:
                                 pass
 
                 # ── All frames → library decoder (handles fast-packet reassembly) ──
+                # feed_to_lib is the SOLE entry point for FastPacket reassembly.
+                # decode_pgn() in parse_raw_line() intentionally skips FastPacket PGNs to avoid
+                # double-feeding the stateful _n2k_decoder singleton (which would poison the
+                # sequence counter and prevent assembly). See commit 1de3074.
                 lib_msg = N2KPGNDecoder.feed_to_lib(parsed)
                 if lib_msg is not None and lib_msg.PGN == 126996:
                     fields = {f.id: f for f in lib_msg.fields}
