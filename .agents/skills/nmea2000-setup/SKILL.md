@@ -403,8 +403,11 @@ mfr contains 'gobius'         → 'GOBIUS'
 ```
 
 ### unique_id=0 (SA=0)
-`unique_id=0` — **валидный** N2K адрес. Проверка `fullyIdentified` использует
-`uniqueId !== null && uniqueId !== undefined` вместо `!!uniqueId`.
+`unique_id == 0` в ISO Address Claim (PGN 60928) означает **неинициализированный / транзитный вызов** при старте шлюза YDNU-02 (ISO 11783-5).
+Настоящее N2K устройство обязано иметь `unique_id > 0`. 
+`SensorRegistry` и `N2KDeviceRegistry` устанавливают `claimed = True` строго при `unique_id > 0`.
+При получении валидного claim (например `src=64`, `unique_id=402047`), транзитные фантомные записи с `src=0` и `unique_id=0` автоматически зачищаются.
+Проверка `fullyIdentified` на фронтенде (`network.js`) также требует `Number(uniqueId) > 0`.
 
 ---
 
