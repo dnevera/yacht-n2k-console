@@ -122,6 +122,32 @@ PyPI upstream `nmea2000==2026.5.2` содержит два критически�
 **В тестах** вызывать `announce_all_devices()` БЕЗ аргументов (delay=0, синхронный).
 **В production** `send_iso_request()` передаёт `product_info_delay=ANNOUNCE_PRODUCT_INFO_DELAY`.
 
+## Rule: Spec-Driven Development — работа начинается со спеки
+
+**Любая работа над проектом начинается со спецификации в `specs/active/`, а не с кода.**
+
+Жизненный цикл спеки — 4 фазы (см. `specs/README.md`):
+`Requirements` → `Architecture & Technical Design` → `Implementation Plan` → `Verification`
+
+Обязательные команды:
+```bash
+python scripts/spec.py create --type feature|bugfix|n2k-device --title "..."   # перед реализацией
+python scripts/spec.py validate specs/active/NNN-slug.md                       # перед началом кода, exit 0
+python scripts/spec.py list [--status active|completed]
+python scripts/spec.py archive specs/active/NNN-slug.md                        # после зелёных тестов
+```
+
+Порядок чтения спек перед задачей:
+1. `specs/active/000-project-overview.md` — общие требования, реестр спек, глоссарий
+2. профильная подсистемная спека `001`–`005`
+3. `specs/active/006-integrations.md` — если задача трогает внешние стыки (YDNU-02, HA, Signal K, BLE, REST/WS)
+4. `specs/active/007-testing-strategy.md` — как и что проверять
+
+Правила:
+- Спека без обязательной H2-секции не принимается — `validate` возвращает exit code 1
+- В спеках, как и в коде, — **только плейсхолдеры** вместо реальных hostname/IP/имён пользователей
+- Ретро-спеки (`status: as-is`) описывают систему как есть; при изменении подсистемы обновляй её спеку в том же PR
+
 ## Rule: HA Patch — идемпотентный, версионированный
 
 Патч `scripts/patch_ha_nmea2000_message.py` применяется в HA Docker контейнере через `deploy.sh --patch-ha`.
