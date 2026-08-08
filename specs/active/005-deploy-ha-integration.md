@@ -499,7 +499,7 @@ WEB_PORT=8080
 # → 7 passed
 
 # Валидация спецификации:
-python scripts/spec.py validate specs/active/005-deploy-ha-integration.md
+python ~/.junie/scripts/spec.py validate specs/active/005-deploy-ha-integration.md
 # → OK (exit code 0)
 ```
 

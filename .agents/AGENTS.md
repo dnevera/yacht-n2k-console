@@ -131,10 +131,10 @@ PyPI upstream `nmea2000==2026.5.2` содержит два критически�
 
 Обязательные команды:
 ```bash
-python scripts/spec.py create --type feature|bugfix|n2k-device --title "..."   # перед реализацией
-python scripts/spec.py validate specs/active/NNN-slug.md                       # перед началом кода, exit 0
-python scripts/spec.py list [--status active|completed]
-python scripts/spec.py archive specs/active/NNN-slug.md                        # после зелёных тестов
+python ~/.junie/scripts/spec.py create --type feature|bugfix|n2k-device --title "..."   # перед реализацией
+python ~/.junie/scripts/spec.py validate specs/active/NNN-slug.md                       # перед началом кода, exit 0
+python ~/.junie/scripts/spec.py list [--status active|completed]
+python ~/.junie/scripts/spec.py archive specs/active/NNN-slug.md                        # после зелёных тестов
 ```
 
 Порядок чтения спек перед задачей:
@@ -161,3 +161,12 @@ python scripts/spec.py archive specs/active/NNN-slug.md                        #
 ./deploy.sh --clean-ha   # удалить все старые nmea2000 devices
 # затем проверить: python -m pytest tests/test_live_ha_integration.py
 ```
+
+## Rule: LLM Subagents & Direct Test Execution
+
+1. **Прямой запуск тестов:** Запуск тестов (`pytest`, `~/.junie/scripts/spec.py validate`, билды) выполняется **напрямую через CLI** Оркестратором или разработчиком. Нельзя привлекать LLM/субагентов для тупого исполнения прогонов тестов («стрельба из пушки по воробьям»).
+2. **Субагент по умолчанию (Gemini):** Используется для написания кода, конфигов и **анализа логов при сбоях** через глобальную команду `~/.junie/scripts/ask_gemini.py`.
+   - **Оркестратор:** Планирование, запуск CLI-команд, сборка, общение.
+   - **System Engineer (`--role engineer`):** CMake, Docker, схемы БД, глубокий разбор логов/трейсов упавших тестов.
+   - **Pure Coder (`--role coder`):** FastAPI/Pydantic, бизнес-логика, C++ алгоритмы, JS UI.
+3. **Локальный субагент (Qwen, опционально):** Qwen исключён из дефолтного авто-роутинга, но остаётся доступен как локальная/offline-альтернатива через `~/.junie/scripts/ask_qwen.py` (те же роли `eng`/`writer`, теги `qwen3:eng`, `qwen2.5:writer`) — используется по явному запросу, когда нужен offline-режим или недоступен Gemini API.

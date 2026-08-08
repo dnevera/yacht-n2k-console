@@ -1,0 +1,42 @@
+# Subagent & Local LLM Configuration
+
+> **Note on Models:** Model choices (e.g., Claude 3.5, Gemini) in this configuration are reference examples. Specific LLMs can be swapped based on availability and task requirements.
+
+## ⚡ Direct Test Execution Rule (No LLM Overkill)
+- **Running tests (`pytest`, `scripts/spec.py validate`, builds) MUST be executed directly via native CLI commands.**
+- NEVER waste LLM context or spawn subagents to execute tests — running test runners via an LLM is like shooting sparrows with a cannon.
+- LLM subagents (e.g., System Engineer) receive test output ONLY when a test fails and deep log/stack-trace analysis or bug fixes are required.
+
+---
+
+## 👑 Главный Оркестратор (например, Claude 3.5 / Junie)
+- **Декомпозиция ТЗ**, пошаговый план, общение с пользователем, валидация изменений и прямой запуск тестов через CLI.
+- **Делегирование:** Формирует микро-ТЗ для субагентов через `python3 scripts/ask_gemini.py`.
+
+---
+
+## 🛠️ Субагент №1: «Системный Инженер» (например, Gemini)
+- **Модель:** `gemini-3.6-flash` (Gemini API)
+- **Команда:** `python3 scripts/ask_gemini.py --role engineer [-f <log_or_file>] -p "<micro-tz>"`
+- **Задачи:**
+  - C++/Python/JS системные конфигурации, CMake (`CMakeLists.txt`), Docker, зависимости.
+  - Архитектура схем баз данных и взаимодействия сервисов.
+  - **Анализ упавших логов (по факту сбоя):** Глубокая отладка и поиск причин багов в логах PyTest/GoogleTest.
+
+---
+
+## ✍️ Субагент №2: «Чистый Писатель» (например, Gemini)
+- **Модель:** `gemini-3.6-flash` (Gemini API)
+- **Команда:** `python3 scripts/ask_gemini.py --role coder [-f <context_file>] -p "<micro-tz>"`
+- **Задачи:**
+  - Асинхронная бизнес-логика Python/JS: FastAPI эндпоинты, Pydantic схемы, валидаторы, контроллеры.
+  - C++ алгоритмы: математическая обработка, структуры данных, оптимизация.
+  - Фронтенд (JS): чистые UI-компоненты, управление стейтом, JSON парсинг.
+
+---
+
+## 🖥️ Локальный субагент (опционально): Qwen через Ollama
+- Qwen **исключён из дефолтного авто-роутинга** (Gemini используется по умолчанию), но остаётся доступен как offline/локальная альтернатива — по явному запросу или при отсутствии доступа к Gemini API.
+- **Модели:** `qwen3-coder:30b` (роль `eng`, по умолчанию), `qwen2.5-coder:32b` (роль `writer`), через локальный Ollama.
+- **Команда:** `python3 scripts/ask_qwen.py --tag qwen3:eng|qwen2.5:writer [-f <log_or_file>] -p "<micro-tz>"`
+- Роли и задачи идентичны Gemini-субагентам (`eng` = System Engineer/анализ, `writer` = реализация по плану).

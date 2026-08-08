@@ -11,6 +11,8 @@ Verifies that ALL devices and sensors published by the gateway:
   7. Unified Dashboard Sensors API (/api/dashboard/sensors) -- normalized cards
 are correctly formatted, decoded, and matched 1-to-1 in Home Assistant.
 
+Item 7 above is verified live via GW_HOST by test_dashboard_sensors_api_live.
+
 Configurable via environment variables (no hardcoded credentials/IPs in git):
   GW_HOST (default localhost)
   HA_URL  (default http://localhost:8123)
@@ -21,6 +23,8 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from unittest.mock import MagicMock
 
 try:
@@ -39,7 +43,7 @@ import ydnu02_tcp_gateway.ydnu02_gateway_device as gwdev
 from ble_registry import BLERegistry
 from device_manager.manager import get_app_version
 from device_manager.sensor_registry import SensorRegistry
-from gw_test_helpers import load_device, load_gateway
+from gw_test_helpers import load_device, load_gateway, NEEDS_PI5
 from ha_live_checker import HALiveChecker, compare_published_with_ha
 
 
@@ -117,6 +121,7 @@ class TestLiveHAIntegration(unittest.TestCase):
         self.assertEqual(s["instance"], 0)
         self.assertAlmostEqual(s["level_pct"], 50.0, places=1)
 
+    @NEEDS_PI5
     def test_ha_live_registry_strict_device_and_entities_check(self):
         """Audit live Home Assistant state for gateway N2K devices and sensor entities.
 
@@ -182,6 +187,7 @@ class TestLiveHAIntegration(unittest.TestCase):
             f"STRICT FAILURE: Virtual TCP Gateway (902047) device has 0 entities in Home Assistant!"
         )
 
+    @NEEDS_PI5
     def test_physical_ydnu02_has_product_info_in_ha(self):
         """Physical YDNU-02 (402047) in HA MUST have Product Info from PGN 126996.
 
@@ -232,5 +238,42 @@ class TestLiveHAIntegration(unittest.TestCase):
             self.assertEqual(len(reg.get_all()), 2)
             self.assertEqual(len(reg.get_by_type("mopeka")), 1)
             self.assertEqual(len(reg.get_by_type("gobius")), 1)
+
+    @NEEDS_PI5
+    def test_dashboard_sensors_api_live(self):
+        """Unified Dashboard Sensors API (/api/dashboard/sensors) on the live gateway.
+
+        Verifies the endpoint documented in item 7 of this file's module docstring is
+        actually reachable and returns the normalized card structure it promises:
+        a JSON object with a "sensors" list, where each card has a "channels" array
+        and each channel has "name"/"age_sec"/"live"/"fields".
+
+        Uses GW_HOST (default localhost) — previously documented but never exercised
+        by any test in this module.
+        """
+        gw_host = os.getenv("GW_HOST", "localhost")
+        url = f"http://{gw_host}:8080/api/dashboard/sensors"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
+            self.skipTest(
+                f"Live gateway not reachable at {url} ({e}). "
+                "Set GW_HOST and ensure ydnu02-tcp-gateway is running to exercise this test."
+            )
+            return
+
+        self.assertIn("sensors", body, "Response must contain a 'sensors' key")
+        self.assertIsInstance(body["sensors"], list)
+
+        for card in body["sensors"]:
+            self.assertIn("channels", card, f"Sensor card missing 'channels': {card}")
+            self.assertIsInstance(card["channels"], list)
+            for channel in card["channels"]:
+                for key in ("name", "age_sec", "live", "fields"):
+                    self.assertIn(key, channel, f"Channel missing '{key}': {channel}")
+                self.assertIsInstance(channel["fields"], list)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -127,10 +127,72 @@ def make_pipe():
     return conn, client
 
 
-# ── Skip decorator ────────────────────────────────────────────────────────────
+# ── Pi5 live-hardware reachability (priority check) ──────────────────────────
+
+def _resolve_pi5_host() -> str:
+    """Resolve the configured Pi5 host from env vars (no hardcoded IPs in git)."""
+    return os.getenv("GW_HOST") or os.getenv("HA_HOST") or os.getenv("SSH_HOST") or ""
+
+
+#: Cache so the (possibly slow, timeout-bound) network probe below only ever
+#: runs ONCE per test session/process — every subsequent call (e.g. from
+#: NEEDS_PI5 decorators on many test methods) reuses the cached verdict instead
+#: of re-attempting a connection per test.
+_pi5_reachability_cache = {}
+
+
+def is_pi5_reachable(port: int = 8080, timeout: float = 1.5) -> bool:
+    """Priority check: is the Pi5 (gateway/HA host) actually present on the network?
+
+    Cached per (host, port) so it only probes once, even though many live test
+    methods depend on this. If the host is unreachable, callers should skip all
+    tests that need it and only run local (non-hardware) tests.
+    """
+    host = _resolve_pi5_host()
+    if not host:
+        _pi5_reachability_cache.setdefault(("", port), False)
+        return False
+    key = (host, port)
+    if key in _pi5_reachability_cache:
+        return _pi5_reachability_cache[key]
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            result = True
+    except OSError:
+        result = False
+    _pi5_reachability_cache[key] = result
+    return result
+
+
+def pi5_status_message(port: int = 8080) -> str:
+    """Human-readable banner describing current Pi5 reachability, for terminal output."""
+    host = _resolve_pi5_host()
+    if not host:
+        return (
+            "[pi5-check] No Pi5 host configured (set GW_HOST/HA_HOST/SSH_HOST in .env) — "
+            "skipping live hardware tests, running local tests only."
+        )
+    if is_pi5_reachable(port=port):
+        return f"[pi5-check] Pi5 ({host}) is reachable on the network — live hardware tests enabled."
+    return (
+        f"[pi5-check] Pi5 ({host}) NOT found on the network — "
+        "skipping live hardware tests, running local tests only."
+    )
+
+
+# ── Skip decorators ───────────────────────────────────────────────────────────
 
 #: Skip test if real TCP sockets are not available (macOS sandbox).
 NEEDS_NETWORK = unittest.skipUnless(
     can_bind_socket(),
     "No network in sandbox — run with BypassSandbox or on Pi",
+)
+
+#: Skip test if the Pi5 (gateway/HA host) is not reachable on the network.
+#: Evaluated once (cached) so the whole suite prints/skips fast instead of
+#: letting every live test hit its own multi-second connection timeout.
+NEEDS_PI5 = unittest.skipUnless(
+    is_pi5_reachable(),
+    "Pi5 not reachable on the network (set GW_HOST/HA_HOST/SSH_HOST) — "
+    "skipping live hardware tests, running local tests only.",
 )

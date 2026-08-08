@@ -154,10 +154,10 @@ Any work on the project starts with a specification in [`specs/active/`](specs/R
 Start from `specs/active/000-project-overview.md` — it holds the top-level requirements, the spec registry and the glossary.
 
 ```bash
-python scripts/spec.py create --type feature|bugfix|n2k-device --title "..."
-python scripts/spec.py list [--status active|completed]
-python scripts/spec.py validate specs/active/001-tcp-gateway.md   # exit 1 if a required section is missing
-python scripts/spec.py archive specs/active/001-tcp-gateway.md
+python ~/.junie/scripts/spec.py create --type feature|bugfix|n2k-device --title "..."
+python ~/.junie/scripts/spec.py list [--status active|completed]
+python ~/.junie/scripts/spec.py validate specs/active/001-tcp-gateway.md   # exit 1 if a required section is missing
+python ~/.junie/scripts/spec.py archive specs/active/001-tcp-gateway.md
 ```
 
 See [specs/README.md](specs/README.md) for the 4-phase lifecycle, naming convention and required sections.

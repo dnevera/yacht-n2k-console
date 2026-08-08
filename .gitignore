@@ -36,6 +36,12 @@ uv.lock
 docs/chat_logs/
 *.jsonl
 
+# Local Gemini subagent shared context (ask_gemini.py --context-dir)
+.gemini/
+
+# Local Qwen subagent shared context (ask_qwen.py --context-dir)
+.qwen/
+
 # Sensitive config files (only .template goes to git)
 deploy.conf
 build.conf

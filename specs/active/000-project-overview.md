@@ -408,7 +408,7 @@ N2KDeviceRegistry:
 
 ```bash
 # Валидировать все спеки в active/ и completed/
-python scripts/spec.py validate
+python ~/.junie/scripts/spec.py validate
 # Ожидаемый результат: exit code 0, все спеки имеют обязательные секции
 ```
 

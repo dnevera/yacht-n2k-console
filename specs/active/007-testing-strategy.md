@@ -34,7 +34,7 @@
 2. **Интеграционные тесты TCP hub** — проверка `data_hub.py`, `serial_reader.py`, двунаправленного форвардинга, ISO Requests, rate limiting.
 3. **API-тесты** — валидация HTTP-эндпоинтов (`app.py`, `routes/`), WebSocket-каналов, BLE-интеграции.
 4. **Live-тесты** — проверка против реального Home Assistant (требуют Pi + HA + running gateway).
-5. **Spec-тесты** — валидация спецификаций через `python scripts/spec.py validate`.
+5. **Spec-тесты** — валидация спецификаций через `python ~/.junie/scripts/spec.py validate`.
 6. **Мокирование железа** — serial-порт и BLE мокируются через `unittest.mock`, без реального YDNU-02 или Gobius C.
 7. **Запрет на реальный `deploy.conf`** — тесты не требуют и не используют реальные hostname/IP/пользователей.
 8. **Покрытие пробелов** — документирование известных ограничений и недостатков покрытия.
@@ -102,7 +102,7 @@
 | **Gobius Profile** | `ydnu02/gobius_profile.py` | `test_gobius_profile.py` | ✅ Полное |
 | **Sensors Service** | `sensors/service.py` | `test_sensors_service.py` | ✅ Полное |
 | **API** | `app.py`, `routes/api.py` | `test_api.py` | ✅ Полное |
-| **Spec CLI** | `scripts/spec.py` | `test_spec_cli.py` | ✅ Полное |
+| **Spec CLI** | `~/.junie/scripts/spec.py` | — (глобальный инструмент, вне репозитория) | ⚠️ Не покрыто тестами проекта |
 | **Live HA** | (интеграция с HA) | `test_live_ha_integration.py` | ⚠️ Требует Pi+HA |
 
 ### Потоки данных в тестах
@@ -162,10 +162,10 @@ python -m pytest tests/test_live_ha_integration.py -v
 python -m pytest tests/test_service_mode.py -v
 
 # Все спеки:
-python scripts/spec.py validate
+python ~/.junie/scripts/spec.py validate
 
 # Одна спека:
-python scripts/spec.py validate specs/active/007-testing-strategy.md
+python ~/.junie/scripts/spec.py validate specs/active/007-testing-strategy.md
 ```
 
 ### Конфигурация pytest
@@ -261,7 +261,7 @@ line = recv_line(sock)
    - Gobius и Mopeka lifecycle
    - Статус: ✅ Завершено
 
-5. **Spec-тесты** (test_spec_cli.py)
+5. **Spec CLI** (`~/.junie/scripts/spec.py`, глобальный инструмент)
    - Валидация спецификаций (обязательные секции)
    - Создание, архивирование, листинг спек
    - Статус: ✅ Завершено
@@ -300,7 +300,7 @@ line = recv_line(sock)
 ### Критерии приёмки
 
 1. ✅ `python -m pytest tests/ --ignore=tests/test_live_ha_integration.py --ignore=tests/test_service_mode.py` → exit code 0, 267 passed
-2. ✅ `python scripts/spec.py validate specs/active/007-testing-strategy.md` → exit code 0
+2. ✅ `python ~/.junie/scripts/spec.py validate specs/active/007-testing-strategy.md` → exit code 0
 3. ✅ Все обязательные секции присутствуют (Metadata, Context, Requirements, Architecture & Technical Design, Interfaces / Contracts, Implementation Plan, Verification, Known Issues)
 4. ✅ Текст на русском, код/комментарии на английском
 5. ✅ Плейсхолдеры вместо реальных hostname/IP/пользователей
@@ -315,10 +315,10 @@ python -m pytest tests/ \
   --ignore=tests/test_service_mode.py -v
 
 # Валидировать спеку
-python scripts/spec.py validate specs/active/007-testing-strategy.md
+python ~/.junie/scripts/spec.py validate specs/active/007-testing-strategy.md
 
 # Архивировать спеку (после завершения)
-python scripts/spec.py archive specs/active/007-testing-strategy.md
+python ~/.junie/scripts/spec.py archive specs/active/007-testing-strategy.md
 ```
 
 ## Known Issues

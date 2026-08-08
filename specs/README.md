@@ -52,12 +52,12 @@ specs/
 ## CLI
 
 ```bash
-python scripts/spec.py create --type feature --title "Signal K data hub"
-python scripts/spec.py list
-python scripts/spec.py list --status completed
-python scripts/spec.py validate                 # все спеки в active/ и completed/
-python scripts/spec.py validate specs/active/001-tcp-gateway.md
-python scripts/spec.py archive specs/active/001-tcp-gateway.md
+python ~/.junie/scripts/spec.py create --type feature --title "Signal K data hub"
+python ~/.junie/scripts/spec.py list
+python ~/.junie/scripts/spec.py list --status completed
+python ~/.junie/scripts/spec.py validate                 # все спеки в active/ и completed/
+python ~/.junie/scripts/spec.py validate specs/active/001-tcp-gateway.md
+python ~/.junie/scripts/spec.py archive specs/active/001-tcp-gateway.md
 ```
 
 `validate` возвращает exit code `1`, если в спеке нет обязательной секции.
