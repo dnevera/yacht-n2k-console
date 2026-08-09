@@ -12,6 +12,25 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **Fixed reversed wind arrow direction + added compass tooltip.** Both
+  `sensor.wind_data_..._wind_angle` (Raymarine) and open-meteo's
+  `winddirection_10m` follow the standard meteorological "from" convention
+  (0°=N means wind blows *from* the north). The arrow annotation math
+  pointed the arrowhead straight at that compass bearing, i.e. towards
+  where the wind comes *from* instead of where it's blowing *to* — fixed
+  by adding 180° before computing the arrow's pixel offset. Also added a
+  hover tooltip on each arrow showing the 16-point compass name + degrees
+  (e.g. "NW 275°"), via `captureevents: true` + `hovertext` on the
+  annotation.
+- **Wind vector chart made full-width in its own section.** The user
+  manually split the "Wind Direction & Speed" card (`custom:plotly-graph`)
+  into its own wide section (`column_span: 3`) in the HA UI; the card
+  itself still defaulted to a narrower auto width inside that section. Pulled
+  the live config (repo file had drifted — always match live before editing,
+  per the standing rule below) and added `grid_options: {columns: 12}` to the
+  card so it spans the section's full internal grid width (12 = full width,
+  same convention already used by the Weather & Forecast section's
+  Windy/gauge/pressure-trend tiles).
 - **`plotly-graph-card` DEPLOYED to `bumblebee.local`.** Added new unified
   `deploy.sh` (`--install`/`--update`/`--resources-only`/`--dashboard-
   only`/`--sensors-only`) — now the ONLY supported way to deploy anything
