@@ -12,6 +12,35 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **New "Waves" section: Open-Meteo Marine wave forecast, mirroring the
+  wind vector chart.** Implementation was delegated to the Gemini writer
+  subagent (`~/.junie/scripts/ask_gemini.py --tag gemini:writer`, context =
+  the real `sensors-sailing.yaml` + the live wind `custom:plotly-graph`
+  card), then reviewed/cleaned by hand. Sensors (`sensors-sailing.yaml`): a
+  second `rest:` entry against `marine-api.open-meteo.com/v1/marine`
+  (`hourly=wave_height,wave_direction,wave_period`, `forecast_days=2`,
+  `timezone=UTC`, `scan_interval: 900`) using the *same* `resource_template`
+  live-GPS trick as the wind forecast, plus `sensor.wave_forecast_flat`
+  (array attributes `forecast_time`/`wave_height`/`wave_direction`/
+  `wave_period`) and `sensor.wave_height_next_hour` (m) /
+  `sensor.wave_period_next_hour` (s) — first `forecast_time >= now` point,
+  same jinja pattern as `wind_forecast_next_hour`. Dashboard: a new grid
+  section (`column_span: 3`) with a `type: glance` header row styled by the
+  identical `card_mod` as the wind header (value on top 26px, caption 12px,
+  all `!important`; height `#4fc3f7`, period `#b0bec5`) and a
+  `custom:plotly-graph` chart — forecast height markers, a direction arrow
+  layer (`layout.annotations`, same `+180°` "where the waves are going"
+  convention, arrow colour graded by wave height), the rounded "Now" badge,
+  `hovermode: x unified` + X spike cursor, `yaxis.fixedrange`,
+  `config: {scrollZoom: false, displayModeBar: false, doubleClick: false}`
+  and the same `on_dblclick` reset. Deviations from the model draft: its
+  trailing `- entity_id: ...` block was invalid HA config and was dropped,
+  `swell_wave_height` was removed from the request (it was never rendered),
+  and the period trace is `visible: legendonly` (plotly-graph-card has no
+  per-trace secondary axis) with the period also folded into the height
+  trace's tooltip (`0.18 m · WSW 262° · 3.7 s`). No measured wave series —
+  Raymarine publishes no wave sensor. Marine API verified live for the
+  anchorage coordinates: 48 hourly points with real height/direction/period.
 - **Pulled another manual re-layout from the live HA (no deploy).** In the
   "Weather & Forecast" section the user moved the Windy grid card (iframe +
   transparent overlay button) below the windrose card, changed the iframe

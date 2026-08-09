@@ -44,6 +44,23 @@ rest:
         json_attributes:
           - hourly
 
+  # Open-Meteo *Marine* API (separate host, also key-less) — feeds the
+  # "Waves" dashboard section. Same resource_template trick as the wind
+  # forecast above, so the wave forecast follows the boat's live N2K GPS
+  # position. Note: the marine model only covers open sea — inside closed
+  # bays/marinas the API can legitimately return null values.
+  - resource_template: >-
+      https://marine-api.open-meteo.com/v1/marine?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=wave_height,wave_direction,wave_period&forecast_days=2&timezone=UTC
+    scan_interval: 900
+    sensor:
+      - name: 'Wave Forecast REST'
+        unique_id: wave_forecast_rest
+        icon: mdi:waves
+        value_template: "{{ value_json.hourly.wave_height | list | first | round(1) }}"
+        unit_of_measurement: 'm'
+        json_attributes:
+          - hourly
+
 template:
   - sensor:
       # Flattened open-meteo wind forecast — used by the apexcharts-card
@@ -89,6 +106,52 @@ template:
         state: >
           {% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %}
           {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_gust') or [] %}
+          {% set ns = namespace(v = none) %}
+          {% for t in times %}
+            {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}
+              {% set ns.v = vals[loop.index0] %}
+            {% endif %}
+          {% endfor %}
+          {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}
+
+      # Flattened open-meteo marine wave forecast — feeds the
+      # "Wave Height & Direction" plotly vector chart the same way
+      # wind_forecast_flat feeds the wind one (added 2026-08-09).
+      - name: Wave Forecast Flat
+        unique_id: wave_forecast_flat
+        unit_of_measurement: 'm'
+        icon: mdi:waves
+        state: "{{ states('sensor.wave_forecast_rest') }}"
+        attributes:
+          forecast_time: "{{ state_attr('sensor.wave_forecast_rest', 'hourly')['time'] if state_attr('sensor.wave_forecast_rest', 'hourly') else [] }}"
+          wave_height: "{{ state_attr('sensor.wave_forecast_rest', 'hourly')['wave_height'] if state_attr('sensor.wave_forecast_rest', 'hourly') else [] }}"
+          wave_direction: "{{ state_attr('sensor.wave_forecast_rest', 'hourly')['wave_direction'] if state_attr('sensor.wave_forecast_rest', 'hourly') else [] }}"
+          wave_period: "{{ state_attr('sensor.wave_forecast_rest', 'hourly')['wave_period'] if state_attr('sensor.wave_forecast_rest', 'hourly') else [] }}"
+
+      # Next full forecast hour, plain numeric sensors for the "Waves"
+      # header row (same pattern as wind_forecast_next_hour).
+      - name: Wave Height Next Hour
+        unique_id: wave_height_next_hour
+        unit_of_measurement: 'm'
+        icon: mdi:waves
+        state: >
+          {% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %}
+          {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_height') or [] %}
+          {% set ns = namespace(v = none) %}
+          {% for t in times %}
+            {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}
+              {% set ns.v = vals[loop.index0] %}
+            {% endif %}
+          {% endfor %}
+          {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}
+
+      - name: Wave Period Next Hour
+        unique_id: wave_period_next_hour
+        unit_of_measurement: 's'
+        icon: mdi:waves-arrow-up
+        state: >
+          {% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %}
+          {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_period') or [] %}
           {% set ns = namespace(v = none) %}
           {% for t in times %}
             {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}
