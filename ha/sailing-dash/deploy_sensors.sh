@@ -164,8 +164,38 @@ def merge_platform_list(existing, new_items):
 for key, value in incoming.items():
     if isinstance(value, list) and isinstance(remote.get(key), list):
         remote[key] = merge_platform_list(remote[key], value)
+    elif isinstance(value, dict) and isinstance(remote.get(key), dict):
+        # e.g. `input_boolean:` — merge by helper name instead of replacing
+        # the whole block, so re-running this script (or adding a second
+        # helper later) never clobbers unrelated helpers the user added by
+        # hand directly on the live instance.
+        remote[key] = {**remote[key], **value}
     else:
         remote[key] = value
+
+# Explicit removals: because dict-valued keys are merged (see above), a helper
+# deleted from sensors-sailing.yaml would otherwise linger on the live
+# instance forever. Declare it once as a comment directive in
+# sensors-sailing.yaml and this script prunes it (idempotently):
+#     # DEPLOY-REMOVE: input_boolean.windy_follow_gps
+import re
+
+with open(sensors_path) as f:
+    for line in f:
+        m = re.match(r"#\s*DEPLOY-REMOVE:\s*([\w.]+)\s*$", line.strip())
+        if not m:
+            continue
+        parts = m.group(1).split(".")
+        node = remote
+        for part in parts[:-1]:
+            node = node.get(part) if isinstance(node, dict) else None
+            if node is None:
+                break
+        if isinstance(node, dict) and parts[-1] in node:
+            del node[parts[-1]]
+            print(f"Removed stale key {m.group(1)} from remote config")
+            if not node and len(parts) > 1:
+                remote.pop(parts[0], None)
 
 with open(out_path, "w") as f:
     yaml.dump(remote, f, Dumper=HaDumper, sort_keys=False, allow_unicode=True,

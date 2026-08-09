@@ -111,6 +111,14 @@ window.PREVIEW_CARDS = [
       ],
     },
   },
+  // Windy widget - our own card (cards/windy-boat-card.js): the embed with
+  // embedMake=true (postMessage API on) + a recenter button that talks to
+  // the widget directly, no reload. Config copied 1:1 from the dashboard.
+  {
+    tag: 'windy-boat-card',
+    title: 'Windy + recenter/weather buttons — custom:windy-boat-card (live dashboard config)',
+    config: {"type": "custom:windy-boat-card", "lat_entity": "sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude", "lon_entity": "sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude", "fallback_lat": 42.43, "fallback_lon": 18.6, "zoom": 8, "overlay": "wind", "product": "ecmwf", "aspect_ratio": "90%", "grid_options": {"rows": 5, "columns": 12}}
+  },
   {
     // Bundle registers itself as `plotly-graph` (not `plotly-graph-card`).
     tag: 'plotly-graph',

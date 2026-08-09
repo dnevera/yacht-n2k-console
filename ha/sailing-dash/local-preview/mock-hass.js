@@ -115,6 +115,36 @@
       last_changed: isoMinutesAgo(0),
       last_updated: isoMinutesAgo(0),
     },
+    // Raw decimal-degree N2K GPS position (same entity the open-meteo
+    // rest: requests / device_tracker.nevera use), used by
+    // config-template-card to build the Windy widget/button URLs (see the
+    // "Windy widget" card entry below). NOT sensor.boat_latitude/
+    // boat_longitude - those are human-readable DMS strings for the
+    // Position section, parseFloat() on them would truncate to whole
+    // degrees only.
+    'sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude': {
+      entity_id: 'sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude',
+      state: '42.4712',
+      attributes: { unit_of_measurement: '\u00b0', friendly_name: 'Latitude' },
+      last_changed: isoMinutesAgo(0),
+      last_updated: isoMinutesAgo(0),
+    },
+    'sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude': {
+      entity_id: 'sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude',
+      state: '18.5731',
+      attributes: { unit_of_measurement: '\u00b0', friendly_name: 'Longitude' },
+      last_changed: isoMinutesAgo(0),
+      last_updated: isoMinutesAgo(0),
+    },
+    // Windy recenter button (input_button state is an ISO timestamp of the
+    // last press; the widget's config-template-card subscribes to it only).
+    'input_button.windy_recenter': {
+      entity_id: 'input_button.windy_recenter',
+      state: isoMinutesAgo(5),
+      attributes: { friendly_name: 'Windy: recenter on boat', icon: 'mdi:crosshairs-gps' },
+      last_changed: isoMinutesAgo(5),
+      last_updated: isoMinutesAgo(5),
+    },
   };
 
   // Fake `history/history_during_period` shape, good enough for
@@ -160,6 +190,45 @@
     }
     return entity ? [entity] : [];
   }
+
+  // Minimal `loadCardHelpers()` mock — only needed for config-template-card
+  // (it calls `_helpers.createCardElement(config)` to build the card it
+  // wraps). Real HA ships this globally via the frontend bundle; here we
+  // fake just enough of `createCardElement` to build the handful of native
+  // card types the Windy widget uses (grid/iframe/button), recursively, so
+  // this harness can exercise the real ${...} template substitution without
+  // throwing. Not a faithful re-implementation of HA's actual hui-*-card
+  // elements — good enough to catch config/template errors, not to check
+  // pixel-perfect rendering.
+  function fakeCreateCardElement(config) {
+    const el = document.createElement('div');
+    el.setAttribute('data-card-type', config.type);
+    if (config.type === 'grid') {
+      (config.cards || []).forEach((c) => el.appendChild(fakeCreateCardElement(c)));
+    } else if (config.type === 'iframe') {
+      const iframe = document.createElement('iframe');
+      iframe.src = config.url;
+      iframe.style.width = '100%';
+      el.appendChild(iframe);
+    } else if (config.type === 'button') {
+      const btn = document.createElement('button');
+      btn.textContent = 'button';
+      if (config.tap_action && config.tap_action.action === 'url') {
+        btn.setAttribute('data-url-path', config.tap_action.url_path);
+      }
+      el.appendChild(btn);
+    }
+    el.hass = window.mockHass;
+    el.setConfig = function () {};
+    return el;
+  }
+  window.loadCardHelpers = function () {
+    return Promise.resolve({
+      createCardElement: fakeCreateCardElement,
+      createRowElement: fakeCreateCardElement,
+      createHuiElement: fakeCreateCardElement,
+    });
+  };
 
   window.mockHass = {
     language: 'en',

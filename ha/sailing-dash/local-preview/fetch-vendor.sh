@@ -22,7 +22,11 @@ echo "Fetching plotly-graph-card.js (v3.3.5, draft card, not deployed yet)..."
 curl -sL -o plotly-graph-card.js \
   "https://github.com/dbuezas/lovelace-plotly-graph-card/releases/download/v3.3.5/plotly-graph-card.js"
 
-for f in apexcharts-card.js compass-card.js windrose-card.js plotly-graph-card.js; do
+echo "Fetching config-template-card.js (v1.3.6, iantrich/config-template-card)..."
+curl -sL -o config-template-card.js \
+  "https://github.com/iantrich/config-template-card/releases/download/1.3.6/config-template-card.js"
+
+for f in apexcharts-card.js compass-card.js windrose-card.js plotly-graph-card.js config-template-card.js; do
   size=$(wc -c < "$f")
   echo "  $f: $size bytes"
   if [ "$size" -lt 1000 ]; then

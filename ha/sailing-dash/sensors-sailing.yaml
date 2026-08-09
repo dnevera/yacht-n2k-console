@@ -95,6 +95,17 @@
 # installed bundle in local-preview/).
 # => to change the window, edit ONE place: the chart_time_window sensor.
 
+# No helper entities are needed for the Windy widget any more (2026-08-09).
+# The widget is now `custom:windy-boat-card` (ha/sailing-dash/cards/), whose
+# own button talks to the Windy embed directly over its postMessage API
+# (enabled by `embedMake=true` in the embed URL), so the map re-centres on
+# the boat without an iframe reload — no HA round-trip, hence no helper.
+# Prune the two helpers this replaced (deploy_sensors.sh honours these
+# directives; dict-valued keys are merged, so deleted helpers would
+# otherwise linger on the live instance forever):
+# DEPLOY-REMOVE: input_boolean.windy_follow_gps
+# DEPLOY-REMOVE: input_button.windy_recenter
+
 rest:
   - resource_template: >-
       https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC

@@ -44,6 +44,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VENDOR_DIR="${SCRIPT_DIR}/local-preview/vendor"
+# Cards written for THIS project (committed to git, unlike vendor/ which holds
+# downloaded 3rd-party release bundles). Looked up first, so our own card
+# always wins over a same-named vendor file.
+CARDS_DIR="${SCRIPT_DIR}/cards"
 RESOURCES_FILE="${SCRIPT_DIR}/lovelace-resources.yaml"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
@@ -146,22 +150,47 @@ with open(out_json, "w") as f:
     json.dump(registry, f)
 
 # Tell the shell (via stdout marker) which vendor files to upload.
+# NOTE: trailing "\n" is required — `while IFS= read -r line; do ...; done`
+# checks read's exit status BEFORE running the loop body, and `read`
+# returns non-zero (failure) for a final line with no trailing newline
+# (even though it still populates the variable), so a file with no
+# trailing newline silently drops its last entry from the loop. This was
+# the actual root cause of the "only the first 1-2 resources ever get
+# uploaded" bug found 2026-08-09 (a red herring `<&3`/ssh-stdin theory was
+# tried and discarded first — the real bug was here, in how this file gets
+# written, not in how it gets read).
 with open(out_json + ".files", "w") as f:
-    f.write("\n".join(to_upload))
+    f.write("\n".join(to_upload) + "\n")
 PYEOF
 
     # 3. Upload each referenced vendor .js file to /config/www/.
-    while IFS= read -r filename; do
-        [[ -z "${filename}" ]] && continue
-        LOCAL_JS="${VENDOR_DIR}/${filename}"
+    # Read the file list into a plain array first (not `mapfile`, bash4+
+    # only — macOS ships bash 3.2), then loop over the array to upload.
+    # The real root-cause bug (found 2026-08-09, see the .files-writing
+    # comment above) was the file having no trailing newline, which made
+    # `while read` silently drop the LAST entry — since this loop was
+    # written, only the first 1-2 "manually installed" resources
+    # (windrose-card.js, then also plotly-graph-card.js) ever actually got
+    # copied to /config/www/ on any `--resources-only`/`--install`/`--update`
+    # run; the most recent addition was always missing its uploaded .js.
+    FILES_TO_UPLOAD=()
+    while IFS= read -r line; do
+        [[ -n "${line}" ]] && FILES_TO_UPLOAD+=("${line}")
+    done < "${MERGED_RES}.files"
+    for filename in "${FILES_TO_UPLOAD[@]}"; do
+        LOCAL_JS="${CARDS_DIR}/${filename}"
         if [[ ! -f "${LOCAL_JS}" ]]; then
-            echo "ERROR: ${LOCAL_JS} not found — run local-preview/fetch-vendor.sh first." >&2
+            LOCAL_JS="${VENDOR_DIR}/${filename}"
+        fi
+        if [[ ! -f "${LOCAL_JS}" ]]; then
+            echo "ERROR: ${filename} not found in ${CARDS_DIR} nor ${VENDOR_DIR}" >&2
+            echo "       (3rd-party bundles: run local-preview/fetch-vendor.sh first)" >&2
             exit 1
         fi
         echo "Uploading ${filename} -> ${HA_CONTAINER}:/config/www/${filename} ..."
-        ${SCP} "${LOCAL_JS}" "${DEPLOY_HOST}:/tmp/${filename}"
-        ${SSH} "sudo docker cp /tmp/${filename} ${HA_CONTAINER}:/config/www/${filename} && rm -f /tmp/${filename}"
-    done < "${MERGED_RES}.files"
+        ${SCP} "${LOCAL_JS}" "${DEPLOY_HOST}:/tmp/${filename}" < /dev/null
+        ${SSH} "sudo docker cp /tmp/${filename} ${HA_CONTAINER}:/config/www/${filename} && rm -f /tmp/${filename}" < /dev/null
+    done
 
     # 4. Upload the merged resource registry.
     echo "Uploading merged lovelace_resources ..."

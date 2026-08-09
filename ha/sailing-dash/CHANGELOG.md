@@ -12,6 +12,240 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **Windy: the weather-detail button is now a toggle (`windy-boat-card` 1.2.0).**
+  A second press closes the panel (`{showDetail: false}`, which the embed's
+  `updateEmbed` handler maps to hiding the detail view). State is tracked in
+  `_detailOpen` and also synced from the embed's own outgoing `updateDetail`
+  message, so closing the panel inside the widget doesn't desync the toggle;
+  "home" resets the flag since a re-render starts with the panel closed.
+  Caught while testing: the first version read *any* `updateDetail` as "open",
+  but per `embed2.js` that message is also emitted for `showMarker`,
+  `coordinates` and unit changes with no `showDetail` field at all — the flag
+  was therefore already true before the first click and the first press closed
+  an already-closed panel. Fixed by only accepting a boolean `showDetail`.
+  Verified with real clicks in the local harness: open / closed / open
+  (`ondetail` true, false, true); deployed via `./deploy.sh --resources-only`,
+  live HA serves version 1.2.0.
+
+- **Windy: the "home" button no longer switches the view mode; weather detail
+  is now its own button (`windy-boat-card` 1.1.0).** The v1.0.0 button sent
+  `{showDetail: true, detailLat, detailLon}` over the embed's postMessage API,
+  which is NOT a "set centre" request — read literally from
+  `embed2.js` (v41.1.0), `showDetail` means *open the weather detail panel
+  here*: `dn.on('detailRendered', ...)` then calls `Ff(coords, 180)`, panning
+  the map so the point lands under that panel. That is exactly the reported
+  behaviour: the widget flipped into weather-detail view and the boat ended up
+  off-centre instead of home. The same handler additionally runs
+  `payload.pressure ? isolines = 'pressure' : isolines = 'off'` on EVERY
+  message, silently resetting the isobars toggle. There is no "set centre"
+  message in the API at all (`showMarker` → `panToOffset`, Y axis only).
+  - "Home" (`mdi:crosshairs-gps`) now re-renders the widget at the boat: the
+    iframe `src` is rebuilt once, on the explicit press. To keep it from
+    resetting the user's view, the card listens to the embed's *outgoing*
+    `updateValues` message (payload `{coordinates, level, overlay, product,
+    zoom}`) and reuses the last reported `overlay`/`product`/`level`/`zoom` in
+    the new URL — so pressing home on the waves layer at zoom 11 comes back on
+    the waves layer at zoom 11.
+  - Weather detail moved to a second button (`mdi:weather-partly-cloudy`,
+    above the home button), which is where `showDetail` genuinely belongs.
+  - Normal map interaction is untouched: the `src` is never reassigned on
+    `hass` updates, so nothing reloads unless a button is pressed.
+  Verified in the local harness: `_view` fills in from `updateValues`; the
+  home press rebuilds the `src` with the boat's coordinates plus the captured
+  view (`lat=42.4712 lon=18.5731 zoom=11 overlay=waves product=ecmwfWaves`,
+  exactly one iframe load); the detail panel is closed after home and open
+  after the weather button. Deployed with `./deploy.sh --resources-only`;
+  `/local/windy-boat-card.js` on the live HA reports version 1.1.0.
+- Synced the manual layout tweak made in the HA UI before editing (Windy card
+  `aspect_ratio` 50% → 90%, `grid_options.rows` 6 → 5); live `.storage` config
+  and the local YAML match (`EQUAL: True`), so the dashboard itself did not
+  need a redeploy.
+
+- **Windy: own card `custom:windy-boat-card` replaces the iframe + overlay
+  construction; the recenter button now actually works.** The previous
+  "recenter" button did nothing useful — it could only rebuild the iframe
+  `src`, i.e. reload the entire widget. Instead of guessing again, the live
+  embed bundle (`embed.windy.com/v/41.1.0.emb.b79a/embed2.js`) was read and
+  a **built-in, two-way `postMessage` API** was found — gated behind a URL
+  parameter:
+
+      Rf = { ..., embedMake: Gf(qh.embedMake), ... }
+      Rf.embedMake && window.parent !== window && function () {
+          window.onmessage = function (e) {  // type: 'updateEmbed'
+              payload.showDetail ? dn.emit('rqstOpen','detail',{lat,lon}) : ...
+              payload.showMarker ? dn.emit('rqstOpen','picker',{lat,lon}) : ...
+              // + pressure / hideMessage / metricWind / metricRain / metricTemp
+          };
+          // and the widget posts `updateValues`/`updateDetail` back out
+      }
+
+  Verified in a real browser, not assumed: without `embedMake=true`
+  `window.onmessage` inside the iframe is `null` and every message is
+  silently ignored (`typeof` reports `'object'`); with it, it is a
+  `function` and `{type:'updateEmbed', payload:{showDetail:true, detailLat,
+  detailLon}}` re-centres the map on BOTH axes (42.066,18.600 →
+  44.147,14.502 → 35.599,24.999), while `showMarker` pans the Y axis only
+  (`panToOffset`). Sending `{showDetail:false}` right after closes the panel
+  and the map keeps the new position.
+  - HA's built-in `type: iframe` cannot send that message, hence a small card
+    of our own: `ha/sailing-dash/cards/windy-boat-card.js` (config:
+    `lat_entity`/`lon_entity`/`fallback_lat`/`fallback_lon`/`zoom`/`overlay`/
+    `product`/`aspect_ratio`). It assigns the iframe `src` **once** and never
+    again, so the widget never reloads and stays fully interactive; its own
+    button posts the recenter message directly to the widget.
+  - Removed: the `config-template-card` wrapper, the `card_mod` overlay grid,
+    and both helper entities (`input_button.windy_recenter`,
+    `input_boolean.windy_follow_gps` — pruned from the live instance via the
+    `# DEPLOY-REMOVE:` directives).
+  - Tooling: `deploy.sh` now looks for a card `.js` in `cards/` first and only
+    then in `local-preview/vendor/`, so project-owned cards (committed to git)
+    deploy through the same `--resources-only` path as the downloaded
+    3rd-party bundles; `lovelace-resources.yaml` lists
+    `/local/windy-boat-card.js?v=1.0.0`.
+  - Local harness: `local-preview/cards` is a symlink to `../cards` (a `../`
+    script path escapes the static server root and 404s), and the card builds
+    on whichever of `setConfig`/`hass` arrives last (the harness sets `hass`
+    first, HA does the opposite).
+  - Known, accepted inaccuracy: the embed positions the requested point where
+    its detail panel expects it, ~100px below the viewport centre, so the boat
+    lands slightly low rather than dead centre (asking 44.500 settles the
+    centre at 44.147). There is no "set centre" message in the API and
+    `showMarker` cannot compensate (Y-axis only).
+  Verified live in a browser against the harness: `embedMake=true` in the src,
+  `window.onmessage` is a function, clicking the button moves the map while the
+  iframe `src` stays byte-identical (no reload) and the detail panel ends up
+  closed. Deployed via `./deploy.sh --resources-only` + `--sensors-only` +
+  `--dashboard-only`; `/local/windy-boat-card.js` returns HTTP 200 from HA and
+  the live `.storage` dashboard config is identical to the local YAML.
+
+- **Windy widget reworked: fully interactive map + a single recenter-on-boat
+  button; Follow-GPS toggle and "Center on my position" card removed.**
+  Studied the actual embed bundle
+  (`embed.windy.com/v/41.1.0.emb.b79a/embed2.js`) instead of guessing what
+  the iframe can do, which changed the design:
+  - the embed ships its own controls — `#embed-zoom` +/- buttons, search box
+    (with a "my location" that uses the *browser's* position, i.e. the
+    phone, not the boat), burger menu, all toggled by the
+    `menu=`/`message=`/`marker=`/`detail=` URL params already in our src;
+  - **the Windy logo IS the "open in windy.com" link**: on every
+    `redrawFinished` the bundle assigns
+    `#logo.href = 'https://www.windy.com/?<overlay>,<level>,<lat>,<lon>,<zoom>'`
+    with `target="_top"`, i.e. the full site/app opens at the *current* map
+    position. The full-area transparent overlay button that used to provide
+    that link was therefore **removed** — it swallowed every click/drag,
+    which is exactly why the embedded map could not be panned or zoomed.
+  - the one thing the embed has **no** control for is "back to the boat":
+    `location=coordinates` + lat/lon does set its internal `homeLocation`
+    and a `back2home` handler exists, but nothing in map mode emits it and
+    the iframe is cross-origin. Hence one small crosshair button overlaid in
+    the bottom-right corner: it presses the new `input_button.windy_recenter`
+    (the ONLY entity the widget's `config-template-card` subscribes to), the
+    `${...}` templates re-run and the iframe `src` is rebuilt around the
+    boat's current N2K GPS position. `_r=<press timestamp>` is a
+    cache-buster so the src really changes (and the map really jumps home)
+    even when the rounded coordinates did not move.
+  - `input_boolean.windy_follow_gps` and the separate "Center on my
+    position" card are gone: the widget is an interactive map the user pans
+    freely, it must not follow the GPS, and the removed card only opened
+    windy.com (duplicating the logo link) instead of recentering the widget.
+  - the overlay grid's `card_mod` now passes pointer events through
+    everything except the button's own `ha-card`, so the map stays draggable.
+  - `deploy_sensors.sh` gained a `# DEPLOY-REMOVE: <key.path>` directive
+    (declared in `sensors-sailing.yaml`): dict-valued top-level keys are
+    merged, so a helper deleted from our YAML would otherwise linger on the
+    live instance forever — the deploy now prunes it (confirmed in the
+    deploy output: `Removed stale key input_boolean.windy_follow_gps`).
+  Verified: `local-preview` headless run — all 5 cards OK, the iframe src
+  resolves to the mock GPS position plus the `_r` cache-buster; deployed via
+  `./deploy.sh --sensors-only` + `--dashboard-only` (pre-deploy diff showed
+  only the intended changes), live `.storage` config identical to the local
+  YAML afterwards, `input_button.windy_recenter` present on HA. Note: the
+  crosshair button's CSS cannot be checked in `local-preview` — that harness
+  only loads the 3rd-party bundles, HA's native `hui-button-card` is never
+  registered there.
+- **Fixed: the Windy widget reloaded nonstop.** `custom:config-template-card`
+  re-renders its child card on every state change of every entity listed in
+  `entities:`, and the entry below listed the two N2K GPS sensors there —
+  those update several times per second, so the `iframe`'s `src` was
+  reassigned continuously and the embedded Windy map never stopped reloading.
+  The iframe card now subscribes to `input_boolean.windy_follow_gps` only;
+  the `${...}` templates still read the GPS position through the global
+  `states` object (no subscription needed), so the widget re-centers exactly
+  once — when the Follow GPS toggle is flipped. The separate "Center on my
+  position" button keeps its GPS subscription on purpose (it must open the
+  current position, and re-rendering a plain button costs nothing — there is
+  no iframe to reload). Deployed via `./deploy.sh --dashboard-only`
+  (pre-deploy diff showed only the removed `entities:` lines).
+- **Windy GPS-follow made opt-in (default OFF), plus a one-shot "locate me"
+  button.** The entry directly below made the Windy widget/button always
+  follow the boat's live GPS; that always-on behaviour was rejected. Added
+  `input_boolean.windy_follow_gps` (`sensors-sailing.yaml`, default `off`)
+  plus a "Follow GPS" `type: tile` toggle next to the widget; the Windy
+  iframe/overlay-button's `config-template-card` `variables` now compute
+  `lat`/`lon` as `vars['followOn'] ? <live GPS> : <anchorage>` — stays on
+  the last known anchorage (42.43/18.60) unless the user opts in. A
+  separate "Center on my position" tile (its own `custom:config-template-card`
+  wrapping a plain `type: button`) always opens `windy.com` at the current
+  live GPS regardless of the toggle, for a manual one-shot "locate me"
+  action. Technical note: read the installed `config-template-card.js`
+  bundle to confirm `variables` are evaluated top-to-bottom into a shared
+  `vars` object visible inside later variables' own `eval()`'d expression
+  strings, so `lat`/`lon` can reference an earlier `followOn` variable via
+  `vars['followOn']` (a plain identifier `followOn` is only injected for
+  the final `${...}` template body, not for other variable definitions).
+  Verified in `local-preview/` (mock toggle state `off`): "Center on my
+  position" resolves to the live-GPS mock coordinates while the
+  widget/overlay button stay on the anchorage; deployed via `./deploy.sh
+  --sensors-only` (diff showed only the new helper) then `./deploy.sh
+  --dashboard-only` (pre-deploy diff showed only the
+  toggle/button/`followOn` changes), live `.storage` config confirmed
+  byte-identical to the local YAML after deploy. Also hardened
+  `deploy_sensors.sh`'s config merge: dict-valued top-level keys (e.g.
+  `input_boolean:`) are now merged key-by-key instead of replacing the
+  whole block, so this and any future helper never clobbers one the user
+  adds by hand directly on the live instance.
+- **Windy widget/button now follow the boat's live GPS instead of a fixed
+  anchorage.** All other coordinate-dependent pieces (map, `boat_latitude`/
+  `boat_longitude`, both open-meteo `rest:` requests) were already
+  templated off the boat's own N2K GPS in earlier sessions — the Windy
+  iframe embed + its tap-to-open overlay button were the last remaining
+  spot with the hardcoded 42.43/18.60 anchorage, because `type: iframe`/
+  `type: button` don't support Jinja templating on `url`/`tap_action`.
+  Wrapped both in `custom:config-template-card`
+  (`iantrich/config-template-card` v1.3.6, manually installed the same way
+  as `windrose-card`/`plotly-graph-card` — not in HACS default store as
+  `thomasloven/lovelace-config-template-card`, which 404s; confirmed the
+  correct fork/tag/template syntax by reading the actual bundle source,
+  `${...}` is plain JS `eval`, not Jinja). `variables: {lat, lon}` read
+  `sensor.boat_latitude`/`sensor.boat_longitude` with a fallback to
+  42.43/18.60 if those are ever unavailable; both the iframe `url` and the
+  button's `tap_action.url_path` are rebuilt from `lat`/`lon` via `${...}`.
+  Existing `grid`/`card_mod` layout (the invisible overlay-button trick) is
+  unchanged, just nested one level deeper under `card:`. Two bugs found and
+  fixed while wiring this up: (1) the `variables` templates first read
+  `sensor.boat_latitude`/`boat_longitude` — those are human-readable DMS
+  strings ("42°26.07'N") built for the Position section, so `parseFloat()`
+  on them silently truncated to whole degrees only (42/18); switched to the
+  same raw decimal-degree N2K sensor the open-meteo `rest:` requests and
+  `device_tracker.nevera` already use. (2) `./deploy.sh --resources-only`
+  had a long-standing bug (present since the script was written, only
+  surfaced now because it's the first time a 3rd manually-installed
+  resource was added): the `.files` list handed from the embedded Python
+  script to bash had no trailing newline, and `while IFS= read -r line; do
+  ...; done < file` checks `read`'s exit status *before* running the loop
+  body — `read` returns non-zero (failure) on a final line with no
+  trailing `\n` even though it still populates the variable, so the LAST
+  entry was always silently dropped from the upload loop. Confirmed live:
+  only `windrose-card.js` (then, after this file's own resource was added,
+  `windrose-card.js`+`plotly-graph-card.js`) ever actually reached
+  `/config/www/` on any prior `--resources-only`/`--install`/`--update`
+  run — `plotly-graph-card.js` in particular had been *registered* in
+  `lovelace_resources` but its `.js` was never uploaded until this fix.
+  Fixed by appending `"\n"` when writing the `.files` list. Verified live
+  after both fixes: all 3 manually-installed bundles now land on
+  `/config/www/` in one `--resources-only` run, `/local/config-template-card.js`
+  returns HTTP 200, and the corrected N2K sensor returns a real decimal
+  reading (42.4345672) instead of a DMS string.
 - **Mobile gestures on both `custom:plotly-graph` cards: one finger shows
   the tooltip, two fingers pan.** `plotly-graph-card` has no touch hook
   (only `on_click` / `on_dblclick` / `on_legend_*`), so the listeners are

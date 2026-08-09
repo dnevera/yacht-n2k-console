@@ -21,8 +21,8 @@
 # Install these three, in this order (card-mod is a soft dependency others
 # rely on for styling tricks used on this dashboard):
 #   1. card-mod        https://github.com/thomasloven/lovelace-card-mod
-#                       (used by the Windy widget's tap-to-open overlay, and
-#                       by the forecast wind-direction arrow tiles)
+#                       (used by the glance header value styling; the Windy
+#                       widget no longer needs it — see 2d)
 #   2. compass-card    https://github.com/tomvanswam/compass-card
 #                       (used by the Wind/COG compass tiles)
 #   3. apexcharts-card https://github.com/RomRider/apexcharts-card
@@ -41,6 +41,25 @@
 # .storage/lovelace_resources — same end result as a HACS "Manual install",
 # see the card's own README for that path, or install it via HACS instead
 # if it has since been added to the default store.
+
+# ── 2c. config-template-card — NOT via HACS, manual install (2026-08-09) ───
+# https://github.com/iantrich/config-template-card (v1.3.6 used here) —
+# lets a card's config be templated with plain JS `${...}` (evaluated by the
+# card itself, NOT Jinja). It used to wrap the Windy iframe; that is gone as
+# of the windy-boat-card rework (see 2d), so this card is currently kept
+# registered but unused — safe to skip on a fresh install unless something
+# starts using it again. Installed the same way as windrose-card/
+# plotly-graph-card: release .js copied to config/www/config-template-card.js,
+# registered as a Lovelace resource (/local/config-template-card.js).
+
+# ── 2d. windy-boat-card — OUR OWN card, source in this repo (2026-08-09) ────
+# ha/sailing-dash/cards/windy-boat-card.js — the Windy embed widget plus a
+# working "center on the boat" button. It exists because the embed's built-in
+# postMessage API (enabled by `embedMake=true` in the embed URL) is the only
+# way to re-centre the map without reloading the iframe, and HA's built-in
+# `type: iframe` card cannot send that message. Nothing to download: the file
+# is committed here and `./deploy.sh --resources-only` uploads it to
+# config/www/windy-boat-card.js and registers /local/windy-boat-card.js.
 
 # ── 3. HA core integrations used (already bundled, nothing to install) ──────
 # - rest:      (sensor.wind_forecast_rest — polls api.open-meteo.com)

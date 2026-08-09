@@ -646,14 +646,21 @@ same link simply opens in the regular web browser. No extra HA-side logic
 (browser_mod, custom conditions, etc.) is needed for that part — it's
 handled entirely by the mobile OS's link-routing.
 
-The iframe widget and the transparent overlay button currently use the
-boat's last known anchorage coordinates (42.43/18.60), matching the
-map/forecast defaults elsewhere on this dashboard — update both entries in
-`dashboard-sailing.yaml` (and redeploy) if the boat moves to a new home
-location for an extended period; making them follow the live GPS position
-like the open-meteo `rest:` sensor does would require a
-`card-mod`/`card_templater`-based templated `url`, which is a possible
-follow-up if wanted.
+**Follows the boat's live GPS (2026-08-09):** the iframe widget and the
+transparent overlay button are wrapped in `custom:config-template-card`
+(`iantrich/config-template-card`, manually installed like `windrose-card`/
+`plotly-graph-card` — see `requirements-ha.txt`/`lovelace-resources.yaml`),
+which templates arbitrary card config fields with plain JS `${...}`
+expressions (evaluated by the card itself, NOT Jinja — HA's built-in
+`type: iframe`/`type: button` cards have no templating support of their
+own). `variables: {lat, lon}` read the same raw decimal-degree N2K GPS
+sensor the open-meteo `rest:` requests and `device_tracker.nevera` use
+(falling back to the last known anchorage, 42.43/18.60, if it's ever
+unavailable) — NOT `sensor.boat_latitude`/`boat_longitude` (those are
+human-readable DMS strings, e.g. `42°26.07'N`, for the Position section;
+`parseFloat()` on them silently truncates to whole degrees only, a bug hit
+and fixed while wiring this up). Both the iframe `url` and the button's
+`tap_action.url_path` are rebuilt from `lat`/`lon`.
 
 **Note:** the card-mod overlay/grid-stacking CSS trick above depends on the
 exact DOM structure `type: grid` and `type: button` cards render, which can

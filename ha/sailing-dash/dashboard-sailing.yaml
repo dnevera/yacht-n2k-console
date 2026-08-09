@@ -213,29 +213,40 @@ views:
       grid_options:
         columns: 12
         rows: 2
-    - type: grid
-      columns: 1
-      cards:
-      - type: iframe
-        url: https://embed.windy.com/embed2.html?lat=42.43&lon=18.60&detailLat=42.43&detailLon=18.60&width=650&height=450&zoom=8&level=surface&overlay=wind&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=true&metricWind=kt&metricTemp=%C2%B0C&radarRange=-1
-        aspect_ratio: 50%
-        hide_background: true
-      - type: button
-        show_name: false
-        show_icon: false
-        tap_action:
-          action: url
-          url_path: https://www.windy.com/42.43/18.60?wind,42.43,18.60,i:pressure
-        card_mod:
-          style: "ha-card {\n  position: absolute;\n  inset: 0;\n  margin: 0;\n  background:\
-            \ transparent;\n  box-shadow: none;\n  border: none;\n  cursor: pointer;\n\
-            }\n"
+    # Windy widget — own card `custom:windy-boat-card`
+    # (source: ha/sailing-dash/cards/windy-boat-card.js, deployed by
+    # deploy.sh --resources-only; read that file's header for the full
+    # reverse-engineering notes on the embed).
+    # Why a card of our own instead of `type: iframe` + overlay cards:
+    #   - the embed exposes a two-way postMessage API, but ONLY when the URL
+    #     carries `embedMake=true` (verified live: `window.onmessage` inside
+    #     the iframe is null without it, a function with it). With the API on,
+    #     `{type:'updateEmbed', payload:{showDetail:true, detailLat, detailLon}}`
+    #     re-centres the map on BOTH axes — no iframe reload, no `src` rebuild,
+    #     so the map keeps its state and stays fully interactive (its own zoom
+    #     buttons/search/menu and the Windy logo link to windy.com at the
+    #     current position all keep working);
+    #   - HA's `type: iframe` cannot send that message, and the previous
+    #     `config-template-card` + `card_mod` overlay could only rebuild the
+    #     `src`, i.e. reload the whole widget.
+    # `input_button.windy_recenter` is therefore no longer needed — the card's
+    # own button talks to the widget directly.
+    # Coordinates come from the RAW decimal-degree N2K sensors (the same ones
+    # the open-meteo rest: requests and device_tracker.nevera use) — NOT
+    # sensor.boat_latitude/boat_longitude, which are DMS display strings
+    # ("42°26.07'N") that parseFloat() would truncate to whole degrees.
+    - type: custom:windy-boat-card
+      lat_entity: sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude
+      lon_entity: sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude
+      fallback_lat: 42.43
+      fallback_lon: 18.6
+      zoom: 8
+      overlay: wind
+      product: ecmwf
+      aspect_ratio: 90%
       grid_options:
-        rows: 6
+        rows: 5
         columns: 12
-      card_mod:
-        style: ".card {\n  display: grid;\n}\n.card > * {\n  grid-column: 1;\n  grid-row:\
-          \ 1;\n}\n"
     column_span: 1
   - type: grid
     cards:
