@@ -83,10 +83,23 @@ those entities get into HA in the first place.
 
 ## Editing the dashboard
 
+**Always compare HA vs. local before deploying.** The user has repeatedly
+rearranged tiles directly in the HA UI in the past — if this repo's
+`dashboard-sailing.yaml` isn't re-synced first, deploying would silently
+overwrite those manual changes. `deploy_dashboard.sh` now does this
+automatically (step 2b: pulls the live `.storage` config, converts it to
+YAML, and diffs it against the local file, printing the diff every run;
+set `REQUIRE_CLEAN_DIFF=1` to make it abort instead of just warning when
+they differ). `deploy_sensors.sh` already fetches+diffs the remote
+`configuration.yaml` before merging, for the same reason. If either diff
+shows unexpected changes, pull the live version into the repo file first
+(see "Dashboard layout" above) before pushing your own edits on top of it.
+
 1. Edit `dashboard-sailing.yaml` in this repo.
 2. Run `./deploy_dashboard.sh` (uses `../../deploy.conf` for the SSH
    target by default, same file `deploy.sh` uses) or
-   `./deploy_dashboard.sh user@host` to target explicitly.
+   `./deploy_dashboard.sh user@host` to target explicitly. Review the
+   printed pre-deploy diff before it uploads.
 3. Reload the dashboard in the browser (the script already restarted HA,
    wait ~30s for it to come back up).
 
@@ -193,6 +206,64 @@ to carry 48 hourly wind/gust points.
 If the forecast/gust lines are still blank after redeploying this fix, open
 the browser console (`data_generator` exceptions, if any, print there) and
 re-open this investigation with that detail.
+
+### Wind Direction — windrose (history) + forecast arrows (rewritten 2026-08-09, v3)
+
+Two earlier attempts at this were replaced entirely after user feedback
+(v1: numeric degrees 0–360 on an ApexCharts Y axis — meaningless for a
+compass bearing, wraps at 360°/0°; v2: a strip of 8 large rotated
+`mdi:navigation` tile icons — real arrows, but not a "graph", and the
+icons were too large). The section is now split into two parts:
+
+1. **History — `custom:windrose-card`.** A genuine polar windrose diagram
+   (github.com/aukedejong/lovelace-windrose-card v2.4.2) plotting the real
+   distribution of *measured* wind direction (`sensor.wind_direction_history`)
+   and speed over the last 24h (`data_period.period_back: -24h`), with a red
+   arrow (`current_direction.show_arrow`) for the current reading. This
+   card queries actual recorder **history** for its entities, which is
+   exactly what it's designed for — unlike ApexCharts/compass-card, it
+   natively renders true direction data as a rose, not a misleading line.
+   - **Not installed via HACS** (it isn't one of the 3 cards in
+     `requirements-ha.txt`): the `.js` was downloaded from the GitHub
+     release and manually copied to `/config/www/windrose-card.js` on
+     `bumblebee.local`, then registered as a `module` resource
+     (`/local/windrose-card.js?v=2.4.2`) directly in
+     `.storage/lovelace_resources` (same mechanism the deploy scripts use
+     for the dashboard itself). To reproduce on a fresh instance: download
+     `windrose-card.js` from
+     https://github.com/aukedejong/lovelace-windrose-card/releases/latest,
+     copy it to `config/www/`, and add it as a Lovelace resource (URL
+     `/local/windrose-card.js`, type `module`) via Settings → Dashboards →
+     Resources, or HACS if it's since been added to the default store.
+   - **Wind speed is shown three ways (2026-08-09):** the rose already
+     encoded speed via `windspeed_entities` (petal color by speed bucket)
+     and `windspeed_bar_location: right` (the vertical color-scale legend)
+     from the initial v3 rewrite — a `corner_info.top_right` block was
+     added on top of that to also print the current numeric wind speed
+     (in knots) in the card's corner, for an exact reading alongside the
+     visual rose.
+2. **Forecast — small rotated arrow tiles.** open-meteo's
+   `forecast_dir`/`forecast_wind` are a fixed-length **array** on one
+   sensor's attributes, not per-hour recorder history — `windrose-card`
+   (like `apexcharts-card`/`compass-card`) has no way to plot that. Kept as
+   a compact row of 8 `type: tile` cards (`type: grid`, `columns: 8`), one
+   per forecast hour from now (`+0h`, `+3h`, ... `+21h`), each showing a
+   *small* (`--tile-icon-size: 22px`, down from the tile card's oversized
+   default) `mdi:navigation` icon rotated via `card_mod` to that hour's
+   forecast direction, degrees shown as the label. A `card_mod` Jinja
+   template on each tile locates **today's current hour** inside
+   `forecast_time` (matching `utcnow()`), then reads
+   `forecast_dir[found_index + N]` for offset `N` — needed because
+   `forecast_time`/`forecast_dir` always start at *midnight UTC* of the
+   query day, not "now", so a naive fixed index would point at the wrong
+   hours for most of the day.
+
+Neither `apexcharts-card` nor `compass-card` support per-data-point marker
+rotation on a time-series chart (confirmed by reading the installed
+`apexcharts-card.js` source directly — only a per-series `data_generator`/
+`transform` JS hook exists, no generic per-point image/rotation API) —
+that's the reason a dedicated windrose card was added instead of trying to
+force this into a line chart.
 
 ### Windy alternative view (2026-08-09)
 

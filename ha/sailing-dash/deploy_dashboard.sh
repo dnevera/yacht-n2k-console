@@ -25,6 +25,16 @@
 # SAFETY
 #   - Takes a timestamped backup of the existing .storage file on the remote
 #     host before overwriting it (kept in $HOME on the remote host).
+#   - PRE-DEPLOY DIFF (2026-08-09): before overwriting anything, the script
+#     fetches the CURRENT live config from the remote host, converts it back
+#     to YAML, and diffs it against dashboard-sailing.yaml. The user has
+#     rearranged tiles directly in the HA UI several times before, and a
+#     blind overwrite would silently discard those hand-made changes if this
+#     repo file wasn't re-synced first. The diff is always printed; set
+#     REQUIRE_CLEAN_DIFF=1 to make the script ABORT instead of just warning
+#     when the live config differs from this file (i.e. force you to pull
+#     the live version into the repo — see README "Dashboard layout" — before
+#     pushing your own edits on top of it).
 #   - RESTARTS Home Assistant at the end. This is REQUIRED: HA loads the
 #     storage-mode Lovelace config into memory at startup and keeps serving
 #     that in-memory copy over the websocket (`lovelace/config`) — writing the
@@ -97,7 +107,47 @@ echo "Backing up remote ${REMOTE_PATH} -> ~/${BACKUP_NAME} ..."
 ${SSH} "sudo docker exec ${HA_CONTAINER} cat ${REMOTE_PATH}" > "/tmp/${BACKUP_NAME}" \
     || { echo "ERROR: could not read current dashboard config on remote — aborting." >&2; exit 1; }
 ${SCP} "/tmp/${BACKUP_NAME}" "${DEPLOY_HOST}:~/${BACKUP_NAME}"
+
+# ── 2b. Pre-deploy diff: live config (just backed up) vs our local YAML ─────
+# Catches manual UI edits the user made that this repo file hasn't picked up
+# yet, BEFORE we overwrite them (see "PRE-DEPLOY DIFF" note above).
+LIVE_AS_YAML="$(mktemp /tmp/lovelace_dashboard_sailing_live.XXXXXX.yaml)"
+trap 'rm -f "${TMP_JSON}" "${LIVE_AS_YAML}"' EXIT
+python3 - "/tmp/${BACKUP_NAME}" "${LIVE_AS_YAML}" <<'PYEOF'
+import json
+import sys
+
+import yaml
+
+backup_path, out_yaml_path = sys.argv[1:3]
+
+with open(backup_path) as f:
+    live_config = json.load(f)["data"]["config"]
+
+with open(out_yaml_path, "w") as f:
+    yaml.dump(live_config, f, sort_keys=False, allow_unicode=True, width=1000)
+PYEOF
+
+echo "--- pre-deploy diff (live HA config vs local dashboard-sailing.yaml) ---"
+if diff -u "${LIVE_AS_YAML}" <(python3 -c "
+import yaml
+with open('${YAML_FILE}') as f:
+    config = yaml.safe_load(f)
+yaml.dump(config, __import__('sys').stdout, sort_keys=False, allow_unicode=True, width=1000)
+"); then
+    echo "(no differences — local file already matches the live dashboard)"
+else
+    DIFF_STATUS=1
+fi
+echo "--------------------------------------------------------------------------"
 rm -f "/tmp/${BACKUP_NAME}"
+
+if [[ "${DIFF_STATUS:-0}" == "1" && "${REQUIRE_CLEAN_DIFF:-0}" == "1" ]]; then
+    echo "ERROR: live HA config differs from ${YAML_FILE} and REQUIRE_CLEAN_DIFF=1 —" >&2
+    echo "       aborting to avoid overwriting manual UI changes. Pull the live" >&2
+    echo "       config into this file first (see README 'Dashboard layout')." >&2
+    exit 1
+fi
 
 # ── 3. Upload the new config and copy it into the container ─────────────────
 echo "Uploading new dashboard config ..."

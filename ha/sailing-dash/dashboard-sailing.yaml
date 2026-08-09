@@ -88,6 +88,7 @@ views:
       apex_config:
         chart:
           height: 300
+          width: 600
         legend:
           position: bottom
         yaxis:
@@ -122,6 +123,239 @@ views:
         opacity: 0.9
         data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const
           rangeStart=Date.now()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=rangeStart);
+    # Wind DIRECTION — rewritten again 2026-08-09 v3, per explicit user
+    # request for a genuine windrose visualization instead of a chart/tile
+    # hack. Two parts now:
+    #  1. HISTORY — a real `custom:windrose-card`
+    #     (github.com/aukedejong/lovelace-windrose-card, v2.4.2), manually
+    #     downloaded to /config/www/windrose-card.js and registered as a
+    #     lovelace resource (NOT installed via HACS — this repo isn't the
+    #     same as the 3 cards in requirements-ha.txt, see README for the
+    #     manual-install steps used) — plots the real polar distribution of
+    #     measured wind direction/speed over the last 24h from actual
+    #     recorder history (sensor.wind_direction_history + the raw
+    #     Raymarine wind speed sensor), with a red arrow for the current
+    #     direction. This is what the card is designed for.
+    #  2. FORECAST — open-meteo's forecast_dir/forecast_wind are a
+    #     fixed-length ARRAY on one sensor's attributes, not per-hour
+    #     recorder history — windrose-card (like apexcharts-card/
+    #     compass-card) has no way to plot that. Kept as a compact row of
+    #     small (22px, not oversized) rotated `mdi:navigation` arrow tiles
+    #     below, one per forecast hour (+0h..+21h from now).
+    - type: heading
+      heading: Wind Direction — History (rose)
+      heading_style: subtitle
+    - type: custom:windrose-card
+      windspeed_bar_location: right
+      data_period:
+        period_back: -24h
+      wind_direction_entity:
+        entity: sensor.wind_direction_history
+      windspeed_entities:
+      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+        name: Speed
+      current_direction:
+        show_arrow: true
+      # Wind speed is already encoded in the rose itself (petal color by
+      # speed bucket via windspeed_entities + the scale bar on the right),
+      # this just adds an explicit numeric read-out of the current speed on
+      # top of that, so both the visual and the exact number are available.
+      corner_info:
+        top_right:
+          label: Wind Speed
+          unit: ' kn'
+          entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - type: heading
+      heading: Wind Direction Forecast (next 21h)
+      heading_style: subtitle
+    - type: grid
+      columns: 8
+      square: false
+      cards:
+      - type: tile
+        entity: sensor.wind_forecast_flat
+        name: '+0h'
+        icon: mdi:navigation
+        show_state: true
+        state_content: last_changed
+        card_mod:
+          style: |
+            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
+            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
+            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
+            {% set base = times.index(now_iso) if now_iso in times else 0 %}
+            {% set idx = base + 0 %}
+            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
+            ha-card {
+              --tile-icon-size: 22px;
+            }
+            ha-state-icon {
+              transform: rotate({{ deg }}deg);
+            }
+            .primary {
+              content: "{{ deg | round(0) }}°";
+            }
+      - type: tile
+        entity: sensor.wind_forecast_flat
+        name: '+3h'
+        icon: mdi:navigation
+        show_state: true
+        state_content: last_changed
+        card_mod:
+          style: |
+            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
+            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
+            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
+            {% set base = times.index(now_iso) if now_iso in times else 0 %}
+            {% set idx = base + 3 %}
+            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
+            ha-card {
+              --tile-icon-size: 22px;
+            }
+            ha-state-icon {
+              transform: rotate({{ deg }}deg);
+            }
+            .primary {
+              content: "{{ deg | round(0) }}°";
+            }
+      - type: tile
+        entity: sensor.wind_forecast_flat
+        name: '+6h'
+        icon: mdi:navigation
+        show_state: true
+        state_content: last_changed
+        card_mod:
+          style: |
+            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
+            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
+            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
+            {% set base = times.index(now_iso) if now_iso in times else 0 %}
+            {% set idx = base + 6 %}
+            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
+            ha-card {
+              --tile-icon-size: 22px;
+            }
+            ha-state-icon {
+              transform: rotate({{ deg }}deg);
+            }
+            .primary {
+              content: "{{ deg | round(0) }}°";
+            }
+      - type: tile
+        entity: sensor.wind_forecast_flat
+        name: '+9h'
+        icon: mdi:navigation
+        show_state: true
+        state_content: last_changed
+        card_mod:
+          style: |
+            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
+            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
+            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
+            {% set base = times.index(now_iso) if now_iso in times else 0 %}
+            {% set idx = base + 9 %}
+            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
+            ha-card {
+              --tile-icon-size: 22px;
+            }
+            ha-state-icon {
+              transform: rotate({{ deg }}deg);
+            }
+            .primary {
+              content: "{{ deg | round(0) }}°";
+            }
+      - type: tile
+        entity: sensor.wind_forecast_flat
+        name: '+12h'
+        icon: mdi:navigation
+        show_state: true
+        state_content: last_changed
+        card_mod:
+          style: |
+            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
+            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
+            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
+            {% set base = times.index(now_iso) if now_iso in times else 0 %}
+            {% set idx = base + 12 %}
+            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
+            ha-card {
+              --tile-icon-size: 22px;
+            }
+            ha-state-icon {
+              transform: rotate({{ deg }}deg);
+            }
+            .primary {
+              content: "{{ deg | round(0) }}°";
+            }
+      - type: tile
+        entity: sensor.wind_forecast_flat
+        name: '+15h'
+        icon: mdi:navigation
+        show_state: true
+        state_content: last_changed
+        card_mod:
+          style: |
+            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
+            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
+            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
+            {% set base = times.index(now_iso) if now_iso in times else 0 %}
+            {% set idx = base + 15 %}
+            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
+            ha-card {
+              --tile-icon-size: 22px;
+            }
+            ha-state-icon {
+              transform: rotate({{ deg }}deg);
+            }
+            .primary {
+              content: "{{ deg | round(0) }}°";
+            }
+      - type: tile
+        entity: sensor.wind_forecast_flat
+        name: '+18h'
+        icon: mdi:navigation
+        show_state: true
+        state_content: last_changed
+        card_mod:
+          style: |
+            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
+            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
+            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
+            {% set base = times.index(now_iso) if now_iso in times else 0 %}
+            {% set idx = base + 18 %}
+            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
+            ha-card {
+              --tile-icon-size: 22px;
+            }
+            ha-state-icon {
+              transform: rotate({{ deg }}deg);
+            }
+            .primary {
+              content: "{{ deg | round(0) }}°";
+            }
+      - type: tile
+        entity: sensor.wind_forecast_flat
+        name: '+21h'
+        icon: mdi:navigation
+        show_state: true
+        state_content: last_changed
+        card_mod:
+          style: |
+            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
+            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
+            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
+            {% set base = times.index(now_iso) if now_iso in times else 0 %}
+            {% set idx = base + 21 %}
+            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
+            ha-card {
+              --tile-icon-size: 22px;
+            }
+            ha-state-icon {
+              transform: rotate({{ deg }}deg);
+            }
+            .primary {
+              content: "{{ deg | round(0) }}°";
+            }
   - type: grid
     cards:
     - type: heading
@@ -236,6 +470,11 @@ views:
     - type: entity
       entity: sensor.boat_longitude
       name: Longitude
+  - type: grid
+    cards:
+    - type: heading
+      heading: New section
+    column_span: 3
   - type: grid
     cards:
     - type: heading

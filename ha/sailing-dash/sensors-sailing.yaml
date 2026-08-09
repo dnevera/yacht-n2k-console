@@ -33,7 +33,7 @@
 
 rest:
   - resource_template: >-
-      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m&wind_speed_unit=kn&forecast_days=2&timezone=UTC
+      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days=2&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wind Forecast REST'
@@ -48,6 +48,8 @@ template:
   - sensor:
       # Flattened open-meteo wind forecast — used by the apexcharts-card
       # "Wind History & Forecast" series (dashboard-sailing.yaml).
+      # forecast_dir (winddirection_10m, degrees) added 2026-08-09 to feed
+      # the new "Wind Direction — History & Forecast" chart.
       - name: Wind Forecast Flat
         unique_id: wind_forecast_flat
         unit_of_measurement: 'kts'
@@ -57,6 +59,20 @@ template:
           forecast_time: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['time'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
           forecast_wind: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['windspeed_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
           forecast_gust: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['windgusts_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
+          forecast_dir: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['winddirection_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
+
+      # Wind direction (0-360°, true wind angle from the mast sensor, NOT
+      # apparent-relative — same raw entity used by the Wind compass-card),
+      # exposed as its own numeric sensor purely so HA's recorder keeps a
+      # plain history for it that apexcharts-card can plot directly (the
+      # raw PGN 130306 entity already has history too, but this normalizes
+      # units/rounding for the chart below).
+      - name: Wind Direction History
+        unique_id: wind_direction_history
+        unit_of_measurement: '°'
+        icon: mdi:compass-rose
+        state: >
+          {{ states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle') | float(0) | round(0) }}
 
       # Re-derives barometric pressure from the N2K-published outboard
       # pressure sensor, converted to mmHg — used by the "Position" section
