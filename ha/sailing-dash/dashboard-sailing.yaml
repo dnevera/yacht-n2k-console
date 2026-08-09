@@ -2,20 +2,34 @@
 #
 # Extracted from the live HA instance's storage config on 2026-08-09:
 #   .storage/lovelace.dashboard_sailing  (dashboard url_path: dashboard-sailing)
-# Re-synced 2026-08-09 (later same day, twice) after the user rearranged
-# tiles via the HA UI directly — this file was regenerated from the live
-# storage config each time to pick up the newest layout: headings renamed
-# ("Wind & Forecast" / "Weather & Forecast", heading_style: title), the
-# Windy grid/pressure gauge/pressure trend-graph tile now share the second
-# section, and the COG compass moved again into the "Position" section.
+# Re-synced 2026-08-09 (multiple times same day) after the user rearranged
+# tiles via the HA UI directly. LATEST re-sync (2026-08-09, ~13:40): right
+# after a deploy from this file, the user manually replaced the wind
+# `custom:compass-card` at the top of "Wind & Forecast" with the
+# `custom:windrose-card` (which used to live in its own separate "Wind
+# Direction — History (rose)" subsection further down) and deleted that
+# now-redundant subsection/heading — the wind compass card is GONE, there is
+# now a single `custom:windrose-card` at the top of the section instead. This
+# file was pulled from `.storage` again to pick that up — DO NOT reintroduce
+# the wind `custom:compass-card` or the separate rose subsection on the next
+# edit without checking the live config first (see rule below).
+#
+# ⚠️ RULE (added 2026-08-09 after this got violated): before editing this file
+# and running deploy_dashboard.sh, ALWAYS pull+diff the live `.storage` config
+# first (`deploy_dashboard.sh` does this automatically via its pre-deploy
+# diff, but do it manually too when investigating) — the user edits this
+# dashboard directly in the HA UI often, and a blind edit-then-deploy will
+# silently discard those changes.
 #
 # This is the single source of truth going forward — edit THIS file, then
 # redeploy with deploy_dashboard.sh (round-trips it back into .storage on the
 # target host, since HA storage-mode dashboards are not editable as plain
 # files on disk without re-registering them).
 #
-# Requires HACS custom cards (already installed on bumblebee, not managed here):
-#   - custom:compass-card    (lovelace-compass-card)
+# Requires HACS/manual custom cards (already installed on bumblebee, not
+# managed here):
+#   - custom:compass-card    (lovelace-compass-card, still used for COG in Position)
+#   - custom:windrose-card   (lovelace-windrose-card, manually installed, see README)
 #   - custom:apexcharts-card (lovelace-card-templater / apexcharts-card)
 #   - custom:card-mod        (lovelace-card-mod, used by the Windy tap overlay)
 #
@@ -42,40 +56,28 @@ views:
     - type: heading
       heading: Wind & Forecast
       heading_style: title
-    - type: custom:compass-card
-      header:
-        title:
-          value: Wind
-        icon:
-          value: mdi:weather-windy
-      compass:
-        circle:
-          color: '#37474f'
-        ticks:
-          show: true
-          color: '#90a4ae'
-          radius: 52
-        north:
-          show: true
-        east:
-          show: true
-        south:
-          show: true
-        west:
-          show: true
-      indicator_sensors:
-      - sensor: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle
-        indicator:
-          image: arrow_inward
-          color: '#4fc3f7'
-      value_sensors:
-      - sensor: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - type: custom:windrose-card
+      windspeed_bar_location: right
+      data_period:
+        period_back: -24h
+      wind_direction_entity:
+        entity: sensor.wind_direction_history
+      windspeed_entities:
+      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+        name: Speed
+      current_direction:
+        show_arrow: true
+      corner_info:
+        top_right:
+          label: Wind Speed
+          unit: ' kn'
+          entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
     - type: custom:apexcharts-card
       cache: false
-      graph_span: 30h
+      graph_span: 26h
       span:
-        start: hour
-        offset: -6h
+        start: minute
+        offset: -2h
       now:
         show: true
         label: Now
@@ -111,8 +113,7 @@ views:
         stroke_width: 2
         stroke_dash: 5
         unit: kts
-        data_generator: const times=entity.attributes.forecast_time||[];const speeds=entity.attributes.forecast_wind||[];const
-          rangeStart=Date.now()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(speeds[i]*10)/10]).filter(p=>p[0]>=rangeStart);
+        data_generator: const times=entity.attributes.forecast_time||[];const speeds=entity.attributes.forecast_wind||[];const rangeStart=Date.now()-2*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(speeds[i]*10)/10]).filter(p=>p[0]>=rangeStart);
       - entity: sensor.wind_forecast_flat
         name: Gusts (kts)
         type: line
@@ -121,241 +122,7 @@ views:
         stroke_dash: 4
         unit: kts
         opacity: 0.9
-        data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const
-          rangeStart=Date.now()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=rangeStart);
-    # Wind DIRECTION — rewritten again 2026-08-09 v3, per explicit user
-    # request for a genuine windrose visualization instead of a chart/tile
-    # hack. Two parts now:
-    #  1. HISTORY — a real `custom:windrose-card`
-    #     (github.com/aukedejong/lovelace-windrose-card, v2.4.2), manually
-    #     downloaded to /config/www/windrose-card.js and registered as a
-    #     lovelace resource (NOT installed via HACS — this repo isn't the
-    #     same as the 3 cards in requirements-ha.txt, see README for the
-    #     manual-install steps used) — plots the real polar distribution of
-    #     measured wind direction/speed over the last 24h from actual
-    #     recorder history (sensor.wind_direction_history + the raw
-    #     Raymarine wind speed sensor), with a red arrow for the current
-    #     direction. This is what the card is designed for.
-    #  2. FORECAST — open-meteo's forecast_dir/forecast_wind are a
-    #     fixed-length ARRAY on one sensor's attributes, not per-hour
-    #     recorder history — windrose-card (like apexcharts-card/
-    #     compass-card) has no way to plot that. Kept as a compact row of
-    #     small (22px, not oversized) rotated `mdi:navigation` arrow tiles
-    #     below, one per forecast hour (+0h..+21h from now).
-    - type: heading
-      heading: Wind Direction — History (rose)
-      heading_style: subtitle
-    - type: custom:windrose-card
-      windspeed_bar_location: right
-      data_period:
-        period_back: -24h
-      wind_direction_entity:
-        entity: sensor.wind_direction_history
-      windspeed_entities:
-      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
-        name: Speed
-      current_direction:
-        show_arrow: true
-      # Wind speed is already encoded in the rose itself (petal color by
-      # speed bucket via windspeed_entities + the scale bar on the right),
-      # this just adds an explicit numeric read-out of the current speed on
-      # top of that, so both the visual and the exact number are available.
-      corner_info:
-        top_right:
-          label: Wind Speed
-          unit: ' kn'
-          entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
-    - type: heading
-      heading: Wind Direction Forecast (next 21h)
-      heading_style: subtitle
-    - type: grid
-      columns: 8
-      square: false
-      cards:
-      - type: tile
-        entity: sensor.wind_forecast_flat
-        name: '+0h'
-        icon: mdi:navigation
-        show_state: true
-        state_content: last_changed
-        card_mod:
-          style: |
-            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
-            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
-            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
-            {% set base = times.index(now_iso) if now_iso in times else 0 %}
-            {% set idx = base + 0 %}
-            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
-            ha-card {
-              --tile-icon-size: 22px;
-            }
-            ha-state-icon {
-              transform: rotate({{ deg }}deg);
-            }
-            .primary {
-              content: "{{ deg | round(0) }}°";
-            }
-      - type: tile
-        entity: sensor.wind_forecast_flat
-        name: '+3h'
-        icon: mdi:navigation
-        show_state: true
-        state_content: last_changed
-        card_mod:
-          style: |
-            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
-            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
-            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
-            {% set base = times.index(now_iso) if now_iso in times else 0 %}
-            {% set idx = base + 3 %}
-            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
-            ha-card {
-              --tile-icon-size: 22px;
-            }
-            ha-state-icon {
-              transform: rotate({{ deg }}deg);
-            }
-            .primary {
-              content: "{{ deg | round(0) }}°";
-            }
-      - type: tile
-        entity: sensor.wind_forecast_flat
-        name: '+6h'
-        icon: mdi:navigation
-        show_state: true
-        state_content: last_changed
-        card_mod:
-          style: |
-            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
-            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
-            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
-            {% set base = times.index(now_iso) if now_iso in times else 0 %}
-            {% set idx = base + 6 %}
-            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
-            ha-card {
-              --tile-icon-size: 22px;
-            }
-            ha-state-icon {
-              transform: rotate({{ deg }}deg);
-            }
-            .primary {
-              content: "{{ deg | round(0) }}°";
-            }
-      - type: tile
-        entity: sensor.wind_forecast_flat
-        name: '+9h'
-        icon: mdi:navigation
-        show_state: true
-        state_content: last_changed
-        card_mod:
-          style: |
-            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
-            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
-            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
-            {% set base = times.index(now_iso) if now_iso in times else 0 %}
-            {% set idx = base + 9 %}
-            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
-            ha-card {
-              --tile-icon-size: 22px;
-            }
-            ha-state-icon {
-              transform: rotate({{ deg }}deg);
-            }
-            .primary {
-              content: "{{ deg | round(0) }}°";
-            }
-      - type: tile
-        entity: sensor.wind_forecast_flat
-        name: '+12h'
-        icon: mdi:navigation
-        show_state: true
-        state_content: last_changed
-        card_mod:
-          style: |
-            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
-            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
-            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
-            {% set base = times.index(now_iso) if now_iso in times else 0 %}
-            {% set idx = base + 12 %}
-            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
-            ha-card {
-              --tile-icon-size: 22px;
-            }
-            ha-state-icon {
-              transform: rotate({{ deg }}deg);
-            }
-            .primary {
-              content: "{{ deg | round(0) }}°";
-            }
-      - type: tile
-        entity: sensor.wind_forecast_flat
-        name: '+15h'
-        icon: mdi:navigation
-        show_state: true
-        state_content: last_changed
-        card_mod:
-          style: |
-            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
-            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
-            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
-            {% set base = times.index(now_iso) if now_iso in times else 0 %}
-            {% set idx = base + 15 %}
-            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
-            ha-card {
-              --tile-icon-size: 22px;
-            }
-            ha-state-icon {
-              transform: rotate({{ deg }}deg);
-            }
-            .primary {
-              content: "{{ deg | round(0) }}°";
-            }
-      - type: tile
-        entity: sensor.wind_forecast_flat
-        name: '+18h'
-        icon: mdi:navigation
-        show_state: true
-        state_content: last_changed
-        card_mod:
-          style: |
-            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
-            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
-            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
-            {% set base = times.index(now_iso) if now_iso in times else 0 %}
-            {% set idx = base + 18 %}
-            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
-            ha-card {
-              --tile-icon-size: 22px;
-            }
-            ha-state-icon {
-              transform: rotate({{ deg }}deg);
-            }
-            .primary {
-              content: "{{ deg | round(0) }}°";
-            }
-      - type: tile
-        entity: sensor.wind_forecast_flat
-        name: '+21h'
-        icon: mdi:navigation
-        show_state: true
-        state_content: last_changed
-        card_mod:
-          style: |
-            {% set times = state_attr('sensor.wind_forecast_flat','forecast_time') or [] %}
-            {% set dirs = state_attr('sensor.wind_forecast_flat','forecast_dir') or [] %}
-            {% set now_iso = utcnow().strftime('%Y-%m-%dT%H:00') %}
-            {% set base = times.index(now_iso) if now_iso in times else 0 %}
-            {% set idx = base + 21 %}
-            {% set deg = dirs[idx] if idx < dirs|length else (dirs[-1] if dirs else 0) %}
-            ha-card {
-              --tile-icon-size: 22px;
-            }
-            ha-state-icon {
-              transform: rotate({{ deg }}deg);
-            }
-            .primary {
-              content: "{{ deg | round(0) }}°";
-            }
+        data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const rangeStart=Date.now()-2*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=rangeStart);
   - type: grid
     cards:
     - type: heading
@@ -363,20 +130,8 @@ views:
       heading_style: title
     - type: grid
       columns: 1
-      # No visible "Open Windy" button anymore — the whole iframe area below
-      # is tappable/clickable instead. Achieved by stacking the iframe and a
-      # fully transparent button card in the same CSS grid cell (card-mod)
-      # so a tap/click anywhere on the widget triggers the button's
-      # tap_action, while the Windy embed still renders visually underneath.
       card_mod:
-        style: |
-          .card {
-            display: grid;
-          }
-          .card > * {
-            grid-column: 1;
-            grid-row: 1;
-          }
+        style: ".card {\n  display: grid;\n}\n.card > * {\n  grid-column: 1;\n  grid-row: 1;\n}\n"
       cards:
       - type: iframe
         url: https://embed.windy.com/embed2.html?lat=42.43&lon=18.60&detailLat=42.43&detailLon=18.60&width=650&height=450&zoom=8&level=surface&overlay=wind&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=true&metricWind=kt&metricTemp=%C2%B0C&radarRange=-1
@@ -386,24 +141,9 @@ views:
         show_icon: false
         tap_action:
           action: url
-          # windy.com is registered by the official Windy app as a Universal
-          # Link (iOS) / App Link (Android): on a phone/tablet with the app
-          # installed, tapping this opens the Windy app directly; on desktop,
-          # or if the app isn't installed, the OS/browser falls back to
-          # opening this URL in the regular web browser. No extra logic is
-          # needed on the HA side — this is standard OS-level link handling.
           url_path: https://www.windy.com/42.43/18.60?wind,42.43,18.60,i:pressure
         card_mod:
-          style: |
-            ha-card {
-              position: absolute;
-              inset: 0;
-              margin: 0;
-              background: transparent;
-              box-shadow: none;
-              border: none;
-              cursor: pointer;
-            }
+          style: "ha-card {\n  position: absolute;\n  inset: 0;\n  margin: 0;\n  background: transparent;\n  box-shadow: none;\n  border: none;\n  cursor: pointer;\n}\n"
       grid_options:
         rows: 6
         columns: 12
@@ -473,11 +213,6 @@ views:
   - type: grid
     cards:
     - type: heading
-      heading: New section
-    column_span: 3
-  - type: grid
-    cards:
-    - type: heading
       heading: Speed & Depth
     - type: gauge
       name: SOG (kn)
@@ -517,7 +252,3 @@ views:
         red: 0
         yellow: 3
         green: 5
-  - type: grid
-    cards:
-    - type: heading
-      heading: New section

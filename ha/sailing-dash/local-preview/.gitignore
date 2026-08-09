@@ -1,0 +1,5 @@
+# 3rd-party card bundles - re-download via ./fetch-vendor.sh, don't commit
+vendor/*.js
+# headless run output
+preview-output.png
+node_modules/
