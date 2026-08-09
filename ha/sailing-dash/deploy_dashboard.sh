@@ -25,8 +25,16 @@
 # SAFETY
 #   - Takes a timestamped backup of the existing .storage file on the remote
 #     host before overwriting it (kept in $HOME on the remote host).
-#   - Restarts nothing — HA picks up storage-mode dashboard changes on next
-#     browser reload of the dashboard, no HA restart required.
+#   - RESTARTS Home Assistant at the end. This is REQUIRED: HA loads the
+#     storage-mode Lovelace config into memory at startup and keeps serving
+#     that in-memory copy over the websocket (`lovelace/config`) — writing the
+#     .storage file behind its back has NO effect until HA reloads it (and HA
+#     may even overwrite our file from memory on the next UI edit/shutdown).
+#     A browser hard-refresh does not help. Verified 2026-08-09: after a
+#     docker-cp-only deploy the websocket still returned the previous config;
+#     only after `docker restart homeassistant` did it return the new one.
+#     Set SKIP_RESTART=1 to opt out (e.g. when chaining with deploy_sensors.sh,
+#     which restarts HA on its own).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -96,6 +104,14 @@ echo "Uploading new dashboard config ..."
 ${SCP} "${TMP_JSON}" "${DEPLOY_HOST}:/tmp/${STORAGE_KEY}.json"
 ${SSH} "sudo docker cp /tmp/${STORAGE_KEY}.json ${HA_CONTAINER}:${REMOTE_PATH} \
     && rm -f /tmp/${STORAGE_KEY}.json"
+
+# ── 4. Restart HA so it reloads the dashboard config from .storage ──────────
+if [[ "${SKIP_RESTART:-0}" == "1" ]]; then
+    echo "SKIP_RESTART=1 — not restarting ${HA_CONTAINER} (config will NOT be live until HA reloads it)."
+else
+    echo "Restarting ${HA_CONTAINER} so it reloads the dashboard from .storage ..."
+    ${SSH} "sudo docker restart ${HA_CONTAINER}"
+fi
 
 echo "Done. Reload http://<host>:8123/dashboard-sailing/ in the browser to see changes."
 echo "Remote backup kept at ~/${BACKUP_NAME} on ${DEPLOY_HOST} (restore via: sudo docker cp ~/${BACKUP_NAME} ${HA_CONTAINER}:${REMOTE_PATH})"

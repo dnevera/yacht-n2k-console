@@ -21,9 +21,19 @@
 # then restart Home Assistant core (Settings -> System -> Restart) — unlike
 # the dashboard JSON itself, sensor/service config changes DO require a
 # full HA restart to take effect (they are not storage-mode/hot-reloadable).
+#
+# NOTE on location: HA also ships a native "Open-Meteo" integration
+# (config-flow based), but it was evaluated (2026-08-09) and rejected for
+# this purpose — its hourly forecast only exposes condition/precipitation/
+# temperature, NOT wind_speed/wind_gust (wind is only available as a daily
+# max or in "current"), so it cannot feed this chart. The REST resource
+# below is templated on the boat's own live N2K GPS position (the same
+# sensors device_tracker.nevera/boat_latitude/boat_longitude use), so the
+# forecast follows the boat instead of a fixed anchorage.
 
 rest:
-  - resource: 'https://api.open-meteo.com/v1/forecast?latitude=42.43&longitude=18.60&hourly=windspeed_10m,windgusts_10m&wind_speed_unit=kn&forecast_days=2&timezone=UTC'
+  - resource_template: >-
+      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m&wind_speed_unit=kn&forecast_days=2&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wind Forecast REST'
@@ -78,12 +88,13 @@ template:
           {% set d = v | abs | int %}{% set m = ((v | abs) - d) * 60 %}
           {{ d }}°{{ '%.2f' | format(m) }}'{{ 'E' if v >= 0 else 'W' }}
 
-  # NOTE: the dashboard's map card uses device_tracker.iphone_17_promax_nevera,
-  # which comes from the HA Companion App integration (phone GPS) and is NOT
-  # defined here — there is nothing to deploy for it, it just needs the
-  # Companion App installed/logged in on that phone. A separate boat-GPS
-  # device_tracker (derived from the N2K position sensors above) also exists
-  # on the host but is not currently used by this dashboard:
+  # The dashboard's map card uses this boat-GPS device_tracker (entity_id
+  # device_tracker.nevera), derived from the N2K position sensors above —
+  # NOT device_tracker.iphone_17_promax_nevera (HA Companion App / phone GPS),
+  # which tracks the crew member's phone rather than the boat and is
+  # therefore not accurate when the phone isn't aboard or is off/out of
+  # signal. device_tracker.iphone_17_promax_nevera still exists as an
+  # optional entity (Companion App), just not used by this dashboard.
   - device_tracker:
       - name: Nevera
         unique_id: nevera_boat_gps

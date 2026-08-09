@@ -439,6 +439,74 @@ mfr contains 'gobius'         → 'GOBIUS'
 
 ---
 
+## 🖥️ Sailing Dashboard (HA, `ha/sailing-dash/`)
+
+Source-controlled копия storage-mode Lovelace-дашборда "Sailing"
+(`http://bumblebee.local:8123/dashboard-sailing/`). Полная документация —
+`ha/sailing-dash/README.md`, здесь только сводка для быстрой навигации.
+
+### Файлы
+- `dashboard-sailing.yaml` — `views:` конфиг (Lovelace "sections"), source of truth.
+- `sensors-sailing.yaml` — `rest:`/`template:`/`device_tracker:` энтити, которые
+  НЕ публикуются `ydnu02_tcp_gateway` (open-meteo forecast, barometer_mmhg,
+  boat_latitude/longitude, device_tracker.nevera).
+- `deploy_dashboard.sh` / `deploy_sensors.sh` — идемпотентный деплой (round-trip
+  YAML → `.storage/lovelace.dashboard_sailing` JSON; merge по `unique_id` в
+  `configuration.yaml`). **Оба перезапускают HA.**
+- `lovelace-resources.yaml` — HACS-карточки: `card-mod`, `compass-card`, `apexcharts-card`.
+
+### ⚠️ Storage-mode дашборд НЕ подхватывается без рестарта HA
+HA читает `.storage/lovelace.dashboard_sailing` один раз при старте и дальше
+отдаёт фронтенду копию из памяти (websocket `lovelace/config`). `docker cp`
+в этот файл **не влияет на то, что видит браузер**, пока HA не перезапущен
+(hard-refresh не помогает, HA может ещё и перезаписать файл из памяти).
+Из-за этого фикс `rangeStart` 2026-08-09 сначала «не сработал». Теперь
+`deploy_dashboard.sh` делает `docker restart homeassistant` (отключается
+через `SKIP_RESTART=1`). Проверка того, что реально отдаёт HA:
+websocket `/api/websocket` → auth (HA_TOKEN из `.env`) →
+`{"type":"lovelace/config","url_path":"dashboard-sailing"}`.
+
+### Позиция на карте — GPS лодки, НЕ телефон
+Карта использует `device_tracker.nevera` (`template: device_tracker` в
+`sensors-sailing.yaml`), производный от N2K-позиции (PGN 129025/129029,
+Raymarine display) — то есть **собственный GPS лодки**.
+`device_tracker.iphone_17_promax_nevera` (HA Companion App, GPS телефона)
+существует, но **не используется** в карточке — трекает того, у кого телефон,
+а не лодку (баг был исправлен 2026-08-09: карта раньше указывала на телефон).
+
+### Wind History & Forecast — реальный баг найден и исправлен (2026-08-09)
+Цепочка: `api.open-meteo.com` (`rest: resource_template`, теперь templated
+по live GPS лодки, не статические координаты) → `sensor.wind_forecast_rest`
+→ `sensor.wind_forecast_flat` (`template:`, атрибуты `forecast_time`/
+`forecast_wind`/`forecast_gust`) → `apexcharts-card` `data_generator` на
+дашборде.
+
+**Реальная причина** (не кэш браузера, как предполагалось изначально):
+обе `data_generator`-строки объявляли `const start = ...`, а
+apexcharts-card вызывает `data_generator` как
+`new Function('entity','start','end','hass','moment', code)` — `start`
+уже параметр функции. Повторное `const start` — это `SyntaxError`
+(`Identifier 'start' has already been declared`), бросается синхронно на
+КАЖДОМ вычислении → forecast/gust линии никогда не рисовались, независимо
+от кэша/hard-refresh. Подтверждено воспроизведением throw через
+`new Function(...)` в Node (вне HA/браузера) на реальной строке из
+дашборда. Фикс — переименовать локальную переменную в `rangeStart`.
+
+Проверено и **не** было причиной (аудит до нахождения реального бага):
+доступность open-meteo API, наполненность атрибутов `sensor.wind_forecast_flat`
+(48 точек, свежий `last_updated`), установка/регистрация `apexcharts-card.js`,
+идентичность deployed `.storage` конфига и репозиторного YAML,
+`fill_raw: 'null'` (дефолт карты). `cache: false` на карте добавлен как
+доп. защита от `localStorage`-кэша apexcharts-card (hard-refresh его не
+чистит), но настоящей причиной был именно баг с `start`.
+
+HA-нативная интеграция "Open-Meteo" (config-flow) была опробована как
+альтернатива, но её `hourly`-forecast не содержит `wind_speed`/`wind_gust`
+(только `condition`/`precipitation`/`temperature`, ветер — только daily max
+или current) → не подходит для этого графика, интеграция удалена.
+
+---
+
 ## ⚠️ Правила
 
 1. **Никогда не трогать тесты** без явного подтверждения бага в тесте (из AGENTS.md)

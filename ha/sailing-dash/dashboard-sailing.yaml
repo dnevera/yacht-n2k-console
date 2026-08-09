@@ -13,9 +13,12 @@
 #   - custom:apexcharts-card (lovelace-card-templater / apexcharts-card)
 #
 # Entities referenced (all published by ydnu02-tcp-gateway via NMEA2000 -> HA,
-# except device_tracker.iphone_17_promax_nevera which comes from the HA
-# Companion App integration, and sensor.wind_forecast_flat which comes from an
-# external forecast integration, attrs: forecast_time/forecast_wind/forecast_gust):
+# except device_tracker.nevera, which is a `template: device_tracker` derived
+# from the boat's own N2K GPS position (PGN 129025/129029, Raymarine display),
+# NOT the phone's GPS (device_tracker.iphone_17_promax_nevera is available but
+# intentionally not used here — it tracks the crew member's phone, not the
+# boat), and sensor.wind_forecast_flat which comes from an external forecast
+# integration, attrs: forecast_time/forecast_wind/forecast_gust):
 #   sensor.cog_sog_rapid_update_raymarine_display_*_cog / _sog   (PGN 129026)
 #   sensor.wind_data_raymarine_20_*_wind_angle / _wind_speed     (PGN 130306)
 #   sensor.speed_raymarine_20_*_speed_water_referenced           (PGN 128259)
@@ -54,6 +57,7 @@ views:
     - type: heading
       heading: Wind History & Forecast
     - type: custom:apexcharts-card
+      cache: false
       graph_span: 30h
       span:
         start: hour
@@ -93,7 +97,7 @@ views:
         stroke_dash: 5
         unit: kts
         data_generator: const times=entity.attributes.forecast_time||[];const speeds=entity.attributes.forecast_wind||[];const
-          start=new Date()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(speeds[i]*10)/10]).filter(p=>p[0]>=start);
+          rangeStart=Date.now()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(speeds[i]*10)/10]).filter(p=>p[0]>=rangeStart);
       - entity: sensor.wind_forecast_flat
         name: Gusts (kts)
         type: line
@@ -103,7 +107,7 @@ views:
         unit: kts
         opacity: 0.9
         data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const
-          start=new Date()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=start);
+          rangeStart=Date.now()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=rangeStart);
     - type: button
       name: Open Windy Map
       icon: mdi:weather-windy
@@ -116,7 +120,7 @@ views:
       heading: Position
     - type: map
       entities:
-      - entity: device_tracker.iphone_17_promax_nevera
+      - entity: device_tracker.nevera
       default_zoom: 14
       aspect_ratio: 16x9
     - type: entity
