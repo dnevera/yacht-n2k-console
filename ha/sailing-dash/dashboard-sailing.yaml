@@ -224,7 +224,7 @@ views:
           image: arrow_inward
           color: '#ff7043'
       value_sensors:
-      - sensor: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog
+      - sensor: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog
     - type: map
       entities:
       - entity: device_tracker.nevera
