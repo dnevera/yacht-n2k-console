@@ -1,0 +1,183 @@
+# Sailing dashboard (Lovelace "sections" view) for Home Assistant.
+#
+# Extracted from the live HA instance's storage config on 2026-08-09:
+#   .storage/lovelace.dashboard_sailing  (dashboard url_path: dashboard-sailing)
+#
+# This is the single source of truth going forward — edit THIS file, then
+# redeploy with deploy_dashboard.sh (round-trips it back into .storage on the
+# target host, since HA storage-mode dashboards are not editable as plain
+# files on disk without re-registering them).
+#
+# Requires HACS custom cards (already installed on bumblebee, not managed here):
+#   - custom:compass-card    (lovelace-compass-card)
+#   - custom:apexcharts-card (lovelace-card-templater / apexcharts-card)
+#
+# Entities referenced (all published by ydnu02-tcp-gateway via NMEA2000 -> HA,
+# except device_tracker.iphone_17_promax_nevera which comes from the HA
+# Companion App integration, and sensor.wind_forecast_flat which comes from an
+# external forecast integration, attrs: forecast_time/forecast_wind/forecast_gust):
+#   sensor.cog_sog_rapid_update_raymarine_display_*_cog / _sog   (PGN 129026)
+#   sensor.wind_data_raymarine_20_*_wind_angle / _wind_speed     (PGN 130306)
+#   sensor.speed_raymarine_20_*_speed_water_referenced           (PGN 128259)
+#   sensor.water_depth_raymarine_20_*_depth                      (PGN 128267)
+#   sensor.boat_latitude / sensor.boat_longitude / sensor.barometer_mmhg
+#
+views:
+- type: sections
+  title: Sailing
+  icon: mdi:sail-boat
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Wind & Heading
+    - type: custom:compass-card
+      header:
+        title:
+          value: COG
+      indicator_sensors:
+      - sensor: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog
+        indicator:
+          image: arrow_inward
+    - type: custom:compass-card
+      header:
+        title:
+          value: Wind
+      indicator_sensors:
+      - sensor: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle
+        indicator:
+          image: arrow_inward
+      value_sensors:
+      - sensor: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+  - type: grid
+    cards:
+    - type: heading
+      heading: Wind History & Forecast
+    - type: custom:apexcharts-card
+      graph_span: 30h
+      span:
+        start: hour
+        offset: -6h
+      now:
+        show: true
+        label: Now
+        color: '#ffffff'
+      header:
+        show: true
+        title: Wind — History & Forecast
+        show_states: true
+        colorize_states: true
+      apex_config:
+        chart:
+          height: 300
+        legend:
+          position: bottom
+        yaxis:
+          min: 0
+          decimalsInFloat: 1
+      series:
+      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+        name: Measured (kts)
+        type: area
+        color: '#00bcd4'
+        stroke_width: 2
+        fill_raw: 'null'
+        unit: kts
+        show:
+          extremas: true
+      - entity: sensor.wind_forecast_flat
+        name: Forecast (kts)
+        type: line
+        color: '#4fc3f7'
+        stroke_width: 2
+        stroke_dash: 5
+        unit: kts
+        data_generator: const times=entity.attributes.forecast_time||[];const speeds=entity.attributes.forecast_wind||[];const
+          start=new Date()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(speeds[i]*10)/10]).filter(p=>p[0]>=start);
+      - entity: sensor.wind_forecast_flat
+        name: Gusts (kts)
+        type: line
+        color: '#ff7043'
+        stroke_width: 1
+        stroke_dash: 4
+        unit: kts
+        opacity: 0.9
+        data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const
+          start=new Date()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=start);
+    - type: button
+      name: Open Windy Map
+      icon: mdi:weather-windy
+      tap_action:
+        action: url
+        url_path: https://www.windy.com/42.43/18.60?wind,42.43,18.60,i:pressure
+  - type: grid
+    cards:
+    - type: heading
+      heading: Position
+    - type: map
+      entities:
+      - entity: device_tracker.iphone_17_promax_nevera
+      default_zoom: 14
+      aspect_ratio: 16x9
+    - type: entity
+      entity: sensor.boat_latitude
+      name: Latitude
+    - type: entity
+      entity: sensor.boat_longitude
+      name: Longitude
+    - type: gauge
+      name: Pressure (mmHg)
+      entity: sensor.barometer_mmhg
+      min: 720
+      max: 790
+      needle: true
+      severity:
+        red: 720
+        yellow: 745
+        green: 760
+  - type: grid
+    cards:
+    - type: heading
+      heading: Speed & Depth
+    - type: gauge
+      name: SOG (kn)
+      entity: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog
+      min: 0
+      max: 12
+      needle: true
+      severity:
+        green: 0
+        yellow: 8
+        red: 10
+  - type: grid
+    cards:
+    - type: heading
+      heading: New section
+    - type: gauge
+      name: STW (kn)
+      entity: sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced
+      min: 0
+      max: 12
+      needle: true
+      severity:
+        green: 0
+        yellow: 8
+        red: 10
+  - type: grid
+    cards:
+    - type: heading
+      heading: New section
+    - type: gauge
+      name: Depth (m)
+      entity: sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth
+      min: 0
+      max: 30
+      needle: true
+      severity:
+        red: 0
+        yellow: 3
+        green: 5
+  - type: grid
+    cards:
+    - type: heading
+      heading: New section

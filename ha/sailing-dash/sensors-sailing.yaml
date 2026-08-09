@@ -1,0 +1,94 @@
+# Sensor/service definitions the "Sailing" dashboard depends on, beyond the
+# raw NMEA2000 entities that ydnu02_tcp_gateway publishes on its own.
+#
+# These snippets live in the live HA instance's /config/configuration.yaml
+# (top-level `rest:` / `template:` keys — HA list-merges every `!include`d
+# file plus the main file under the same key, so this file's blocks can be
+# merged in as their own included files, see deploy_dashboard.sh --sensors).
+# Extracted from bumblebee.local on 2026-08-09.
+#
+# Data flow for the "Wind History & Forecast" chart on the dashboard:
+#   api.open-meteo.com (REST, no API key needed)
+#     -> sensor.wind_forecast_rest      (rest: platform, polls every 15 min)
+#     -> sensor.wind_forecast_flat      (template: platform, flattens the
+#                                         `hourly` json_attributes into the
+#                                         forecast_time/forecast_wind/
+#                                         forecast_gust arrays apexcharts-card
+#                                         reads via data_generator)
+#
+# Apply: merge the `rest:`/`template:` blocks below into the host's
+# configuration.yaml (or `!include` them as separate files under those keys),
+# then restart Home Assistant core (Settings -> System -> Restart) — unlike
+# the dashboard JSON itself, sensor/service config changes DO require a
+# full HA restart to take effect (they are not storage-mode/hot-reloadable).
+
+rest:
+  - resource: 'https://api.open-meteo.com/v1/forecast?latitude=42.43&longitude=18.60&hourly=windspeed_10m,windgusts_10m&wind_speed_unit=kn&forecast_days=2&timezone=UTC'
+    scan_interval: 900
+    sensor:
+      - name: 'Wind Forecast REST'
+        unique_id: wind_forecast_rest
+        icon: mdi:weather-windy
+        value_template: "{{ value_json.hourly.windspeed_10m | list | first | round(1) }}"
+        unit_of_measurement: 'kts'
+        json_attributes:
+          - hourly
+
+template:
+  - sensor:
+      # Flattened open-meteo wind forecast — used by the apexcharts-card
+      # "Wind History & Forecast" series (dashboard-sailing.yaml).
+      - name: Wind Forecast Flat
+        unique_id: wind_forecast_flat
+        unit_of_measurement: 'kts'
+        icon: mdi:weather-windy
+        state: "{{ states('sensor.wind_forecast_rest') }}"
+        attributes:
+          forecast_time: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['time'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
+          forecast_wind: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['windspeed_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
+          forecast_gust: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['windgusts_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
+
+      # Re-derives barometric pressure from the N2K-published outboard
+      # pressure sensor, converted to mmHg — used by the "Position" section
+      # gauge. Source sensor reports either hPa (>200) or kPa (<=200)
+      # depending on firmware/units, hence the branch.
+      - name: Barometer mmHg
+        unique_id: barometer_mmhg
+        unit_of_measurement: mmHg
+        device_class: pressure
+        state: >
+          {% set p = states('sensor.outboard_pressure') | float(0) %}
+          {{ (p * 0.750062) | round(1) if p > 200 else (p * 7.50062) | round(1) }}
+
+      # Human-readable degrees/minutes lat/lon — reformats the raw N2K
+      # decimal-degree position sensors for the "Position" section entities.
+      - name: Boat Latitude
+        unique_id: boat_latitude
+        icon: mdi:latitude
+        state: >
+          {% set v = states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(0) %}
+          {% set d = v | abs | int %}{% set m = ((v | abs) - d) * 60 %}
+          {{ d }}°{{ '%.2f' | format(m) }}'{{ 'N' if v >= 0 else 'S' }}
+
+      - name: Boat Longitude
+        unique_id: boat_longitude
+        icon: mdi:longitude
+        state: >
+          {% set v = states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(0) %}
+          {% set d = v | abs | int %}{% set m = ((v | abs) - d) * 60 %}
+          {{ d }}°{{ '%.2f' | format(m) }}'{{ 'E' if v >= 0 else 'W' }}
+
+  # NOTE: the dashboard's map card uses device_tracker.iphone_17_promax_nevera,
+  # which comes from the HA Companion App integration (phone GPS) and is NOT
+  # defined here — there is nothing to deploy for it, it just needs the
+  # Companion App installed/logged in on that phone. A separate boat-GPS
+  # device_tracker (derived from the N2K position sensors above) also exists
+  # on the host but is not currently used by this dashboard:
+  - device_tracker:
+      - name: Nevera
+        unique_id: nevera_boat_gps
+        latitude: >
+          {{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(0) }}
+        longitude: >
+          {{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(0) }}
+        icon: mdi:sail-boat

@@ -1,0 +1,24 @@
+# Frontend resources (HACS-installed Lovelace custom cards) required for
+# dashboard-sailing.yaml to render. Extracted from
+# .storage/lovelace_resources on bumblebee.local on 2026-08-09.
+#
+# These are managed by HACS (Settings -> Devices & Services -> HACS), not by
+# hand-editing this file on the target host — this file only documents what
+# must be installed there, plus the exact resource URLs currently registered.
+# Install order in HACS (Frontend section), if setting up from scratch:
+#   1. card-mod              (thomasloven/lovelace-card-mod)
+#   2. compass-card          (tomvanswam/compass-card)
+#   3. apexcharts-card       (RomRider/apexcharts-card)
+#
+# After installing via HACS, resources are auto-registered; the ids below are
+# host-specific (regenerated on each install) and shown only for reference —
+# do NOT copy the ids verbatim into another instance's .storage/lovelace_resources.
+resources:
+  - url: /hacsfiles/card-mod-studio/card-mod-studio.js
+    type: module
+  - url: /hacsfiles/lovelace-card-mod/card-mod.js
+    type: module
+  - url: /hacsfiles/compass-card/compass-card.js
+    type: module
+  - url: /hacsfiles/apexcharts-card/apexcharts-card.js
+    type: module
