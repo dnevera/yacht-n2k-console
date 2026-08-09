@@ -70,97 +70,53 @@ views:
     - type: heading
       heading: Wind
       heading_style: title
-    - type: custom:windrose-card
-      windspeed_bar_location: right
-      data_period:
-        period_back: -24h
-      wind_direction_entity:
-        entity: sensor.wind_direction_history
-      windspeed_entities:
-      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
-        name: Speed
-      current_direction:
-        show_arrow: true
-      corner_info:
-        top_right:
-          label: Wind Speed
-          unit: ' kn'
-          entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
-    - type: custom:apexcharts-card
-      cache: false
-      graph_span: 26h
-      span:
-        start: minute
-        offset: -2h
-      now:
-        show: true
-        label: Now
-        color: '#ffffff'
-      header:
-        show: true
-        title: Wind History & Forecast
-        show_states: true
-        colorize_states: true
-      apex_config:
-        chart:
-          height: 300
-          width: 600
-        legend:
-          position: bottom
-        yaxis:
-          min: 0
-          decimalsInFloat: 1
-      series:
-      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
-        name: Measured (kts)
-        type: area
-        color: '#00bcd4'
-        stroke_width: 2
-        fill_raw: 'null'
-        unit: kts
-        show:
-          extremas: true
-      - entity: sensor.wind_forecast_flat
-        name: Forecast (kts)
-        type: line
-        color: '#4fc3f7'
-        stroke_width: 2
-        stroke_dash: 5
-        unit: kts
-        data_generator: const times=entity.attributes.forecast_time||[];const speeds=entity.attributes.forecast_wind||[];const rangeStart=Date.now()-2*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(speeds[i]*10)/10]).filter(p=>p[0]>=rangeStart);
-      - entity: sensor.wind_forecast_flat
-        name: Gusts (kts)
-        type: line
-        color: '#ff7043'
-        stroke_width: 1
-        stroke_dash: 4
-        unit: kts
-        opacity: 0.9
-        data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const rangeStart=Date.now()-2*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=rangeStart);
-  - type: grid
-    cards:
-    - type: heading
-      heading: Weather & Forecast
-      heading_style: title
-    - type: grid
-      columns: 1
+    - type: gauge
+      name: STW (kn)
+      entity: sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced
+      min: 0
+      max: 12
+      needle: true
+      severity:
+        green: 0
+        yellow: 8
+        red: 10
+    - type: gauge
+      name: Depth (m)
+      entity: sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth
+      min: 0
+      max: 30
+      needle: true
+      severity:
+        red: 0
+        yellow: 3
+        green: 5
       card_mod:
-        style: ".card {\n  display: grid;\n}\n.card > * {\n  grid-column: 1;\n  grid-row: 1;\n}\n"
-      cards:
-      - type: iframe
-        url: https://embed.windy.com/embed2.html?lat=42.43&lon=18.60&detailLat=42.43&detailLon=18.60&width=650&height=450&zoom=8&level=surface&overlay=wind&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=true&metricWind=kt&metricTemp=%C2%B0C&radarRange=-1
-        aspect_ratio: 65%
-      - type: button
-        show_name: false
-        show_icon: false
-        tap_action:
-          action: url
-          url_path: https://www.windy.com/42.43/18.60?wind,42.43,18.60,i:pressure
-        card_mod:
-          style: "ha-card {\n  position: absolute;\n  inset: 0;\n  margin: 0;\n  background: transparent;\n  box-shadow: none;\n  border: none;\n  cursor: pointer;\n}\n"
-      grid_options:
-        rows: 6
-        columns: 12
+        style: "ha-card {\n  --accent-color: {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) >= 4.5 else '#888888')) }};\n}\n\nha-gauge {\n  --gauge-color:\
+          \ {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) >= 4.5 else '#888888')) }} !important;\n  --primary-text-color:\
+          \ {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) >= 4.5 else '#888888')) }} !important;\n}\n\nha-card {\n  color:\
+          \ {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+          \ | float(0) >= 4.5 else '#888888')) }};\n}"
+    - type: gauge
+      name: SOG (kn)
+      entity: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog
+      min: 0
+      max: 12
+      needle: true
+      severity:
+        green: 0
+        yellow: 8
+        red: 10
     - type: gauge
       name: Pressure (mmHg)
       entity: sensor.barometer_mmhg
@@ -174,13 +130,6 @@ views:
       grid_options:
         rows: 3
         columns: 12
-    - type: tile
-      entity: sensor.barometer_mmhg
-      features:
-      - type: trend-graph
-      grid_options:
-        columns: 12
-        rows: 2
   - type: grid
     cards:
     - type: heading
@@ -221,9 +170,73 @@ views:
     - type: entity
       entity: sensor.boat_latitude
       name: Latitude
+      card_mod:
+        style: "ha-card {\n  font-size: 14px;\n  font-weight: bold;\n  color: var(--grey-color);\n\
+          }\n\n.name {\n  font-size: 14px !important;\n  font-weight: bold !important;\n\
+          \  color: var(--grey-color) !important;\n}\n\n.value {\n  font-size: calc(14px\
+          \ * 1.75) !important;\n}\n\n.measurement {\n  font-size: 14px !important;\n\
+          \  color: var(--grey-color) !important;\n}"
     - type: entity
       entity: sensor.boat_longitude
       name: Longitude
+      card_mod:
+        style: "ha-card {\n  font-size: 13px;\n  font-weight: bold;\n  color: var(--grey-color);\n\
+          }\n\n.name {\n  font-size: 13px !important;\n  font-weight: bold !important;\n\
+          \  color: var(--grey-color) !important;\n}\n\n.value {\n  font-size: calc(14px\
+          \ * 1.75) !important;\n}\n\n.measurement {\n  font-size: 14px !important;\n\
+          \  color: var(--grey-color) !important;\n}"
+  - type: grid
+    cards:
+    - type: heading
+      heading: Weather & Forecast
+      heading_style: title
+    - type: custom:windrose-card
+      windspeed_bar_location: right
+      data_period:
+        period_back: -24h
+      wind_direction_entity:
+        entity: sensor.wind_direction_history
+      windspeed_entities:
+      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+        name: Speed
+      current_direction:
+        show_arrow: true
+      corner_info:
+        top_right:
+          label: Wind Speed
+          unit: ' kn'
+          entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - type: tile
+      entity: sensor.barometer_mmhg
+      features:
+      - type: trend-graph
+      grid_options:
+        columns: 12
+        rows: 2
+    - type: grid
+      columns: 1
+      cards:
+      - type: iframe
+        url: https://embed.windy.com/embed2.html?lat=42.43&lon=18.60&detailLat=42.43&detailLon=18.60&width=650&height=450&zoom=8&level=surface&overlay=wind&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=true&metricWind=kt&metricTemp=%C2%B0C&radarRange=-1
+        aspect_ratio: 50%
+        hide_background: true
+      - type: button
+        show_name: false
+        show_icon: false
+        tap_action:
+          action: url
+          url_path: https://www.windy.com/42.43/18.60?wind,42.43,18.60,i:pressure
+        card_mod:
+          style: "ha-card {\n  position: absolute;\n  inset: 0;\n  margin: 0;\n  background:\
+            \ transparent;\n  box-shadow: none;\n  border: none;\n  cursor: pointer;\n\
+            }\n"
+      grid_options:
+        rows: 6
+        columns: 12
+      card_mod:
+        style: ".card {\n  display: grid;\n}\n.card > * {\n  grid-column: 1;\n  grid-row:\
+          \ 1;\n}\n"
+    column_span: 1
   - type: grid
     cards:
     - type: heading
@@ -235,60 +248,33 @@ views:
       columns: 3
       entities:
       - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
-        name: Measured now (kts)
+        name: Measured now
         card_mod:
-          style: |
-            div.name {
-              font-size: 12px !important;
-              font-weight: 400 !important;
-              line-height: 14px !important;
-              color: var(--secondary-text-color) !important;
-            }
-            div:not(.name) {
-              font-size: 26px !important;
-              font-weight: 500 !important;
-              line-height: 30px !important;
-              color: #4fc3f7 !important;
-            }
+          style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
+            \  line-height: 14px !important;\n  color: var(--secondary-text-color)\
+            \ !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight:\
+            \ 500 !important;\n  line-height: 30px !important;\n  color: #4fc3f7 !important;\n\
+            }\n"
       - entity: sensor.wind_forecast_next_hour
-        name: Forecast next 1h (kts)
+        name: Forecast next 1h
         card_mod:
-          style: |
-            div.name {
-              font-size: 12px !important;
-              font-weight: 400 !important;
-              line-height: 14px !important;
-              color: var(--secondary-text-color) !important;
-            }
-            div:not(.name) {
-              font-size: 26px !important;
-              font-weight: 500 !important;
-              line-height: 30px !important;
-              color: #ff7043 !important;
-            }
+          style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
+            \  line-height: 14px !important;\n  color: var(--secondary-text-color)\
+            \ !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight:\
+            \ 500 !important;\n  line-height: 30px !important;\n  color: #b0bec5 !important;\n\
+            }\n"
       - entity: sensor.wind_gust_next_hour
-        name: Gusts next 1h (kts)
+        name: Gusts next 1h
         card_mod:
-          style: |
-            div.name {
-              font-size: 12px !important;
-              font-weight: 400 !important;
-              line-height: 14px !important;
-              color: var(--secondary-text-color) !important;
-            }
-            div:not(.name) {
-              font-size: 26px !important;
-              font-weight: 500 !important;
-              line-height: 30px !important;
-              color: #b0bec5 !important;
-            }
+          style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
+            \  line-height: 14px !important;\n  color: var(--secondary-text-color)\
+            \ !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight:\
+            \ 500 !important;\n  line-height: 30px !important;\n  color: #ff7043 !important;\n\
+            }\n"
       card_mod:
-        style: |
-          ha-card { padding: 10px 8px 6px !important; }
-          .entities { padding: 0 !important; }
-          .entity {
-            flex-direction: column-reverse !important;
-          }
+        style: "ha-card { padding: 10px 8px 6px !important; }\n.entities { padding:\
+          \ 0 !important; }\n.entity {\n  flex-direction: column-reverse !important;\n\
+          }\n"
       grid_options:
         columns: 36
     - type: custom:plotly-graph
@@ -308,7 +294,11 @@ views:
         - resample: 30m
         - map_y: parseFloat(y)
         - store_var: speed
-        customdata: "$fn ({ xs, vars }) => {\n  const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n  const dirYs = (vars.dir && vars.dir.ys) || [];\n  return xs.map((_, i) => {\n    const d = dirYs[i] || 0;\n    return points[Math.round((((d % 360) + 360) % 360) / 22.5) % 16] + ' ' + Math.round(d) + '\u00b0';\n  });\n}"
+        customdata: "$fn ({ xs, vars }) => {\n  const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n\
+          \  const dirYs = (vars.dir && vars.dir.ys) || [];\n  return xs.map((_, i)\
+          \ => {\n    const d = dirYs[i] || 0;\n    return points[Math.round((((d\
+          \ % 360) + 360) % 360) / 22.5) % 16] + ' ' + Math.round(d) + '°';\n  });\n\
+          }"
         hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Measured</extra>'
         marker:
           size: 6
@@ -321,10 +311,14 @@ views:
         mode: markers
         extend_to_present: false
         filters:
-        - fn: "({ meta }) => ({\n  xs: (meta.forecast_time || []).map((t) => new Date(t + \"Z\")),\n  ys: (meta.forecast_wind || []),\n})"
-        - fn: ({ meta, vars }) => { vars.forecastDir = meta.forecast_dir || []; return {}; }
+        - fn: "({ meta }) => ({\n  xs: (meta.forecast_time || []).map((t) => new Date(t\
+            \ + \"Z\")),\n  ys: (meta.forecast_wind || []),\n})"
+        - fn: ({ meta, vars }) => { vars.forecastDir = meta.forecast_dir || []; return
+            {}; }
         - store_var: forecastSpeed
-        customdata: "$fn ({ meta }) => {\n  const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n  return (meta.forecast_dir || []).map((d) => points[Math.round((((d % 360) + 360) % 360) / 22.5) % 16] + ' ' + Math.round(d) + '\u00b0');\n}"
+        customdata: "$fn ({ meta }) => {\n  const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n\
+          \  return (meta.forecast_dir || []).map((d) => points[Math.round((((d %\
+          \ 360) + 360) % 360) / 22.5) % 16] + ' ' + Math.round(d) + '°');\n}"
         hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Forecast</extra>'
         marker:
           size: 6
@@ -377,7 +371,16 @@ views:
         mode: lines
         filters:
         - map_y: parseFloat(y)
-        - fn: "({ xs, ys }) => {\n  const windowMs = 10 * 60 * 1000;\n  const outXs = [];\n  const outYs = [];\n  let bucketStart = null;\n  let bucketMax = null;\n  for (let i = 0; i < xs.length; i++) {\n    const t = new Date(xs[i]).getTime();\n    if (bucketStart === null || t - bucketStart >= windowMs) {\n      if (bucketStart !== null) { outXs.push(new Date(bucketStart + windowMs)); outYs.push(bucketMax); }\n      bucketStart = t;\n      bucketMax = ys[i];\n    } else if (ys[i] > bucketMax) {\n      bucketMax = ys[i];\n    }\n  }\n  if (bucketStart !== null) { outXs.push(new Date(bucketStart + windowMs)); outYs.push(bucketMax); }\n  return { xs: outXs, ys: outYs };\n}"
+        - fn: "({ xs, ys }) => {\n  const windowMs = 10 * 60 * 1000;\n  const outXs\
+            \ = [];\n  const outYs = [];\n  let bucketStart = null;\n  let bucketMax\
+            \ = null;\n  for (let i = 0; i < xs.length; i++) {\n    const t = new\
+            \ Date(xs[i]).getTime();\n    if (bucketStart === null || t - bucketStart\
+            \ >= windowMs) {\n      if (bucketStart !== null) { outXs.push(new Date(bucketStart\
+            \ + windowMs)); outYs.push(bucketMax); }\n      bucketStart = t;\n   \
+            \   bucketMax = ys[i];\n    } else if (ys[i] > bucketMax) {\n      bucketMax\
+            \ = ys[i];\n    }\n  }\n  if (bucketStart !== null) { outXs.push(new Date(bucketStart\
+            \ + windowMs)); outYs.push(bucketMax); }\n  return { xs: outXs, ys: outYs\
+            \ };\n}"
         hovertemplate: '%{y:.1f} kt<extra>Gusts (measured)</extra>'
         line:
           dash: dot
@@ -388,13 +391,19 @@ views:
         mode: lines
         extend_to_present: false
         filters:
-        - fn: "({ meta }) => ({\n  xs: (meta.forecast_time || []).map((t) => new Date(t + \"Z\")),\n  ys: (meta.forecast_gust || []),\n})"
+        - fn: "({ meta }) => ({\n  xs: (meta.forecast_time || []).map((t) => new Date(t\
+            \ + \"Z\")),\n  ys: (meta.forecast_gust || []),\n})"
         hovertemplate: '%{y:.1f} kt<extra>Gusts (forecast)</extra>'
         line:
           dash: dot
           width: 1
           color: '#78909c'
-      on_dblclick: "$fn () => () => {\n  const found = [];\n  const walk = (root) => {\n    root.querySelectorAll('plotly-graph').forEach((e) => found.push(e));\n    root.querySelectorAll('*').forEach((e) => { if (e.shadowRoot) walk(e.shadowRoot); });\n  };\n  walk(document);\n  found.forEach((el) => {\n    const btn = el.shadowRoot && el.shadowRoot.querySelector('button#reset');\n    if (btn && !btn.classList.contains('hidden')) btn.click();\n  });\n}"
+      on_dblclick: "$fn () => () => {\n  const found = [];\n  const walk = (root)\
+        \ => {\n    root.querySelectorAll('plotly-graph').forEach((e) => found.push(e));\n\
+        \    root.querySelectorAll('*').forEach((e) => { if (e.shadowRoot) walk(e.shadowRoot);\
+        \ });\n  };\n  walk(document);\n  found.forEach((el) => {\n    const btn =\
+        \ el.shadowRoot && el.shadowRoot.querySelector('button#reset');\n    if (btn\
+        \ && !btn.classList.contains('hidden')) btn.click();\n  });\n}"
       config:
         scrollZoom: false
         displayModeBar: false
@@ -423,50 +432,35 @@ views:
           y: -0.3
         margin:
           b: 70
-        annotations: "$fn ({ vars }) => {\n  const walk = (root) => {\n    root.querySelectorAll('plotly-graph').forEach((el) => {\n      const sr = el.shadowRoot;\n      if (!sr || sr.querySelector('style[data-now-radius]')) return;\n      const st = document.createElement('style');\n      st.setAttribute('data-now-radius', '');\n      st.textContent = '.annotation rect.bg { rx: 4px; ry: 4px; }';\n      sr.appendChild(st);\n    });\n    root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); });\n  };\n  try { walk(document); } catch (e) {}\n  const windSpeedColor = (v) => {\n    const stops = [[5,'#b0e2ff'],[10,'#61c4e0'],[15,'#4bbf7a'],[20,'#a8d048'],[25,'#f5e642'],[30,'#f2a93b'],[35,'#eb5c2a'],[40,'#d62828']];\n    for (const [max, color] of stops) if (v < max) return color;\n    return '#8e1b8e';\n  };\n  const compassPoint = (d) => {\n    const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n    return points[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];\n  };\n  const toArrows = (xs, ys, dirs) => (xs || []).map((x, i) => {\n    const d = dirs[i] || 0;\n    const rad = ((d + 180) * Math.PI) / 180;\n    const len = 10 + (ys[i] || 0);\n    return {\n      x, y: ys[i], xref: 'x', yref: 'y',\n      ax: -len * Math.sin(rad), ay: len * Math.cos(rad), axref: 'pixel', ayref: 'pixel',\n      showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5, arrowcolor: windSpeedColor(ys[i] || 0),\n      captureevents: false,\n    };\n  });\n  const arrows = [\n    ...toArrows(vars.speed.xs, vars.speed.ys, vars.dir.ys),\n    ...toArrows(vars.forecastSpeed.xs, vars.forecastSpeed.ys, vars.forecastDir),\n  ];\n  return [\n    ...arrows,\n    { xref: 'x', yref: 'paper', x: new Date(), y: 0.99, yanchor: 'top', xanchor: 'right', text: 'Now', textangle: -90, showarrow: false, xshift: -2, bgcolor: '#ffffff', borderpad: 4, font: { color: '#000000', size: 10 } },\n    { xref: 'paper', yref: 'paper', x: 0.01, y: 0.97, xanchor: 'left', yanchor: 'top', text: '▲ N &nbsp;&nbsp; ▼ S', showarrow: false, font: { color: '#90a4ae', size: 10 } },\n  ];\n}"
-        shapes: '$fn () => [{ type: "line", xref: "x", yref: "paper", x0: new Date(), x1: new Date(), y0: 0, y1: 1, line: { color: "#ffffff", width: 1, dash: "dash" } }]'
+        annotations: "$fn ({ vars }) => {\n  const walk = (root) => {\n    root.querySelectorAll('plotly-graph').forEach((el)\
+          \ => {\n      const sr = el.shadowRoot;\n      if (!sr || sr.querySelector('style[data-now-radius]'))\
+          \ return;\n      const st = document.createElement('style');\n      st.setAttribute('data-now-radius',\
+          \ '');\n      st.textContent = '.annotation rect.bg { rx: 4px; ry: 4px;\
+          \ }';\n      sr.appendChild(st);\n    });\n    root.querySelectorAll('*').forEach((el)\
+          \ => { if (el.shadowRoot) walk(el.shadowRoot); });\n  };\n  try { walk(document);\
+          \ } catch (e) {}\n  const windSpeedColor = (v) => {\n    const stops = [[5,'#b0e2ff'],[10,'#61c4e0'],[15,'#4bbf7a'],[20,'#a8d048'],[25,'#f5e642'],[30,'#f2a93b'],[35,'#eb5c2a'],[40,'#d62828']];\n\
+          \    for (const [max, color] of stops) if (v < max) return color;\n    return\
+          \ '#8e1b8e';\n  };\n  const compassPoint = (d) => {\n    const points =\
+          \ ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n\
+          \    return points[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];\n\
+          \  };\n  const toArrows = (xs, ys, dirs) => (xs || []).map((x, i) => {\n\
+          \    const d = dirs[i] || 0;\n    const rad = ((d + 180) * Math.PI) / 180;\n\
+          \    const len = 10 + (ys[i] || 0);\n    return {\n      x, y: ys[i], xref:\
+          \ 'x', yref: 'y',\n      ax: -len * Math.sin(rad), ay: len * Math.cos(rad),\
+          \ axref: 'pixel', ayref: 'pixel',\n      showarrow: true, arrowhead: 2,\
+          \ arrowsize: 1, arrowwidth: 1.5, arrowcolor: windSpeedColor(ys[i] || 0),\n\
+          \      captureevents: false,\n    };\n  });\n  const arrows = [\n    ...toArrows(vars.speed.xs,\
+          \ vars.speed.ys, vars.dir.ys),\n    ...toArrows(vars.forecastSpeed.xs, vars.forecastSpeed.ys,\
+          \ vars.forecastDir),\n  ];\n  return [\n    ...arrows,\n    { xref: 'x',\
+          \ yref: 'paper', x: new Date(), y: 0.99, yanchor: 'top', xanchor: 'right',\
+          \ text: 'Now', textangle: -90, showarrow: false, xshift: -2, bgcolor: '#ffffff',\
+          \ borderpad: 4, font: { color: '#000000', size: 10 } },\n    { xref: 'paper',\
+          \ yref: 'paper', x: 0.01, y: 0.97, xanchor: 'left', yanchor: 'top', text:\
+          \ '▲ N &nbsp;&nbsp; ▼ S', showarrow: false, font: { color: '#90a4ae', size:\
+          \ 10 } },\n  ];\n}"
+        shapes: '$fn () => [{ type: "line", xref: "x", yref: "paper", x0: new Date(),
+          x1: new Date(), y0: 0, y1: 1, line: { color: "#ffffff", width: 1, dash:
+          "dash" } }]'
       grid_options:
         columns: 36
     column_span: 3
-  - type: grid
-    cards:
-    - type: heading
-      heading: Speed & Depth
-    - type: gauge
-      name: SOG (kn)
-      entity: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog
-      min: 0
-      max: 12
-      needle: true
-      severity:
-        green: 0
-        yellow: 8
-        red: 10
-  - type: grid
-    cards:
-    - type: heading
-      heading: New section
-    - type: gauge
-      name: STW (kn)
-      entity: sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced
-      min: 0
-      max: 12
-      needle: true
-      severity:
-        green: 0
-        yellow: 8
-        red: 10
-  - type: grid
-    cards:
-    - type: heading
-      heading: New section
-    - type: gauge
-      name: Depth (m)
-      entity: sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth
-      min: 0
-      max: 30
-      needle: true
-      severity:
-        red: 0
-        yellow: 3
-        green: 5

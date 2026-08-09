@@ -47,3 +47,4 @@ deploy.conf
 build.conf
 
 .env
+real-config.js

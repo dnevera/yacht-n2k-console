@@ -12,6 +12,22 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **Pulled another manual re-layout from the live HA (no deploy).** In the
+  "Weather & Forecast" section the user moved the Windy grid card (iframe +
+  transparent overlay button) below the windrose card, changed the iframe
+  `aspect_ratio` 65% -> 50% and added `hide_background: true`, and the section
+  now carries an explicit `column_span: 1`. `dashboard-sailing.yaml` re-synced
+  1:1 from `.storage/lovelace.dashboard_sailing` (`yaml.safe_load(...) == live`
+  -> True).
+- **Pulled the user's manual re-layout from the live HA (no deploy).** The
+  user rearranged the dashboard in the HA UI again, so
+  `dashboard-sailing.yaml` was re-synced 1:1 from
+  `.storage/lovelace.dashboard_sailing` (header comments preserved,
+  `yaml.safe_load(...) == live config` -> True). Changes taken over: wind
+  cards (windrose + apexcharts history/forecast) moved between sections,
+  Speed/Depth gauges regrouped, the "Speed & Depth" / "New section"
+  headings removed, `card_mod` added to the Latitude/Longitude entities and
+  the "(kts)" suffixes dropped from the header-row entity names.
 - **RULE (restated, mandatory): pull + sync the live HA dashboard BEFORE
   every edit, not just before deploy.** Violated again — while an edit was
   in flight the user had renamed the section heading ("Wind & Forecast" ->
