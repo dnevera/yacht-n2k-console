@@ -12,6 +12,16 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **Pulled another manual re-layout from the HA UI:** section headings renamed
+  ("Wind" -> "Sensors", "Weather & Forecast" -> "Conditions"), the pressure
+  gauge moved from the sensors section into "Conditions", icons added to the
+  "Wind Direction & Speed" (`mdi:weather-windy`) and "Waves" (`mdi:wave`)
+  headings, and the Windy widget moved out into its own new wide "Forecast"
+  section (`column_span: 3`, `aspect_ratio: 50%`, `rows: 7`, `columns: 36`).
+  Applied as targeted edits so the explanatory YAML comments survive; live
+  `.storage` config and the local YAML verified identical afterwards. No
+  deploy — this is a pull, not a push.
+
 - **Synced with a manual dashboard tweak made in the HA UI:** the wind
   `compass-card`'s `compass.ticks.radius` was changed 52 -> 95 on the live
   instance; pulled into `dashboard-sailing.yaml` (live `.storage` config and

@@ -68,8 +68,8 @@ views:
   - type: grid
     cards:
     - type: heading
-      heading: Wind
       heading_style: title
+      heading: Sensors
     - type: gauge
       name: STW (kn)
       entity: sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced
@@ -117,19 +117,6 @@ views:
         green: 0
         yellow: 8
         red: 10
-    - type: gauge
-      name: Pressure (mmHg)
-      entity: sensor.barometer_mmhg
-      min: 720
-      max: 790
-      needle: true
-      severity:
-        red: 720
-        yellow: 745
-        green: 760
-      grid_options:
-        rows: 3
-        columns: 12
   - type: grid
     cards:
     - type: heading
@@ -188,8 +175,8 @@ views:
   - type: grid
     cards:
     - type: heading
-      heading: Weather & Forecast
       heading_style: title
+      heading: Conditions
     - type: custom:windrose-card
       windspeed_bar_location: right
       data_period:
@@ -206,6 +193,19 @@ views:
           label: Wind Speed
           unit: ' kn'
           entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - type: gauge
+      name: Pressure (mmHg)
+      entity: sensor.barometer_mmhg
+      min: 720
+      max: 790
+      needle: true
+      severity:
+        red: 720
+        yellow: 745
+        green: 760
+      grid_options:
+        rows: 3
+        columns: 12
     - type: tile
       entity: sensor.barometer_mmhg
       features:
@@ -213,46 +213,13 @@ views:
       grid_options:
         columns: 12
         rows: 2
-    # Windy widget — own card `custom:windy-boat-card`
-    # (source: ha/sailing-dash/cards/windy-boat-card.js, deployed by
-    # deploy.sh --resources-only; read that file's header for the full
-    # reverse-engineering notes on the embed).
-    # Why a card of our own instead of `type: iframe` + overlay cards:
-    #   - the embed exposes a two-way postMessage API, but ONLY when the URL
-    #     carries `embedMake=true` (verified live: `window.onmessage` inside
-    #     the iframe is null without it, a function with it). With the API on,
-    #     `{type:'updateEmbed', payload:{showDetail:true, detailLat, detailLon}}`
-    #     re-centres the map on BOTH axes — no iframe reload, no `src` rebuild,
-    #     so the map keeps its state and stays fully interactive (its own zoom
-    #     buttons/search/menu and the Windy logo link to windy.com at the
-    #     current position all keep working);
-    #   - HA's `type: iframe` cannot send that message, and the previous
-    #     `config-template-card` + `card_mod` overlay could only rebuild the
-    #     `src`, i.e. reload the whole widget.
-    # `input_button.windy_recenter` is therefore no longer needed — the card's
-    # own button talks to the widget directly.
-    # Coordinates come from the RAW decimal-degree N2K sensors (the same ones
-    # the open-meteo rest: requests and device_tracker.nevera use) — NOT
-    # sensor.boat_latitude/boat_longitude, which are DMS display strings
-    # ("42°26.07'N") that parseFloat() would truncate to whole degrees.
-    - type: custom:windy-boat-card
-      lat_entity: sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude
-      lon_entity: sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude
-      fallback_lat: 42.43
-      fallback_lon: 18.6
-      zoom: 8
-      overlay: wind
-      product: ecmwf
-      aspect_ratio: 90%
-      grid_options:
-        rows: 5
-        columns: 12
     column_span: 1
   - type: grid
     cards:
     - type: heading
       heading_style: title
       heading: Wind Direction & Speed
+      icon: mdi:weather-windy
     - type: glance
       show_icon: false
       state_color: false
@@ -572,6 +539,7 @@ views:
     - type: heading
       heading_style: title
       heading: Waves
+      icon: mdi:wave
     - type: glance
       show_icon: false
       state_color: false
@@ -782,5 +750,48 @@ views:
             return [{ type: 'line', xref: 'x', yref: 'paper', x0: new Date(), x1: new Date(), y0: 0, y1: 1, line: { color: '#ffffff', width: 1, dash: 'dash' } }];
           }
       grid_options:
+        columns: 36
+    column_span: 3
+  # Windy widget lives in its own wide "Forecast" section (moved there manually
+  # in the HA UI).
+  - type: grid
+    cards:
+    - type: heading
+      icon: mdi:weather-windy-variant
+      heading_style: title
+      heading: Forecast
+    # Windy widget — own card `custom:windy-boat-card`
+    # (source: ha/sailing-dash/cards/windy-boat-card.js, deployed by
+    # deploy.sh --resources-only; read that file's header for the full
+    # reverse-engineering notes on the embed).
+    # Why a card of our own instead of `type: iframe` + overlay cards:
+    #   - the embed exposes a two-way postMessage API, but ONLY when the URL
+    #     carries `embedMake=true` (verified live: `window.onmessage` inside
+    #     the iframe is null without it, a function with it). With the API on,
+    #     `{type:'updateEmbed', payload:{showDetail:true, detailLat, detailLon}}`
+    #     re-centres the map on BOTH axes — no iframe reload, no `src` rebuild,
+    #     so the map keeps its state and stays fully interactive (its own zoom
+    #     buttons/search/menu and the Windy logo link to windy.com at the
+    #     current position all keep working);
+    #   - HA's `type: iframe` cannot send that message, and the previous
+    #     `config-template-card` + `card_mod` overlay could only rebuild the
+    #     `src`, i.e. reload the whole widget.
+    # `input_button.windy_recenter` is therefore no longer needed — the card's
+    # own button talks to the widget directly.
+    # Coordinates come from the RAW decimal-degree N2K sensors (the same ones
+    # the open-meteo rest: requests and device_tracker.nevera use) — NOT
+    # sensor.boat_latitude/boat_longitude, which are DMS display strings
+    # ("42°26.07'N") that parseFloat() would truncate to whole degrees.
+    - type: custom:windy-boat-card
+      lat_entity: sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude
+      lon_entity: sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude
+      fallback_lat: 42.43
+      fallback_lon: 18.6
+      zoom: 8
+      overlay: wind
+      product: ecmwf
+      aspect_ratio: 50%
+      grid_options:
+        rows: 7
         columns: 36
     column_span: 3
