@@ -483,9 +483,47 @@ views:
           \ yref: 'paper', x: 0.01, y: 0.97, xanchor: 'left', yanchor: 'top', text:\
           \ '▲ N &nbsp;&nbsp; ▼ S', showarrow: false, font: { color: '#90a4ae', size:\
           \ 10 } },\n  ];\n}"
-        shapes: '$fn () => [{ type: "line", xref: "x", yref: "paper", x0: new Date(),
-          x1: new Date(), y0: 0, y1: 1, line: { color: "#ffffff", width: 1, dash:
-          "dash" } }]'
+        # Vertical dashed "Now" line + TOUCH GESTURES patch (mobile):
+        # one finger = tooltip only, two fingers = pan along X.
+        # plotly-graph-card exposes no touch hook (only on_click/on_dblclick/
+        # on_legend_*), so the listeners are attached from this $fn, which is
+        # re-evaluated on every redraw and guarded by a flag on the graph div.
+        # A single-finger touch is stopped in the capture phase so Plotly never
+        # starts a drag (it would set gd._dragging and suppress hover); the
+        # shared tooltip is driven by synthetic mouseover/mousemove instead.
+        # Two-finger touches pass through untouched -> normal Plotly pan.
+        # Desktop mouse behaviour is not affected at all.
+        shapes: |-
+          $fn () => {
+            const patchTouch = (gd) => {
+              if (!gd || gd.__touchGesturePatched) return;
+              gd.__touchGesturePatched = true;
+              const hoverAt = (t) => {
+                const target = gd.querySelector('.nsewdrag') || gd;
+                const opts = { clientX: t.clientX, clientY: t.clientY, bubbles: true, cancelable: true };
+                target.dispatchEvent(new MouseEvent('mouseover', opts));
+                target.dispatchEvent(new MouseEvent('mousemove', opts));
+              };
+              const single = (e) => {
+                if (e.touches.length >= 2) return;   // two fingers -> let Plotly pan
+                // One finger: keep the event away from Plotly's drag handler
+                // (which sets gd._dragging and suppresses hover) and drive the
+                // shared tooltip with synthetic mouse events instead.
+                e.stopPropagation();
+                if (e.touches[0]) hoverAt(e.touches[0]);
+              };
+              gd.addEventListener('touchstart', single, true);
+              gd.addEventListener('touchmove', single, true);
+            };
+            const walk = (root) => {
+              root.querySelectorAll('plotly-graph').forEach((el) => {
+                if (el.shadowRoot) el.shadowRoot.querySelectorAll('.js-plotly-plot').forEach(patchTouch);
+              });
+              root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); });
+            };
+            try { walk(document); } catch (e) {}
+            return [{ type: 'line', xref: 'x', yref: 'paper', x0: new Date(), x1: new Date(), y0: 0, y1: 1, line: { color: '#ffffff', width: 1, dash: 'dash' } }];
+          }
       grid_options:
         columns: 36
     column_span: 3
@@ -633,9 +671,47 @@ views:
           \ xref: 'paper', yref: 'paper', x: 0.01, y: 0.97, xanchor: 'left', yanchor:\
           \ 'top', text: '▲ N &nbsp;&nbsp; ▼ S', showarrow: false, font: { color: '#90a4ae',\
           \ size: 10 } },\n  ];\n}"
-        shapes: '$fn () => [{ type: "line", xref: "x", yref: "paper", x0: new Date(),
-          x1: new Date(), y0: 0, y1: 1, line: { color: "#ffffff", width: 1, dash:
-          "dash" } }]'
+        # Vertical dashed "Now" line + TOUCH GESTURES patch (mobile):
+        # one finger = tooltip only, two fingers = pan along X.
+        # plotly-graph-card exposes no touch hook (only on_click/on_dblclick/
+        # on_legend_*), so the listeners are attached from this $fn, which is
+        # re-evaluated on every redraw and guarded by a flag on the graph div.
+        # A single-finger touch is stopped in the capture phase so Plotly never
+        # starts a drag (it would set gd._dragging and suppress hover); the
+        # shared tooltip is driven by synthetic mouseover/mousemove instead.
+        # Two-finger touches pass through untouched -> normal Plotly pan.
+        # Desktop mouse behaviour is not affected at all.
+        shapes: |-
+          $fn () => {
+            const patchTouch = (gd) => {
+              if (!gd || gd.__touchGesturePatched) return;
+              gd.__touchGesturePatched = true;
+              const hoverAt = (t) => {
+                const target = gd.querySelector('.nsewdrag') || gd;
+                const opts = { clientX: t.clientX, clientY: t.clientY, bubbles: true, cancelable: true };
+                target.dispatchEvent(new MouseEvent('mouseover', opts));
+                target.dispatchEvent(new MouseEvent('mousemove', opts));
+              };
+              const single = (e) => {
+                if (e.touches.length >= 2) return;   // two fingers -> let Plotly pan
+                // One finger: keep the event away from Plotly's drag handler
+                // (which sets gd._dragging and suppresses hover) and drive the
+                // shared tooltip with synthetic mouse events instead.
+                e.stopPropagation();
+                if (e.touches[0]) hoverAt(e.touches[0]);
+              };
+              gd.addEventListener('touchstart', single, true);
+              gd.addEventListener('touchmove', single, true);
+            };
+            const walk = (root) => {
+              root.querySelectorAll('plotly-graph').forEach((el) => {
+                if (el.shadowRoot) el.shadowRoot.querySelectorAll('.js-plotly-plot').forEach(patchTouch);
+              });
+              root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); });
+            };
+            try { walk(document); } catch (e) {}
+            return [{ type: 'line', xref: 'x', yref: 'paper', x0: new Date(), x1: new Date(), y0: 0, y1: 1, line: { color: '#ffffff', width: 1, dash: 'dash' } }];
+          }
       grid_options:
         columns: 36
     column_span: 3

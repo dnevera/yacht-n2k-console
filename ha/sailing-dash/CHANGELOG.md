@@ -12,6 +12,26 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **Mobile gestures on both `custom:plotly-graph` cards: one finger shows
+  the tooltip, two fingers pan.** `plotly-graph-card` has no touch hook
+  (only `on_click` / `on_dblclick` / `on_legend_*`), so the listeners are
+  attached from the `layout.shapes` `$fn` (it is re-evaluated on every
+  redraw; a `__touchGesturePatched` flag on the graph div keeps it
+  idempotent). A single-finger `touchstart`/`touchmove` is stopped in the
+  **capture** phase, before Plotly's own handler on `.nsewdrag`, and the
+  shared tooltip is driven by synthetic `mouseover` + `mousemove` on that
+  same element. Two rejected attempts first: (1) setting
+  `gd._fullLayout.dragmode = false` at touchstart still let Plotly start a
+  drag, which sets `gd._dragging` and suppresses hover entirely — verified
+  in `local-preview/`, the hover layer stayed empty even for a manual mouse
+  dispatch afterwards; (2) dispatching `mousemove` alone does nothing —
+  Plotly needs a preceding `mouseover`. Desktop mouse behaviour, the
+  `config` block (`scrollZoom`/`displayModeBar`/`doubleClick: false`),
+  `layout.dragmode: pan` and the double-click reset are unchanged. Verified
+  in `local-preview/` with synthetic multi-touch events: one finger ->
+  tooltip text present and `xaxis.range` unchanged (no pan); two fingers ->
+  the event reaches Plotly and `gd._dragging` becomes true; all four cards
+  still render OK. Deployed via `./deploy.sh --dashboard-only`.
 - **Fixed `forecast_hours: 72` only drawing up to Aug 11, and the bogus
   "kt scale" row in the shared tooltip.** (1) open-meteo counts
   `forecast_days` from **today 00:00 UTC**, not from "now", so the previous

@@ -37,6 +37,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SENSORS_FILE="${SCRIPT_DIR}/sensors-sailing.yaml"
+AUTOMATIONS_FILE="${SCRIPT_DIR}/automations-sailing.yaml"
 
 # ── Resolve target host + HA container name ─────────────────────────────────
 if [[ -n "${1:-}" ]]; then
@@ -182,6 +183,61 @@ echo "Uploading merged configuration.yaml ..."
 ${SCP} "${MERGED_CFG}" "${DEPLOY_HOST}:/tmp/configuration.merged.yaml"
 ${SSH} "sudo docker cp /tmp/configuration.merged.yaml ${HA_CONTAINER}:${REMOTE_PATH} \
     && rm -f /tmp/configuration.merged.yaml"
+
+# ── 3b. Merge automations-sailing.yaml into remote /config/automations.yaml ──
+# configuration.yaml has `automation: !include automations.yaml`, so our
+# startup-refresh automation (see the header of automations-sailing.yaml) has
+# to go into that separate file. Matched by `id` -> idempotent, never
+# duplicates and never touches the user's own automations.
+if [[ -f "${AUTOMATIONS_FILE}" ]]; then
+    REMOTE_AUTO="${TMP_DIR}/automations.yaml"
+    MERGED_AUTO="${TMP_DIR}/automations.merged.yaml"
+    AUTO_BACKUP="automations.yaml.$(date +%Y%m%d%H%M%S).bak"
+
+    echo "Fetching current /config/automations.yaml ..."
+    ${SSH} "sudo docker exec ${HA_CONTAINER} cat /config/automations.yaml" > "${REMOTE_AUTO}" \
+        || { echo "ERROR: could not read remote automations.yaml — aborting." >&2; exit 1; }
+    ${SCP} "${REMOTE_AUTO}" "${DEPLOY_HOST}:~/${AUTO_BACKUP}"
+
+    python3 - "${REMOTE_AUTO}" "${AUTOMATIONS_FILE}" "${MERGED_AUTO}" <<'PYEOF'
+import sys
+
+import yaml
+
+remote_path, incoming_path, out_path = sys.argv[1:4]
+
+with open(remote_path) as f:
+    remote = yaml.safe_load(f) or []
+with open(incoming_path) as f:
+    incoming = yaml.safe_load(f) or []
+
+if not isinstance(remote, list):
+    raise SystemExit(f"ERROR: {remote_path} is not a list of automations")
+
+for new in incoming:
+    new_id = new.get("id")
+    for i, old in enumerate(remote):
+        if isinstance(old, dict) and new_id and old.get("id") == new_id:
+            remote[i] = new
+            break
+    else:
+        remote.append(new)
+
+with open(out_path, "w") as f:
+    yaml.safe_dump(remote, f, sort_keys=False, allow_unicode=True, width=1000,
+                   default_flow_style=False)
+print(f"Merged {incoming_path} -> {out_path} ({len(remote)} automations)")
+PYEOF
+
+    echo "--- diff (remote automations.yaml vs merged) ---"
+    diff -u "${REMOTE_AUTO}" "${MERGED_AUTO}" || true
+    echo "------------------------------------------------"
+
+    ${SCP} "${MERGED_AUTO}" "${DEPLOY_HOST}:/tmp/automations.merged.yaml"
+    ${SSH} "sudo docker cp /tmp/automations.merged.yaml ${HA_CONTAINER}:/config/automations.yaml \
+        && rm -f /tmp/automations.merged.yaml"
+    echo "Remote automations backup kept at ~/${AUTO_BACKUP} on ${DEPLOY_HOST}"
+fi
 
 echo "Restarting ${HA_CONTAINER} to load new sensors/services ..."
 ${SSH} "sudo docker restart ${HA_CONTAINER}"
