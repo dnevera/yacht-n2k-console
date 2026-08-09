@@ -9,7 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, ".")
 sys.path.insert(0, "tests")
@@ -216,7 +216,17 @@ class TestHAEndToEndPublication(unittest.TestCase):
         self.assertEqual(writes[1], bytes.fromhex("31384541464646452031342046302030310d0a"))
 
     def test_live_ha_comparison_audit(self):
-        """Compare local published gateway entities against HA live or simulated state."""
+        """Compare local published gateway entities against simulated HA state.
+
+        This is a pure offline unit test: it must NOT depend on the developer's
+        local `.env` (HA_URL/HA_HOST/HA_TOKEN). TRAP -- importing gw_test_helpers
+        (Pi5-reachability helper) triggers load_dotenv() process-wide, so if a real
+        HA_HOST happens to be configured locally, an un-mocked HALiveChecker() here
+        would silently reach out to the developer's real production Home Assistant
+        instance over SSH and fail this "unit" test based on unrelated live state.
+        get_ha_data() is forced to None (offline) so the fallback simulated data
+        below is always used, regardless of the local environment.
+        """
         expected_devs = [{"model": "YDNU-02 TCP-GW", "src": 200, "unique_number": 902047}]
         expected_ents = [{
             "entity_id": "sensor.device_200_temperature",
@@ -226,7 +236,8 @@ class TestHAEndToEndPublication(unittest.TestCase):
         }]
 
         checker = HALiveChecker()
-        ha_data = checker.get_ha_data()
+        with patch.object(checker, "get_ha_data", return_value=None):
+            ha_data = checker.get_ha_data()
         if ha_data is None or not ha_data.get('registry_available'):
             # Fallback to simulated HA state when HA API/storage is unconfigured, or
             # when only REST API 'states' were fetched without device/entity registry

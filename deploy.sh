@@ -91,10 +91,21 @@
 #   ssh <host> 'ss -tnp | grep 4001'  # should show 2+ ESTAB connections
 #   curl http://<host>:8080/api/info   # should return JSON with state: online
 #
+# PYTHON DEPENDENCIES (sync_python_deps — runs before proxy/web restart)
+#   requirements.txt is uploaded and `pip3 install --user --break-system-packages`
+#   is run on the remote host on every deploy (idempotent — pip skips packages
+#   that already satisfy the version spec). This exists because deploy.sh used to
+#   ONLY copy .py files and never touched the remote Python environment: the
+#   installed `nmea2000` package silently drifted from our git-fork requirement
+#   (a plain PyPI release ended up installed instead), which caused a 100% CPU
+#   spin-loop bug that was only found/fixed manually via SSH.
+#   A drift guard additionally checks that the installed nmea2000/message.py
+#   actually contains our fork's PGN-126996 fix (pip alone can't detect that a
+#   git+ branch moved forward, or that a PyPI release replaced the fork) and
+#   force-reinstalls the exact fork branch from requirements.txt if missing.
+#
 # TODO: Add --dry-run mode that shows what would be deployed without executing
 # TODO: Add rollback support (backup previous version before overwrite)
-# ISSUE: If gateway restarts during active service session, HA spins at 100% CPU
-#        until patched nmea2000 lib is applied (see patch_ha)
 # ──────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -272,6 +283,80 @@ fi
 #     Fix: TextNmea2000Gateway readline() EOF → ConnectionError (not silent return)
 #     Upstream PR: github.com/dnevera/nmea2000/tree/fix/text-gateway-eof-spin-loop
 #
+# ── sync_python_deps() ───────────────────────────────────────────────────────
+# Ensures the remote host's Python environment matches requirements.txt BEFORE
+# proxy/web services are (re)started. Runs on every full/--proxy/--web deploy.
+#
+# SKILL: Adding/upgrading a Python dependency
+#   1. Edit requirements.txt (pin exact, known-good release — see the big
+#      warning comment above the `nmea2000` line before ever pointing it back
+#      at a git+ branch)
+#   2. Test: ./deploy.sh --proxy --no-test   (watch the "Python dependencies" section)
+#
+# Uses --user --break-system-packages because the target Pi runs Debian's
+# externally-managed-environment Python (PEP 668) — plain `pip install` is
+# refused otherwise. Discovered the hard way while debugging the 100% CPU bug.
+#
+# NOTE: this only installs whatever requirements.txt says (currently a pinned
+# PyPI nmea2000 release). It intentionally does NOT try to auto-detect/auto-fix
+# "drift" by force-reinstalling arbitrary specs — an earlier version of this
+# function did that (force-reinstalling the git+ fork branch whenever a fix
+# marker was missing) and that fork branch turned out to be incompatible with
+# the nmea2000 release actually running here (`NameError: NMEA2000Field`),
+# which took production down. requirements.txt now pins the exact working
+# release instead; see patch_gateway_nmea2000() for the one local patch that
+# IS still needed on top of it.
+sync_python_deps() {
+    section "Python dependencies (requirements.txt)"
+
+    log "Uploading requirements.txt..."
+    ${SCP} "${LOCAL_DIR}/requirements.txt" "${HOST}:/tmp/requirements.txt"
+
+    log "Ensuring dependencies from requirements.txt are installed (pip3 --user)..."
+    ${SSH} ${HOST} "pip3 install --user --break-system-packages --quiet -r /tmp/requirements.txt" \
+        && log "Dependencies: up to date ✓" \
+        || warn "pip3 install -r requirements.txt reported errors — review output above"
+}
+
+# ── patch_gateway_nmea2000() ─────────────────────────────────────────────────
+# Applies patches/nmea2000_ioclient.py (EOF spin-loop fix) directly to the
+# gateway's OWN nmea2000 install (its --user site-packages), separate from
+# patch_ha() which patches the copy running inside the HA docker container.
+# Without this, every `pip install`/reinstall of the pinned nmea2000 release
+# in sync_python_deps() would silently drop the fix and reintroduce the
+# 100% CPU EOF spin-loop bug on the gateway side.
+# Idempotent — compares MD5 checksums before overwriting, same pattern as Patch 1
+# in patch_ha().
+patch_gateway_nmea2000() {
+    section "Gateway nmea2000 patch (ioclient EOF fix)"
+
+    local ioclient_path
+    ioclient_path=$(${SSH} ${HOST} \
+        "python3 -c 'import nmea2000.ioclient as m; print(m.__file__)'" 2>/dev/null) \
+        || { warn "Cannot find nmea2000.ioclient on gateway host — skipping"; return 0; }
+
+    if [[ -z "$ioclient_path" ]]; then
+        warn "nmea2000.ioclient path empty — skipping"
+        return 0
+    fi
+
+    local local_md5 remote_md5
+    local_md5=$(md5 -q "${PATCH_DIR}/nmea2000_ioclient.py" 2>/dev/null \
+                || md5sum "${PATCH_DIR}/nmea2000_ioclient.py" | cut -d' ' -f1)
+    remote_md5=$(${SSH} ${HOST} "md5sum '${ioclient_path}' 2>/dev/null | cut -d' ' -f1") || remote_md5=""
+
+    if [[ "$local_md5" == "$remote_md5" ]]; then
+        log "Gateway ioclient EOF fix: already up to date — skipping"
+    else
+        log "Gateway ioclient EOF fix: applying → ${ioclient_path}"
+        ${SCP} "${PATCH_DIR}/nmea2000_ioclient.py" "${HOST}:/tmp/nmea2000_ioclient_gw.py"
+        ${SSH} ${HOST} "cp /tmp/nmea2000_ioclient_gw.py '${ioclient_path}' \
+            && rm -rf \"\$(dirname '${ioclient_path}')/__pycache__\""
+        log "Gateway ioclient EOF fix: applied ✓"
+    fi
+}
+
+
 patch_ha() {
     section "HA patches"
     local ha_changed=false  # track if any patch was actually applied → need HA restart
@@ -336,6 +421,11 @@ patch_ha() {
 
 
 ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}"
+
+if $DEPLOY_PROXY || $DEPLOY_WEB; then
+    sync_python_deps
+    patch_gateway_nmea2000
+fi
 
 # ── N2K Proxy ────────────────────────────────────────────────────────────────
 

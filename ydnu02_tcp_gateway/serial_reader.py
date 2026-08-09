@@ -105,6 +105,19 @@ class SerialReader:
                 self.serial_ready.set()
                 self.send_iso_request()
 
+                # NOTE (CPU-usage fix): we intentionally do NOT use ser.readline()
+                # here. pyserial's Serial class has no buffered readline() of its
+                # own — it inherits the generic io.RawIOBase.readline(), whose
+                # default implementation has no `peek()` to rely on and therefore
+                # calls self.read(1) in a plain Python loop, one byte at a time,
+                # until a '\n' is found. On a busy N2K bus (many frames/sec at
+                # 115200 baud) this means one read()-syscall-plus-Python-loop-
+                # iteration PER BYTE, which was observed to drive the gateway
+                # process to ~100% CPU on a Raspberry Pi. Instead, we read
+                # whatever is available in one syscall (bounded by in_waiting)
+                # and split it into lines ourselves — the same pattern already
+                # used by DataHub.handle_client()/ctrl_handler for TCP sockets.
+                buf = b""
                 while True:
                     if self.service_mode.is_set():
                         time.sleep(0.05)
@@ -112,27 +125,33 @@ class SerialReader:
                             current = self._get_serial()
                         if current is not None and current is not ser:
                             ser = current
+                            buf = b""
                         continue
 
-                    raw = ser.readline()
-                    if not raw:
+                    chunk = ser.read(max(1, ser.in_waiting))
+                    if not chunk:
                         continue
+                    buf += chunk
 
-                    line = normalize_frame(raw)
-                    if not NMEA_LINE_RE.match(line):
-                        continue
+                    while b"\n" in buf:
+                        raw, buf = buf.split(b"\n", 1)
+                        raw += b"\n"
 
-                    self.broadcast(line)
+                        line = normalize_frame(raw)
+                        if not NMEA_LINE_RE.match(line):
+                            continue
 
-                    # Diagnostic echo-logging (test/troubleshooting aid only, not a
-                    # protocol-level ACK): if this CAN ID matches something we
-                    # recently wrote to serial, log a pseudo-ACK.
-                    try:
-                        parts = line.strip().split(b' ')
-                        if len(parts) >= 3:
-                            self.check_tx_echo(parts[2].decode('ascii', errors='ignore'))
-                    except (ValueError, IndexError):
-                        pass
+                        self.broadcast(line)
+
+                        # Diagnostic echo-logging (test/troubleshooting aid only, not a
+                        # protocol-level ACK): if this CAN ID matches something we
+                        # recently wrote to serial, log a pseudo-ACK.
+                        try:
+                            parts = line.strip().split(b' ')
+                            if len(parts) >= 3:
+                                self.check_tx_echo(parts[2].decode('ascii', errors='ignore'))
+                        except (ValueError, IndexError):
+                            pass
 
             except serial.SerialException as e:
                 print(f"[serial] error: {e} — retrying in 5s", flush=True)
