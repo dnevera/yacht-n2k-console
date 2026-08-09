@@ -2,6 +2,12 @@
 #
 # Extracted from the live HA instance's storage config on 2026-08-09:
 #   .storage/lovelace.dashboard_sailing  (dashboard url_path: dashboard-sailing)
+# Re-synced 2026-08-09 (later same day, twice) after the user rearranged
+# tiles via the HA UI directly — this file was regenerated from the live
+# storage config each time to pick up the newest layout: headings renamed
+# ("Wind & Forecast" / "Weather & Forecast", heading_style: title), the
+# Windy grid/pressure gauge/pressure trend-graph tile now share the second
+# section, and the COG compass moved again into the "Position" section.
 #
 # This is the single source of truth going forward — edit THIS file, then
 # redeploy with deploy_dashboard.sh (round-trips it back into .storage on the
@@ -11,6 +17,7 @@
 # Requires HACS custom cards (already installed on bumblebee, not managed here):
 #   - custom:compass-card    (lovelace-compass-card)
 #   - custom:apexcharts-card (lovelace-card-templater / apexcharts-card)
+#   - custom:card-mod        (lovelace-card-mod, used by the Windy tap overlay)
 #
 # Entities referenced (all published by ydnu02-tcp-gateway via NMEA2000 -> HA,
 # except device_tracker.nevera, which is a `template: device_tracker` derived
@@ -33,15 +40,8 @@ views:
   - type: grid
     cards:
     - type: heading
-      heading: Wind & Heading
-    - type: custom:compass-card
-      header:
-        title:
-          value: COG
-      indicator_sensors:
-      - sensor: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog
-        indicator:
-          image: arrow_inward
+      heading: Wind & Forecast
+      heading_style: title
     - type: custom:compass-card
       header:
         title:
@@ -52,10 +52,6 @@ views:
           image: arrow_inward
       value_sensors:
       - sensor: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
-  - type: grid
-    cards:
-    - type: heading
-      heading: Wind History & Forecast
     - type: custom:apexcharts-card
       cache: false
       graph_span: 30h
@@ -108,16 +104,89 @@ views:
         opacity: 0.9
         data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const
           rangeStart=Date.now()-6*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=rangeStart);
-    - type: button
-      name: Open Windy Map
-      icon: mdi:weather-windy
-      tap_action:
-        action: url
-        url_path: https://www.windy.com/42.43/18.60?wind,42.43,18.60,i:pressure
+  - type: grid
+    cards:
+    - type: heading
+      heading: Weather & Forecast
+      heading_style: title
+    - type: grid
+      columns: 1
+      # No visible "Open Windy" button anymore — the whole iframe area below
+      # is tappable/clickable instead. Achieved by stacking the iframe and a
+      # fully transparent button card in the same CSS grid cell (card-mod)
+      # so a tap/click anywhere on the widget triggers the button's
+      # tap_action, while the Windy embed still renders visually underneath.
+      card_mod:
+        style: |
+          .card {
+            display: grid;
+          }
+          .card > * {
+            grid-column: 1;
+            grid-row: 1;
+          }
+      cards:
+      - type: iframe
+        url: https://embed.windy.com/embed2.html?lat=42.43&lon=18.60&detailLat=42.43&detailLon=18.60&width=650&height=450&zoom=8&level=surface&overlay=wind&product=ecmwf&menu=&message=true&marker=true&calendar=now&pressure=&type=map&location=coordinates&detail=true&metricWind=kt&metricTemp=%C2%B0C&radarRange=-1
+        aspect_ratio: 65%
+      - type: button
+        show_name: false
+        show_icon: false
+        tap_action:
+          action: url
+          # windy.com is registered by the official Windy app as a Universal
+          # Link (iOS) / App Link (Android): on a phone/tablet with the app
+          # installed, tapping this opens the Windy app directly; on desktop,
+          # or if the app isn't installed, the OS/browser falls back to
+          # opening this URL in the regular web browser. No extra logic is
+          # needed on the HA side — this is standard OS-level link handling.
+          url_path: https://www.windy.com/42.43/18.60?wind,42.43,18.60,i:pressure
+        card_mod:
+          style: |
+            ha-card {
+              position: absolute;
+              inset: 0;
+              margin: 0;
+              background: transparent;
+              box-shadow: none;
+              border: none;
+              cursor: pointer;
+            }
+      grid_options:
+        rows: 6
+        columns: 12
+    - type: gauge
+      name: Pressure (mmHg)
+      entity: sensor.barometer_mmhg
+      min: 720
+      max: 790
+      needle: true
+      severity:
+        red: 720
+        yellow: 745
+        green: 760
+      grid_options:
+        rows: 3
+        columns: 12
+    - type: tile
+      entity: sensor.barometer_mmhg
+      features:
+      - type: trend-graph
+      grid_options:
+        columns: 12
+        rows: 2
   - type: grid
     cards:
     - type: heading
       heading: Position
+    - type: custom:compass-card
+      header:
+        title:
+          value: COG
+      indicator_sensors:
+      - sensor: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog
+        indicator:
+          image: arrow_inward
     - type: map
       entities:
       - entity: device_tracker.nevera
@@ -129,16 +198,6 @@ views:
     - type: entity
       entity: sensor.boat_longitude
       name: Longitude
-    - type: gauge
-      name: Pressure (mmHg)
-      entity: sensor.barometer_mmhg
-      min: 720
-      max: 790
-      needle: true
-      severity:
-        red: 720
-        yellow: 745
-        green: 760
   - type: grid
     cards:
     - type: heading

@@ -454,6 +454,19 @@ Source-controlled копия storage-mode Lovelace-дашборда "Sailing"
   YAML → `.storage/lovelace.dashboard_sailing` JSON; merge по `unique_id` в
   `configuration.yaml`). **Оба перезапускают HA.**
 - `lovelace-resources.yaml` — HACS-карточки: `card-mod`, `compass-card`, `apexcharts-card`.
+- `requirements-ha.txt` — чек-лист для установки на "пустой" HA с нуля: HACS +
+  3 карточки выше, какие части уже встроены в HA core (rest/template/map/...),
+  и ссылка на deploy-tooling зависимости (`pyyaml`/`websockets` в корневом
+  `requirements.txt`).
+
+### Раскладка дашборда меняется пользователем через HA UI
+Пользователь несколько раз перекомпоновывал плитки прямо в интерфейсе HA
+(заголовки/позиции секций Wind & Forecast / Weather & Forecast / Position
+менялись). После каждой такой правки `dashboard-sailing.yaml` нужно
+**забрать заново** из `.storage/lovelace.dashboard_sailing` (SSH →
+`docker exec homeassistant cat /config/.storage/lovelace.dashboard_sailing`
+→ `data.config` → сконвертировать в YAML), а не редактировать вручную —
+файл в репо должен зеркалить текущую живую раскладку.
 
 ### ⚠️ Storage-mode дашборд НЕ подхватывается без рестарта HA
 HA читает `.storage/lovelace.dashboard_sailing` один раз при старте и дальше
@@ -504,6 +517,30 @@ HA-нативная интеграция "Open-Meteo" (config-flow) была о�
 альтернатива, но её `hourly`-forecast не содержит `wind_speed`/`wind_gust`
 (только `condition`/`precipitation`/`temperature`, ветер — только daily max
 или current) → не подходит для этого графика, интеграция удалена.
+
+### Windy — альтернативный виджет, тап прямо по iframe (2026-08-09)
+В секцию "Wind History & Forecast" добавлена `type: iframe` карточка со
+встроенным Windy-виджетом (`embed.windy.com/embed2.html?...`, координаты
+42.43/18.60) — показывает форекаст и историю ветра из Windy как визуальную
+альтернативу графику `apexcharts-card`.
+
+Отдельная кнопка "Open Windy" убрана — вместо неё тап/клик прямо по iframe
+открывает windy.com (приложение на мобильном, браузер на десктопе).
+Реализовано CSS-трюком через `card-mod`: iframe и полностью прозрачная
+`type: button` карточка помещены в один `type: grid` и через `card_mod`
+(`display: grid` на секции + `grid-column/grid-row: 1` на обеих дочерних
+карточках) наложены друг на друга в одной CSS grid-ячейке — невидимая
+`ha-card` кнопки перехватывает тапы поверх iframe и выполняет
+`tap_action: {action: url, url_path: https://www.windy.com/...}`.
+`windy.com` зарегистрирован официальным приложением Windy как Universal
+Link (iOS) / App Link (Android) — если приложение установлено, тап
+открывает его напрямую, иначе (или на десктопе) — обычный веб-браузер.
+Ни `browser_mod`, ни кастомные условия для этого не нужны.
+
+⚠️ Этот `card_mod`-оверлей зависит от DOM-структуры карточек `grid`/`button`,
+которая может отличаться между версиями HA frontend — если тап не работает
+после деплоя, нужно проверить в DevTools, что `ha-card` кнопки реально
+перекрывает область iframe, и поправить селекторы в `dashboard-sailing.yaml`.
 
 ---
 

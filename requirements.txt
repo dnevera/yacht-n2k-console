@@ -7,6 +7,16 @@ bleak>=0.21.0
 requests>=2.31.0
 python-dotenv>=1.0.0
 
+# ha/sailing-dash/deploy_dashboard.sh + deploy_sensors.sh (run on THIS
+# machine, not inside HA) use PyYAML to convert/merge the dashboard and
+# sensors YAML sources into HA's storage-mode JSON / configuration.yaml.
+pyyaml>=6.0
+
+# Optional: only needed to verify what the live HA frontend is actually
+# serving over the websocket API (see ha/sailing-dash/README.md,
+# "Why the dashboard deploy restarts HA") — not required for normal deploys.
+websockets>=12.0
+
 # nmea2000: PINNED to the exact PyPI release actually running in production.
 #
 # IMPORTANT: our fork's fix branch (fix/pgn-126996-hash-collision-per-source,

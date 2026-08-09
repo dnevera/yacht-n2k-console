@@ -40,19 +40,29 @@ edits back into HA's storage.
   cards need; these are installed/managed via HACS in the UI, not deployed
   by a script — this file just documents what must be present.
 
-## Dashboard layout (as of extraction)
+## Dashboard layout (re-synced 2026-08-09, after the user rearranged tiles in the HA UI)
 
-1. **Wind & Heading** — two `compass-card`s (COG, Wind angle/speed).
-2. **Wind History & Forecast** — `apexcharts-card` (measured wind vs.
-   forecast wind/gusts pulled from `sensor.wind_forecast_flat` attributes)
-   + a button linking out to Windy.com.
-3. **Position** — map (`device_tracker.nevera`, the boat's own N2K GPS
-   position — see "Boat position on the map" below), latitude/longitude
-   entities, barometric pressure gauge.
+1. **Wind & Forecast** — `compass-card` (Wind angle/speed) + `apexcharts-card`
+   (measured wind vs. forecast wind/gusts pulled from
+   `sensor.wind_forecast_flat` attributes).
+2. **Weather & Forecast** — the Windy `iframe` widget (alternative
+   forecast/history view, tap-to-open windy.com, see "Windy alternative
+   view" below), a barometric pressure gauge, and a pressure `tile` card
+   with a `trend-graph` feature.
+3. **Position** — COG `compass-card`, map (`device_tracker.nevera`, the
+   boat's own N2K GPS position — see "Boat position on the map" below),
+   latitude/longitude entities.
 4. **Speed & Depth** — SOG gauge, STW gauge, Depth gauge (each in its own
    grid section; the last section title still says "New section" in HA —
    left as-is to match the live dashboard, rename in the YAML + redeploy
    if desired).
+
+This layout has been reshuffled by the user directly in the HA UI more than
+once (headings/positions of the compass, pressure gauge, etc. moved between
+sections) — `dashboard-sailing.yaml` is re-synced from the live
+`.storage/lovelace.dashboard_sailing` config each time this happens, so it
+always reflects the exact current on-screen arrangement rather than a fixed
+"canonical" layout.
 
 All N2K-derived sensors (COG/SOG, wind, STW, depth) are published by
 `ydnu02_tcp_gateway` — see the `nmea2000-setup` skill / `AGENTS.md` for how
@@ -157,6 +167,54 @@ If the forecast/gust lines are still blank after redeploying this fix, open
 the browser console (`data_generator` exceptions, if any, print there) and
 re-open this investigation with that detail.
 
+### Windy alternative view (2026-08-09)
+
+As an alternative to the `apexcharts-card` chart (which only plots
+"Measured" wind + the open-meteo REST forecast/gust), the "Wind History &
+Forecast" section now also embeds a Windy `type: iframe` widget
+(`embed.windy.com/embed2.html?...`) right below the chart — Windy's own map
+shows both wind history playback (via the calendar/timeline control inside
+the widget) and its multi-model forecast for the same spot, as a visual
+cross-check against the open-meteo series.
+
+**No separate "Open Windy" button anymore (2026-08-09):** it was removed,
+and the whole widget area is now tappable/clickable directly — clicking or
+tapping anywhere on the embedded Windy map opens `windy.com` (browser on
+desktop, the Windy app on mobile if installed, same as the old button's
+behavior — see below for why). This is implemented with a `card-mod` CSS
+trick, since HA's built-in `type: iframe` card has no `tap_action` of its
+own: the iframe and an invisible `type: button` card are placed in the same
+`type: grid` section and forced (via `card_mod` on the grid and on the
+button) into the same CSS grid cell, so the fully transparent button's
+`ha-card` sits on top of, and the same size as, the iframe, intercepting
+taps/clicks and forwarding them to its `tap_action`.
+
+The button's `tap_action: {action: url, url_path: https://www.windy.com/...}`
+gets the "browser on desktop, app on mobile" behavior for free: on
+iOS/Android, `windy.com` links are registered by the official Windy app as
+Universal Links / App Links, so if the app is installed the OS opens it
+there directly on tap; if it isn't installed (or on a desktop browser), the
+same link simply opens in the regular web browser. No extra HA-side logic
+(browser_mod, custom conditions, etc.) is needed for that part — it's
+handled entirely by the mobile OS's link-routing.
+
+The iframe widget and the transparent overlay button currently use the
+boat's last known anchorage coordinates (42.43/18.60), matching the
+map/forecast defaults elsewhere on this dashboard — update both entries in
+`dashboard-sailing.yaml` (and redeploy) if the boat moves to a new home
+location for an extended period; making them follow the live GPS position
+like the open-meteo `rest:` sensor does would require a
+`card-mod`/`card_templater`-based templated `url`, which is a possible
+follow-up if wanted.
+
+**Note:** the card-mod overlay/grid-stacking CSS trick above depends on the
+exact DOM structure `type: grid` and `type: button` cards render, which can
+vary slightly across HA frontend versions — if tapping the widget doesn't
+open Windy after redeploying, open the browser DevTools inspector on the
+widget to confirm the button's `ha-card` actually covers the iframe area,
+and adjust the `card_mod` selectors/styles in `dashboard-sailing.yaml`
+accordingly.
+
 ### Forecast location follows the boat's GPS
 
 As of 2026-08-09, the `rest:` sensor in `sensors-sailing.yaml` uses
@@ -181,12 +239,18 @@ available as a daily max or in "current"), so it cannot drive this chart.
 
 ## Requirements
 
-- Local machine: `python3` + `PyYAML` (`pip install pyyaml`) to run the
-  YAML → JSON conversion in `deploy_dashboard.sh` / the YAML merge in
-  `deploy_sensors.sh`.
+- Local machine: `python3` + `PyYAML` (`pip install pyyaml`, now tracked in
+  the repo root `requirements.txt`) to run the YAML → JSON conversion in
+  `deploy_dashboard.sh` / the YAML merge in `deploy_sensors.sh`. Optionally
+  `websockets` (also in `requirements.txt`) to verify the live
+  `lovelace/config` (see "Why the dashboard deploy restarts HA" above).
 - Remote host: passwordless `sudo` for `docker exec`/`docker cp`/
   `docker restart` against the `homeassistant` container (same requirement
   as `deploy.sh:patch_ha()`).
 - HACS custom cards must already be installed on the target HA instance
   (see `lovelace-resources.yaml`, not managed by these scripts):
   `card-mod`, `compass-card`, `apexcharts-card`.
+- **Setting up a brand-new HA instance from scratch?** See
+  `requirements-ha.txt` for the full checklist (HACS itself, the custom
+  cards above, and which parts are already built into HA core) — the
+  "Setting this up from scratch" section above covers the deploy order.

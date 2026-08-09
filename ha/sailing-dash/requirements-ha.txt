@@ -1,0 +1,55 @@
+# What a FRESH Home Assistant install needs before the Sailing dashboard
+# (dashboard-sailing.yaml + sensors-sailing.yaml) can be deployed to it.
+#
+# This is NOT a pip requirements file for Home Assistant itself — HA core
+# ships everything the dashboard needs (rest:, template:, device_tracker:,
+# map/gauge/tile/entity/heading cards, sensor & config machinery) out of the
+# box. What's listed below is the extra, non-default setup: HACS + three
+# HACS-installed frontend custom cards, plus the deploy tooling requirements
+# already covered in the repo root requirements.txt.
+#
+# See ha/sailing-dash/README.md ("Setting this up from scratch on a new HA
+# instance") for the exact deploy order/commands.
+
+# ── 1. HACS (Home Assistant Community Store) ────────────────────────────────
+# Required to install the custom Lovelace cards below. Not a pip package —
+# install via the official HACS installer:
+#   https://hacs.xyz/docs/use/download/download/
+# then add HACS through Settings -> Devices & Services -> Add Integration.
+
+# ── 2. HACS Frontend custom cards (Settings -> HACS -> Frontend) ────────────
+# Install these three, in this order (card-mod is a soft dependency others
+# rely on for styling tricks used on this dashboard):
+#   1. card-mod        https://github.com/thomasloven/lovelace-card-mod
+#                       (used by the Windy widget's tap-to-open overlay)
+#   2. compass-card    https://github.com/tomvanswam/compass-card
+#                       (used by the Wind/COG compass tiles)
+#   3. apexcharts-card https://github.com/RomRider/apexcharts-card
+#                       (used by the Wind History & Forecast chart)
+# See lovelace-resources.yaml for the exact resource URLs already registered
+# on the reference instance (bumblebee.local) — for documentation only, HACS
+# registers its own on install, do not copy those URLs/ids verbatim.
+
+# ── 3. HA core integrations used (already bundled, nothing to install) ──────
+# - rest:      (sensor.wind_forecast_rest — polls api.open-meteo.com)
+# - template:  (sensor.wind_forecast_flat, sensor.barometer_mmhg,
+#                sensor.boat_latitude/boat_longitude, device_tracker.nevera)
+# - map / gauge / tile / entity / heading / iframe / button / grid / sections
+#   Lovelace card & view types
+# NOTE: the native "Open-Meteo" HA integration (config-flow based) was
+# evaluated and is explicitly NOT used here — its hourly forecast lacks
+# wind_speed/wind_gust, see README.md "Forecast location follows the boat's
+# GPS" for details. Do not install/enable it for this dashboard.
+
+# ── 4. Tooling on the machine running the deploy scripts (NOT on HA) ────────
+# Already covered by the repo root requirements.txt:
+#   pyyaml>=6.0       (deploy_dashboard.sh / deploy_sensors.sh YAML <-> JSON)
+#   websockets>=12.0  (optional, only for verifying live lovelace/config)
+# Plus SSH + passwordless sudo on the HA host for docker exec/cp/restart
+# (same as deploy.sh:patch_ha(), see repo root README/TECHNICAL.md).
+
+# ── 5. Entities this dashboard assumes exist already ────────────────────────
+# All N2K-derived sensors (COG/SOG, wind angle/speed, STW, depth, GPS
+# lat/lon) are published by ydnu02_tcp_gateway — see the nmea2000-setup
+# skill / repo root AGENTS.md for how those get into HA. This dashboard does
+# not work standalone without that gateway already running and publishing.
