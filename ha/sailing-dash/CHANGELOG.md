@@ -12,6 +12,32 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **Synced with a manual dashboard tweak made in the HA UI:** the wind
+  `compass-card`'s `compass.ticks.radius` was changed 52 -> 95 on the live
+  instance; pulled into `dashboard-sailing.yaml` (live `.storage` config and
+  the local YAML verified identical afterwards). No deploy needed — this is a
+  pull, not a push.
+
+- **Mobile gestures on both `custom:plotly-graph` charts reworked: one finger
+  pans, a long press shows the tooltip.** The previous scheme (one finger =
+  tooltip, two fingers = pan) did not work on the phone — the two-finger pan
+  never took effect. Now a single touch is *not* intercepted, so Plotly pans
+  along X as usual; if the finger stays down for 400 ms without moving more
+  than 10 px, the pan Plotly already started is aborted with a document-level
+  `mouseup` (that is how Plotly's `dragElement` finishes a drag — nothing has
+  moved yet, so nothing is relayouted), a short `navigator.vibrate(15)` marks
+  the switch, and from then on `touchmove` is stopped in the capture phase and
+  translated into synthetic `mouseover`/`mousemove`, so the shared
+  (`hovermode: x unified`) tooltip follows the finger until it is lifted.
+  Desktop mouse behaviour, the dashed cursor and the double-click reset are
+  unchanged. Verified in `local-preview` with synthetic multi-touch: a quick
+  one-finger drag moves `xaxis.range`, a 700 ms hold produces the 4-series
+  tooltip and dragging afterwards changes the tooltip's timestamp
+  (21:30 -> 09:30) while `xaxis.range` stays put. Test note: synthetic
+  `TouchEvent`s must be created with `composed: true`, otherwise they never
+  leave the card's shadow root and Plotly's document-level drag listeners
+  never see them (this cost a debugging round, it is not a card bug).
+
 - **Windy: the weather-detail button is now a toggle (`windy-boat-card` 1.2.0).**
   A second press closes the panel (`{showDetail: false}`, which the embed's
   `updateEmbed` handler maps to hiding the detail view). State is tracked in
