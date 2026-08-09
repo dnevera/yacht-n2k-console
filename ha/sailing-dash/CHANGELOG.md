@@ -12,6 +12,78 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **Header values row above the wind vector chart** (mirrors the
+  apexcharts card's `show_states` header the user pointed at): current
+  measured wind speed (Raymarine), plus the *next full forecast hour* wind
+  and gust from open-meteo. The latter two needed new template sensors
+  (`sensor.wind_forecast_next_hour`, `sensor.wind_gust_next_hour` in
+  `sensors-sailing.yaml`) that pick the first `forecast_time` entry >= now
+  from `sensor.wind_forecast_flat` - the flat sensor only exposes arrays.
+  First tried a `type: markdown` card with inline HTML/CSS to match the
+  big-coloured-number look: HA sanitizes `<div style=...>` away, so the
+  values rendered as a plain stacked list - replaced with a stock
+  `type: glance` (`show_icon: false`, `columns: 3`,
+  `grid_options.columns: 36` for full section width).
+- **"Now" badge padding/rounding, final form.** The hand-drawn `path`
+  rounded rect had no way to know the pixel size of the text, so its
+  padding was uneven; reverted to Plotly's own `bgcolor` + `borderpad: 4`
+  (which centres the label exactly) and got the rounded corners instead by
+  injecting `.annotation rect.bg { rx: 4px; ry: 4px }` (SVG geometry
+  properties settable via CSS) into the card's shadow root from the same
+  `layout.annotations` `$fn`, once per card. Measured in `local-preview/`:
+  rect 21x31 around a 12x21.7 text = symmetric padding, `rx` computes to 4px.
+- **"Now" badge: correct text orientation, left-anchored, rounded corners.**
+  `textangle: 90` rendered the label upside down -> `-90`; added
+  `xanchor: 'right'` (+ `xshift`) so the badge hangs on the *left* side of
+  the "Now" line instead of straddling it. Plotly annotations have no
+  `borderradius` (confirmed absent from the bundled Plotly build), so the
+  white background was moved out of the annotation into a `shapes` entry of
+  `type: path` with `Q` arcs on all four corners; the annotation now only
+  draws the black text on top. Gotcha: a `path` on a date axis silently
+  renders nothing when its coordinates are ISO strings - it must use epoch
+  milliseconds (this is why the badge was invisible on the first attempt).
+- **"Now" marker on the wind vector chart made visible (like apexcharts').**
+  The annotation existed but was drawn *above* the plot area (`yref: paper,
+  y: 1, yanchor: bottom`) with no top margin, so it was clipped off the
+  canvas. Moved inside the plot as a white badge with vertical text
+  (`y: 0.97`, `yanchor: top`, `textangle: 90`, `bgcolor: '#ffffff'`,
+  `borderpad: 3`, black font) and switched the `shapes` line from
+  `dash: dot` to `dash: dash` so it matches the "Wind — History & Forecast"
+  chart. The "▲ N / ▼ S" hint was clipped the same way and was moved
+  inside too (`x: 0.01`, `y: 0.97`, `yanchor: top`).
+- **Wind vector chart: single unified tooltip + vertical dash cursor +
+  gusts.** Replaced the two competing hover popups (the per-trace box plus
+  the per-arrow `annotation` tooltip) with one unified tooltip:
+  `layout.hovermode: x unified`, `hoverdistance: -1`, the direction arrows'
+  `captureevents` turned off (they no longer capture hover), and per-trace
+  `hovertemplate`s that put the series name in `<extra>` so the unified box
+  reads `Measured: 9.5 kt · NW 320°`. Added the vertical dashed
+  time cursor via `xaxis.showspikes/spikemode: across/spikedash: dash/
+  spikesnap: cursor` (`yaxis.showspikes: false`), matching the other charts.
+  Gusts are now shown as two thin dotted lines with their own tooltip rows:
+  *Gusts (forecast)* from open-meteo's `forecast_gust`, and *Gusts
+  (measured)* computed as a 10-minute rolling max over the Raymarine wind
+  speed history (the instrument reports instantaneous speed only, so the
+  gust is derived in a `filters.fn`). Verified in `local-preview/` by
+  driving a real hover and reading the DOM: one hover box with a time
+  header + 4 rows, spike line present, no second popup.
+- **Wind vector chart: 4h default window, X-only panning, reset only on
+  double click (DEPLOYED).** Root cause of "panning always snaps back":
+  the card merges `layout` twice around its own `{xaxis: {range:
+  visible_range}}` (`merge({}, layout, {xaxis...}, yaxes, layout)`), so a
+  hand-written `layout.xaxis.range` always wins and re-applies on every
+  re-render, defeating the card's built-in browsing mode. Fixed by dropping
+  that manual range and using the card's own window instead:
+  `hours_to_show: 28` + `time_offset: 24h` = exactly Now−4h … Now+24h.
+  Panning now persists (card enters browsing mode); `layout.yaxis.
+  fixedrange: true` + `autorange: true` keeps the Y axis auto-scaled and
+  un-pannable/un-zoomable; `config.doubleClick: false` disables Plotly's
+  own `reset+autosize` (which caused the "autoscale instead of reset"
+  behaviour), and a new `on_dblclick` handler clicks the card's built-in
+  reset button (`exitBrowsingMode`) so a double click/tap always returns to
+  the Now−4h window, repeatably. Verified in `local-preview/` by driving a
+  real drag + two double clicks and reading `gd.layout` (X stays shifted
+  after pan, Y never moves, both double clicks land back on −4h/+24h).
 - **Fixed reversed wind arrow direction + added compass tooltip.** Both
   `sensor.wind_data_..._wind_angle` (Raymarine) and open-meteo's
   `winddirection_10m` follow the standard meteorological "from" convention

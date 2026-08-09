@@ -61,6 +61,42 @@ template:
           forecast_gust: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['windgusts_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
           forecast_dir: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['winddirection_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
 
+      # Next full forecast hour from open-meteo, exposed as a plain numeric
+      # sensor so the vector chart's header row can show it the same way
+      # apexcharts-card's own header shows its series states (added 2026-08-09).
+      - name: Wind Forecast Next Hour
+        unique_id: wind_forecast_next_hour
+        unit_of_measurement: 'kts'
+        icon: mdi:weather-windy
+        state: >
+          {% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %}
+          {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_wind') or [] %}
+          {% set ns = namespace(v = none) %}
+          {% for t in times %}
+            {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}
+              {% set ns.v = vals[loop.index0] %}
+            {% endif %}
+          {% endfor %}
+          {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}
+
+      # Next full forecast hour from open-meteo, exposed as a plain numeric
+      # sensor so the vector chart's header row can show it the same way
+      # apexcharts-card's own header shows its series states (added 2026-08-09).
+      - name: Wind Gust Next Hour
+        unique_id: wind_gust_next_hour
+        unit_of_measurement: 'kts'
+        icon: mdi:weather-windy-variant
+        state: >
+          {% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %}
+          {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_gust') or [] %}
+          {% set ns = namespace(v = none) %}
+          {% for t in times %}
+            {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}
+              {% set ns.v = vals[loop.index0] %}
+            {% endif %}
+          {% endfor %}
+          {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}
+
       # Wind direction (0-360°, true wind angle from the mast sensor, NOT
       # apparent-relative — same raw entity used by the Wind compass-card),
       # exposed as its own numeric sensor purely so HA's recorder keeps a
