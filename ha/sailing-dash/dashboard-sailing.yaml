@@ -46,10 +46,28 @@ views:
       header:
         title:
           value: Wind
+        icon:
+          value: mdi:weather-windy
+      compass:
+        circle:
+          color: '#37474f'
+        ticks:
+          show: true
+          color: '#90a4ae'
+          radius: 52
+        north:
+          show: true
+        east:
+          show: true
+        south:
+          show: true
+        west:
+          show: true
       indicator_sensors:
       - sensor: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle
         indicator:
           image: arrow_inward
+          color: '#4fc3f7'
       value_sensors:
       - sensor: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
     - type: custom:apexcharts-card
@@ -183,10 +201,30 @@ views:
       header:
         title:
           value: COG
+        icon:
+          value: mdi:compass-outline
+      compass:
+        circle:
+          color: '#37474f'
+        ticks:
+          show: true
+          color: '#90a4ae'
+          radius: 52
+        north:
+          show: true
+        east:
+          show: true
+        south:
+          show: true
+        west:
+          show: true
       indicator_sensors:
       - sensor: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog
         indicator:
           image: arrow_inward
+          color: '#ff7043'
+      value_sensors:
+      - sensor: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog
     - type: map
       entities:
       - entity: device_tracker.nevera

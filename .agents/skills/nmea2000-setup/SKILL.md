@@ -542,6 +542,20 @@ Link (iOS) / App Link (Android) — если приложение установ
 после деплоя, нужно проверить в DevTools, что `ha-card` кнопки реально
 перекрывает область iframe, и поправить селекторы в `dashboard-sailing.yaml`.
 
+### Компасы Wind/COG — стилизация циферблата (2026-08-09)
+Раньше обе `custom:compass-card` (Wind в "Wind & Forecast", COG в "Position")
+использовали минимальный конфиг (только `indicator_sensors`) → рендерились
+как «просто кружочки» с плавающей стрелкой без делений и сторон света.
+Добавлен объект `compass:` (документация:
+`https://github.com/tomvanswam/compass-card/wiki/1.-YAML-configuration`):
+- `compass.circle.color: '#37474f'` — тёмный фон циферблата.
+- `compass.ticks: {show: true, color: '#90a4ae', radius: 52}` — деления по кругу.
+- `compass.north/east/south/west: {show: true}` — буквы N/E/S/W (по умолчанию скрыты).
+- `header.icon` — иконка в заголовке (`mdi:weather-windy` / `mdi:compass-outline`).
+- `indicator.color` — цветная стрелка (`#4fc3f7` ветер, `#ff7043` COG) для контраста с тёмным фоном.
+- COG-компас дополнительно получил SOG как `value_sensors` (раньше показывал
+  только стрелку без числа); SOG также остаётся отдельным gauge в "Speed & Depth".
+
 ---
 
 ## ⚠️ Правила

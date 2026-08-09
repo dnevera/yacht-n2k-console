@@ -49,9 +49,9 @@ edits back into HA's storage.
    forecast/history view, tap-to-open windy.com, see "Windy alternative
    view" below), a barometric pressure gauge, and a pressure `tile` card
    with a `trend-graph` feature.
-3. **Position** — COG `compass-card`, map (`device_tracker.nevera`, the
-   boat's own N2K GPS position — see "Boat position on the map" below),
-   latitude/longitude entities.
+3. **Position** — COG `compass-card` (now also showing SOG as its value
+   sensor), map (`device_tracker.nevera`, the boat's own N2K GPS position —
+   see "Boat position on the map" below), latitude/longitude entities.
 4. **Speed & Depth** — SOG gauge, STW gauge, Depth gauge (each in its own
    grid section; the last section title still says "New section" in HA —
    left as-is to match the live dashboard, rename in the YAML + redeploy
@@ -127,6 +127,33 @@ rather than the boat, and shows nothing/stale data when the phone is off or
 left ashore. If you need the phone tracker back for some reason, swap the
 `entity:` under the map card's `entities:` list in `dashboard-sailing.yaml`
 and redeploy.
+
+## Compass cards styling (Wind & COG, 2026-08-09)
+
+Both `compass-card`s (Wind angle in "Wind & Forecast", COG in "Position")
+used the bare minimum config — just `indicator_sensors`, which renders as a
+plain circle with a floating arrow and no dial markings at all. They now use
+the card's `compass:` object to render an actual compass face:
+
+- `compass.circle.color` — a dark dial background (`#37474f`) instead of the
+  default transparent/white circle.
+- `compass.ticks` — tick marks around the rim (`show: true`, light-grey
+  `#90a4ae`, `radius: 52`).
+- `compass.north/east/south/west` — the four cardinal letters (N/E/S/W) are
+  shown around the dial (hidden by default in this card).
+- `header.icon` — a matching mdi icon in the card header (`mdi:weather-windy`
+  for Wind, `mdi:compass-outline` for COG).
+- The indicator arrows themselves are now colored (`#4fc3f7` cyan for Wind,
+  `#ff7043` orange for COG) instead of the default color, for contrast
+  against the dark dial.
+- The COG compass also gained SOG as a `value_sensors` entry (previously it
+  only showed the bare COG arrow with no number at all) — SOG is still also
+  shown separately as its own gauge in "Speed & Depth", this just adds it
+  under the compass too since course+speed over ground are a natural pair.
+
+See the [compass-card wiki](https://github.com/tomvanswam/compass-card/wiki/1.-YAML-configuration)
+for the full list of `compass:` sub-options (background images, per-cardinal
+offsets, dynamic styling by entity value, etc.) if further styling is wanted.
 
 ## Wind History & Forecast troubleshooting
 
