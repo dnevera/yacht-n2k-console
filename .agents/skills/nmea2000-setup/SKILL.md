@@ -481,6 +481,29 @@ Source-controlled копия storage-mode Lovelace-дашборда "Sailing"
 Если diff показывает неожиданные изменения — сначала забрать живую версию в
 репо (как в разделе выше), потом накатывать свои правки поверх неё.
 
+**Уточнение (2026-08-09 17:30, правило нарушено второй раз):** сравнивать
+нужно НЕ только перед деплоем, а **перед началом любой правки**. Обязательный
+порядок:
+1. `ssh <host> "sudo docker exec homeassistant cat /config/.storage/lovelace.dashboard_sailing"`
+   → `data.config` → YAML → **синхронизировать локальный файл с live** (ручные
+   правки пользователя в UI всегда приоритетны, их нельзя перезаписывать);
+2. только потом вносить новое изменение поверх;
+3. проверить, что diff live-vs-local содержит **только** это изменение;
+4. деплоить через `./deploy.sh` (никогда ad-hoc `scp`/`docker cp`).
+Пример того, что было потеряно бы: заголовок секции «Wind & Forecast» → «Wind»,
+title карточки «Wind — History & Forecast» → «Wind History & Forecast», удалён
+подзаголовок «Wind Direction & Speed — Vector Chart».
+
+### card-mod и `!important` (2026-08-09)
+Стили `card_mod` вставляются как `<style>` в shadow root карточки, а собственный
+CSS HA приходит через `adoptedStyleSheets`, которые каскад применяет **после**
+обычных `<style>`. Поэтому правила с одинаковой специфичностью (например
+`.entity { flex-direction: column }` у `hui-glance-card`) перебивают card-mod —
+все декларации в `card_mod.style` нужно помечать `!important`. Так сделана
+шапка значений над вектор-графиком ветра: `flex-direction: column-reverse` +
+крупное значение 26px сверху и мелкая подпись 12px снизу (вид как у
+`show_states` у apexcharts-card).
+
 ### ⚠️ Storage-mode дашборд НЕ подхватывается без рестарта HA
 HA читает `.storage/lovelace.dashboard_sailing` один раз при старте и дальше
 отдаёт фронтенду копию из памяти (websocket `lovelace/config`). `docker cp`

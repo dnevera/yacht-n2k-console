@@ -12,6 +12,50 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **RULE (restated, mandatory): pull + sync the live HA dashboard BEFORE
+  every edit, not just before deploy.** Violated again — while an edit was
+  in flight the user had renamed the section heading ("Wind & Forecast" ->
+  "Wind"), renamed the apexcharts card title ("Wind — History & Forecast" ->
+  "Wind History & Forecast") and deleted the "Wind Direction & Speed —
+  Vector Chart" subtitle in the HA UI; deploying would have reverted all
+  three. Mandatory order is now written into the header of
+  `dashboard-sailing.yaml`: (1) pull live `.storage` config and sync this
+  file to it (the user's UI edits always win), (2) apply the new change on
+  top, (3) confirm the live-vs-local diff contains ONLY that change,
+  (4) deploy via `./deploy.sh`.
+- **Header values row restyled to the apexcharts `show_states` look, and
+  the forecast horizon is now explicit.** The stock `type: glance` rendered
+  a small name-above-tiny-value list; `card_mod` now flips each entity
+  (`flex-direction: column-reverse`) so the value is the big top line
+  (26px, coloured per series: `#4fc3f7` measured / `#ff7043` forecast /
+  `#b0bec5` gusts) with a small 12px caption underneath. All declarations
+  need `!important`: HA's own card CSS ships via `adoptedStyleSheets`,
+  which the cascade applies *after* card-mod's injected `<style>`, so
+  same-specificity rules (e.g. `.entity { flex-direction: column }`) would
+  otherwise win. Second gotcha: card-mod gives **each glance entity its own
+  shadow root** (`card-mod-type="glance"`, containing `div.name` + an
+  unclassed `div` holding the state), so card-level CSS can't reach the
+  value/caption at all — the card-level `card_mod` only does the layout flip
+  and padding, while font sizes and per-series colours live in a `card_mod`
+  block **on each entity** (`div.name` / `div:not(.name)`). Confirmed on the
+  live dashboard by screenshot. Labels now state the period the value covers:
+  "Measured now (kts)", "Forecast next 1h (kts)", "Gusts next 1h (kts)" —
+  both forecast sensors take the first `forecast_time >= now` point from
+  `sensor.wind_forecast_flat`, i.e. the next full hour, which is why a value
+  of `0` there simply means calm in that hour.
+- **Wind vector chart: Measured vs Forecast markers no longer blend
+  (DEPLOYED).** Both marker traces were coloured by the same 0–40 kt speed
+  colorscale (`marker.color: $ex ys`), so at similar wind speeds the two
+  series were indistinguishable. Measured is now a fixed light-blue circle
+  (`#4fc3f7`), Forecast a fixed orange diamond (`#ff7043`). The speed
+  colorscale is still meaningful for the direction arrows, so the `kt`
+  colorbar was preserved by moving it onto an extra invisible marker trace
+  ("kt scale", `opacity: 0`, `showlegend: false`, `hoverinfo: skip`) — it
+  only renders the colorbar and stays out of the legend/unified tooltip.
+  Arrow colours untouched (per request). Verified in `local-preview/`
+  (trace dump + screenshot: blue circles left of Now, orange diamonds on
+  the forecast side, colorbar intact).
+
 - **Header values row above the wind vector chart** (mirrors the
   apexcharts card's `show_states` header the user pointed at): current
   measured wind speed (Raymarine), plus the *next full forecast hour* wind

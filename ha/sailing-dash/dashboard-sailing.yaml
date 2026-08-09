@@ -21,6 +21,21 @@
 # dashboard directly in the HA UI often, and a blind edit-then-deploy will
 # silently discard those changes.
 #
+# ⚠️ RULE, MANDATORY ORDER (restated 2026-08-09 17:30 after a second
+# violation — the user had renamed headings and removed a subtitle in the UI
+# while an edit was in flight):
+#   1. PULL the live config from HA and SYNC this file to it (layout, headings,
+#      card names — the user's manual UI edits win, never overwrite them);
+#   2. only THEN apply the new change on top;
+#   3. verify the diff live-vs-local contains ONLY the intended change;
+#   4. deploy via ./deploy.sh (never ad-hoc scp/docker cp).
+# Pull command:
+#   ssh <host> "sudo docker exec homeassistant cat \
+#     /config/.storage/lovelace.dashboard_sailing" \
+#     | python3 -c "import json,sys,yaml; \
+#       print(yaml.safe_dump(json.load(sys.stdin)['data']['config'], \
+#       sort_keys=False, allow_unicode=True))"
+#
 # This is the single source of truth going forward — edit THIS file, then
 # redeploy with deploy_dashboard.sh (round-trips it back into .storage on the
 # target host, since HA storage-mode dashboards are not editable as plain
@@ -53,7 +68,7 @@ views:
   - type: grid
     cards:
     - type: heading
-      heading: Wind & Forecast
+      heading: Wind
       heading_style: title
     - type: custom:windrose-card
       windspeed_bar_location: right
@@ -83,7 +98,7 @@ views:
         color: '#ffffff'
       header:
         show: true
-        title: Wind — History & Forecast
+        title: Wind History & Forecast
         show_states: true
         colorize_states: true
       apex_config:
@@ -122,9 +137,6 @@ views:
         unit: kts
         opacity: 0.9
         data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const rangeStart=Date.now()-2*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=rangeStart);
-    - type: heading
-      heading: Wind Direction & Speed — Vector Chart
-      heading_style: subtitle
   - type: grid
     cards:
     - type: heading
@@ -223,11 +235,60 @@ views:
       columns: 3
       entities:
       - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
-        name: Measured (kts)
+        name: Measured now (kts)
+        card_mod:
+          style: |
+            div.name {
+              font-size: 12px !important;
+              font-weight: 400 !important;
+              line-height: 14px !important;
+              color: var(--secondary-text-color) !important;
+            }
+            div:not(.name) {
+              font-size: 26px !important;
+              font-weight: 500 !important;
+              line-height: 30px !important;
+              color: #4fc3f7 !important;
+            }
       - entity: sensor.wind_forecast_next_hour
-        name: Forecast (kts)
+        name: Forecast next 1h (kts)
+        card_mod:
+          style: |
+            div.name {
+              font-size: 12px !important;
+              font-weight: 400 !important;
+              line-height: 14px !important;
+              color: var(--secondary-text-color) !important;
+            }
+            div:not(.name) {
+              font-size: 26px !important;
+              font-weight: 500 !important;
+              line-height: 30px !important;
+              color: #ff7043 !important;
+            }
       - entity: sensor.wind_gust_next_hour
-        name: Gusts (kts)
+        name: Gusts next 1h (kts)
+        card_mod:
+          style: |
+            div.name {
+              font-size: 12px !important;
+              font-weight: 400 !important;
+              line-height: 14px !important;
+              color: var(--secondary-text-color) !important;
+            }
+            div:not(.name) {
+              font-size: 26px !important;
+              font-weight: 500 !important;
+              line-height: 30px !important;
+              color: #b0bec5 !important;
+            }
+      card_mod:
+        style: |
+          ha-card { padding: 10px 8px 6px !important; }
+          .entities { padding: 0 !important; }
+          .entity {
+            flex-direction: column-reverse !important;
+          }
       grid_options:
         columns: 36
     - type: custom:plotly-graph
@@ -250,7 +311,38 @@ views:
         customdata: "$fn ({ xs, vars }) => {\n  const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n  const dirYs = (vars.dir && vars.dir.ys) || [];\n  return xs.map((_, i) => {\n    const d = dirYs[i] || 0;\n    return points[Math.round((((d % 360) + 360) % 360) / 22.5) % 16] + ' ' + Math.round(d) + '\u00b0';\n  });\n}"
         hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Measured</extra>'
         marker:
-          size: 5
+          size: 6
+          symbol: circle
+          color: '#4fc3f7'
+          line:
+            width: 0
+      - entity: sensor.wind_forecast_flat
+        name: Forecast
+        mode: markers
+        extend_to_present: false
+        filters:
+        - fn: "({ meta }) => ({\n  xs: (meta.forecast_time || []).map((t) => new Date(t + \"Z\")),\n  ys: (meta.forecast_wind || []),\n})"
+        - fn: ({ meta, vars }) => { vars.forecastDir = meta.forecast_dir || []; return {}; }
+        - store_var: forecastSpeed
+        customdata: "$fn ({ meta }) => {\n  const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n  return (meta.forecast_dir || []).map((d) => points[Math.round((((d % 360) + 360) % 360) / 22.5) % 16] + ' ' + Math.round(d) + '\u00b0');\n}"
+        hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Forecast</extra>'
+        marker:
+          size: 6
+          symbol: diamond
+          color: '#ff7043'
+          line:
+            width: 0
+      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+        name: kt scale
+        mode: markers
+        showlegend: false
+        hoverinfo: skip
+        filters:
+        - resample: 30m
+        - map_y: parseFloat(y)
+        marker:
+          size: 0.1
+          opacity: 0
           color: $ex ys
           colorscale:
           - - 0
@@ -280,40 +372,6 @@ views:
               side: top
             ticksuffix: ' kt'
             len: 0.9
-      - entity: sensor.wind_forecast_flat
-        name: Forecast
-        mode: markers
-        extend_to_present: false
-        filters:
-        - fn: "({ meta }) => ({\n  xs: (meta.forecast_time || []).map((t) => new Date(t + \"Z\")),\n  ys: (meta.forecast_wind || []),\n})"
-        - fn: ({ meta, vars }) => { vars.forecastDir = meta.forecast_dir || []; return {}; }
-        - store_var: forecastSpeed
-        customdata: "$fn ({ meta }) => {\n  const points = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];\n  return (meta.forecast_dir || []).map((d) => points[Math.round((((d % 360) + 360) % 360) / 22.5) % 16] + ' ' + Math.round(d) + '\u00b0');\n}"
-        hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Forecast</extra>'
-        marker:
-          size: 5
-          color: $ex ys
-          colorscale:
-          - - 0
-            - '#b0e2ff'
-          - - 0.125
-            - '#61c4e0'
-          - - 0.25
-            - '#4bbf7a'
-          - - 0.375
-            - '#a8d048'
-          - - 0.5
-            - '#f5e642'
-          - - 0.625
-            - '#f2a93b'
-          - - 0.75
-            - '#eb5c2a'
-          - - 0.875
-            - '#d62828'
-          - - 1
-            - '#8e1b8e'
-          cmin: 0
-          cmax: 40
       - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
         name: Gusts (measured)
         mode: lines
