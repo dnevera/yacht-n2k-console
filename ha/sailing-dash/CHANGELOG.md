@@ -12,6 +12,79 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **Fixed `forecast_hours: 72` only drawing up to Aug 11, and the bogus
+  "kt scale" row in the shared tooltip.** (1) open-meteo counts
+  `forecast_days` from **today 00:00 UTC**, not from "now", so the previous
+  `ceil(forecast_hours / 24)` was systematically short: at 18:00 UTC with
+  `forecast_hours=72` it asked for 3 days = only ~53 h ahead (chart ended
+  Aug 11 23:00). Both `resource_template` URLs now use
+  `min(ceil((hours_elapsed_today_utc + forecast_hours) / 24), 16)` —
+  still derived from the single `sensor.chart_time_window` setting, no new
+  hardcoded numbers. Verified live: the flat wind/wave sensors went from 72
+  to 96 hourly points, last point Aug 12 23:00, i.e. the full +72 h.
+  Documented the harmless startup race (the `rest:` platform builds its URL
+  before the template sensor exists, so the first poll after an HA restart
+  uses the `| int(48)` fallback; the next poll, or an explicit
+  `homeassistant.update_entity`, fixes it). (2) The invisible "kt scale"
+  trace (it exists only to render the colorbar legend for the direction
+  arrows) showed up as a `kt scale / 4 kts` row in the unified tooltip —
+  `hoverinfo: skip` is ignored under `hovermode: x unified`. It is now
+  emptied (`extend_to_present: false` + a final `fn: () => ({xs: [], ys: []})`
+  filter); Plotly still renders the colorbar from
+  `marker.colorscale/cmin/cmax` without any data points. Verified in
+  `local-preview/` with real hover: tooltip now reads only
+  `Measured / Forecast / Gusts (measured) / Gusts (forecast)`, colorbar
+  still present.
+- **One place to configure the time window for BOTH plotly cards *and* the
+  open-meteo requests: `sensor.chart_time_window`.** The window used to be
+  hardcoded four times (`hours_to_show`/`time_offset` in the wind chart and
+  in the Waves chart, `forecast_days=2` in both `rest:` URLs). New template
+  sensor `sensor.chart_time_window` (`sensors-sailing.yaml`) exposes
+  `history_hours` (4) and `forecast_hours` (48 = the agreed 2 days); both
+  REST `resource_template` URLs derive `forecast_days` from it as
+  `ceil(forecast_hours / 24)`, so the API is asked for exactly the interval
+  the charts draw. `forecast_days` is deliberately not a sensor attribute:
+  a self-referencing (`this.attributes`) template would not be re-evaluated
+  when the literals change. Both `custom:plotly-graph` cards read
+  `hours_to_show: $fn ({ hass }) => history_hours + forecast_hours` and
+  `time_offset: $fn ({ hass }) => forecast_hours + 'h'`. This works because
+  `plotly-graph-card` resolves those two keys through `getFromConfig`, i.e.
+  the same `$fn`/`$ex` evaluator used for traces, and `$fn` receives the full
+  `hass` object — verified against the installed bundle
+  (`local-preview/vendor/plotly-graph-card.js`), not assumed: in the local
+  simulator the card's `parsed_config` came out as 28 / "24h" (X axis
+  Now-4h..Now+24h), and after changing only the mock sensor attributes to
+  8/12 the same card rendered a 20h span with `time_offset: "12h"`.
+  `layout.xaxis.range` is still NOT used (it breaks X panning).
+
+- **Documented the Open-Meteo API limits in `sensors-sailing.yaml`
+  (comments only, no behaviour change).** Numbers were verified live by
+  probing both endpoints and counting `hourly.time` points, not copied from
+  the docs: `forecast_days` is `0..16` on BOTH `api.open-meteo.com/v1/forecast`
+  and `marine-api.open-meteo.com/v1/marine` (16 -> 384 hourly points,
+  17 -> HTTP 400 "Allowed range 0 to 16" — so the marine API is *not* capped
+  at 8 days as often assumed, though wave skill degrades after ~7-8 days and
+  the high-resolution weather models end at ~5 days). History via `past_days`
+  is `0..93` on both (93 -> 2400 hourly points, 94 -> HTTP 400), and those
+  past values are model reanalysis, not measurements; anything older needs
+  the separate Archive API (`archive-api.open-meteo.com/v1/archive`, ERA5
+  from 1940, ~5 days behind real time). Also noted why we keep
+  `forecast_days=2` (charts only draw Now+24h) and never pass `past_days`
+  (history comes from HA's recorder = real Raymarine measurements), plus the
+  free-tier quota (~10 000 calls/day) vs our 96 calls/day per endpoint at
+  `scan_interval: 900`.
+- **Documented the "time from Now" window setting on both plotly cards
+  (comments only, no behaviour change).** The setting was never removed —
+  `plotly-graph-card` simply has no dedicated "hours before now" key: the
+  visible window is `hours_to_show` (total span) minus `time_offset` (how
+  far the right edge reaches into the future), i.e. `28 - 24h` =
+  Now-4h ... Now+24h. Both `custom:plotly-graph` cards (wind vector chart,
+  Waves) now carry an explicit comment block stating that formula, telling
+  which key to edit to change the history offset (`hours_to_show` only,
+  keep `time_offset: 24h` = the open-meteo forecast horizon) and warning not
+  to re-add `layout.xaxis.range` (the card merges its own `{xaxis:{range}}`
+  around the user layout, which snapped the X pan back on every redraw —
+  the original reason the explicit range was dropped).
 - **New "Waves" section: Open-Meteo Marine wave forecast, mirroring the
   wind vector chart.** Implementation was delegated to the Gemini writer
   subagent (`~/.junie/scripts/ask_gemini.py --tag gemini:writer`, context =

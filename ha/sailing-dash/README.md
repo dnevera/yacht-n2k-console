@@ -702,3 +702,30 @@ available as a daily max or in "current"), so it cannot drive this chart.
   `requirements-ha.txt` for the full checklist (HACS itself, the custom
   cards above, and which parts are already built into HA core) — the
   "Setting this up from scratch" section above covers the deploy order.
+
+## Chart time window — one place to configure it
+
+`sensor.chart_time_window` (`sensors-sailing.yaml`) is the single source of
+truth for how much time the charts show *and* how much data is requested
+from Open-Meteo. Only two numbers are ever edited:
+
+```yaml
+attributes:
+  history_hours: "{{ 4 }}"    # measured history left of "Now"
+  forecast_hours: "{{ 48 }}"  # forecast right of "Now"  (2 days)
+```
+
+Consumers:
+
+* both `rest:` `resource_template` URLs — `forecast_days` is computed as
+  `ceil(forecast_hours / 24)`, so the API returns exactly the drawn interval;
+* both `custom:plotly-graph` cards —
+  `hours_to_show: $fn ({ hass }) => history_hours + forecast_hours` and
+  `time_offset: $fn ({ hass }) => forecast_hours + 'h'`. This works because
+  `plotly-graph-card` resolves those keys through `getFromConfig`, i.e. the
+  same `$fn`/`$ex` evaluator used for traces, and `$fn` receives `hass`.
+
+Never re-add `layout.xaxis.range` — the card merges its own `{xaxis:{range}}`
+around the user layout, which snaps X panning back on every redraw.
+Verified live: both cards render `Now-4h … Now+48h`, both forecast sensors
+return 48 hourly points.

@@ -277,9 +277,26 @@ views:
           }\n"
       grid_options:
         columns: 36
+    # TIME WINDOW — DO NOT hardcode numbers here. Both plotly cards read the
+    # window from sensor.chart_time_window (sensors-sailing.yaml), which also
+    # drives forecast_days on both open-meteo REST requests, so the API is
+    # asked for exactly the interval the charts draw. Edit history_hours /
+    # forecast_hours on that sensor and nothing else.
+    #   hours_to_show = history_hours + forecast_hours   (total span)
+    #   time_offset   = forecast_hours                   (right edge ahead)
+    # Never re-add layout.xaxis.range: the card merges its own
+    # {xaxis:{range}} around the user layout, so an explicit range snaps the
+    # X pan back on every redraw.
     - type: custom:plotly-graph
-      hours_to_show: 28
-      time_offset: 24h
+      # Single source of truth: sensor.chart_time_window (sensors-sailing.yaml).
+      # hours_to_show = history_hours + forecast_hours, time_offset = forecast_hours.
+      hours_to_show: >-
+        $fn ({ hass }) => { const a = (hass.states['sensor.chart_time_window'] ||
+        { attributes: {} }).attributes; return Number(a.history_hours || 4) +
+        Number(a.forecast_hours || 24); }
+      time_offset: >-
+        $fn ({ hass }) => ((hass.states['sensor.chart_time_window'] ||
+        { attributes: {} }).attributes.forecast_hours || 24) + 'h'
       entities:
       - entity: sensor.wind_direction_history
         internal: true
@@ -326,14 +343,22 @@ views:
           color: '#ff7043'
           line:
             width: 0
+      # Colour-scale legend for the direction arrows ONLY. The trace itself
+      # is emptied by the last filter: `hoverinfo: skip` is ignored in
+      # `hovermode: x unified`, so with real points it showed up as a bogus
+      # "kt scale / 4 kts" row in the shared tooltip (fixed 2026-08-09).
+      # Plotly still renders the colorbar from marker.colorscale/cmin/cmax
+      # even with no data points.
       - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
         name: kt scale
         mode: markers
         showlegend: false
         hoverinfo: skip
+        extend_to_present: false
         filters:
         - resample: 30m
         - map_y: parseFloat(y)
+        - fn: '() => ({ xs: [], ys: [] })'
         marker:
           size: 0.1
           opacity: 0
@@ -496,9 +521,26 @@ views:
           }\n"
       grid_options:
         columns: 36
+    # TIME WINDOW — DO NOT hardcode numbers here. Both plotly cards read the
+    # window from sensor.chart_time_window (sensors-sailing.yaml), which also
+    # drives forecast_days on both open-meteo REST requests, so the API is
+    # asked for exactly the interval the charts draw. Edit history_hours /
+    # forecast_hours on that sensor and nothing else.
+    #   hours_to_show = history_hours + forecast_hours   (total span)
+    #   time_offset   = forecast_hours                   (right edge ahead)
+    # Never re-add layout.xaxis.range: the card merges its own
+    # {xaxis:{range}} around the user layout, so an explicit range snaps the
+    # X pan back on every redraw.
     - type: custom:plotly-graph
-      hours_to_show: 28
-      time_offset: 24h
+      # Single source of truth: sensor.chart_time_window (sensors-sailing.yaml).
+      # hours_to_show = history_hours + forecast_hours, time_offset = forecast_hours.
+      hours_to_show: >-
+        $fn ({ hass }) => { const a = (hass.states['sensor.chart_time_window'] ||
+        { attributes: {} }).attributes; return Number(a.history_hours || 4) +
+        Number(a.forecast_hours || 24); }
+      time_offset: >-
+        $fn ({ hass }) => ((hass.states['sensor.chart_time_window'] ||
+        { attributes: {} }).attributes.forecast_hours || 24) + 'h'
       entities:
       - entity: sensor.wave_forecast_flat
         name: Wave height (forecast)

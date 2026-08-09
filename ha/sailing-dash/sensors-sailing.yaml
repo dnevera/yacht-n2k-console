@@ -30,10 +30,74 @@
 # below is templated on the boat's own live N2K GPS position (the same
 # sensors device_tracker.nevera/boat_latitude/boat_longitude use), so the
 # forecast follows the boat instead of a fixed anchorage.
+#
+# OPEN-METEO API LIMITS (key-less free/non-commercial tier). The numbers
+# below were verified 2026-08-09 by probing both endpoints directly (not
+# taken from the docs), by counting the returned `hourly.time` points:
+#
+#   Forecast horizon — `forecast_days`, allowed range 0..16 on BOTH APIs
+#     (17 -> HTTP 400 "Allowed range 0 to 16"):
+#       api.open-meteo.com/v1/forecast   forecast_days=16 -> 384 hourly pts
+#                                        (today 00:00 .. +15 days 23:00)
+#       marine-api.open-meteo.com/v1/... forecast_days=16 -> 384 hourly pts
+#     So the max usable forecast is ~16 days at hourly resolution. Docs
+#     default is 7 days; accuracy degrades after ~5 days (high-resolution
+#     models end there, the rest is the global ~25 km model), and the wave
+#     models are only really skilful for ~7-8 days.
+#     We deliberately request `forecast_days=2`: the charts only draw
+#     Now+24h (see the time-window comments in dashboard-sailing.yaml), so
+#     a longer request would just bloat the sensor attributes.
+#
+#   History — `past_days`, allowed range 0..93 on BOTH APIs (94 -> HTTP
+#     400); `past_hours` exists for finer granularity. Verified:
+#     past_days=93 -> 2400 hourly pts starting 93 days back. These past
+#     values come from the models' own reanalysis, NOT from measurements.
+#     Anything older than 93 days needs the separate *Archive* API
+#     (archive-api.open-meteo.com/v1/archive, ERA5, 1940-01-01 onwards,
+#     ~5 days behind real time) — different endpoint, not used here.
+#     We never pass past_days at all: the dashboard's history comes from
+#     HA's recorder, i.e. real Raymarine measurements.
+#
+#   Call quota (free tier, no API key): ~10 000 calls/day, 5 000/hour,
+#     600/minute (non-commercial fair use). `scan_interval: 900` (15 min)
+#     = 96 calls/day per endpoint, ~1 % of the daily budget — safe.
+
+# SINGLE SOURCE OF TRUTH FOR THE TIME WINDOW (added 2026-08-09).
+# `sensor.chart_time_window` (defined in the `template:` section below) is
+# the ONLY place where the chart window / API horizon is configured:
+#
+#   history_hours   hours of measured history shown left of "Now"
+#   forecast_hours  hours of open-meteo forecast shown right of "Now"
+#   forecast_days   NOT stored as an attribute - computed straight in the
+#                   REST URLs (open-meteo only accepts whole days, 0..16).
+#                   IMPORTANT (fixed 2026-08-09): open-meteo counts
+#                   forecast_days from TODAY 00:00 UTC, not from "now", so
+#                   ceil(forecast_hours / 24) is too short - with
+#                   forecast_hours=72 at 18:00 UTC it returned only 3 days
+#                   = 53 h ahead (the chart stopped on Aug 11). The URLs
+#                   therefore use
+#                     ceil((hours_elapsed_today_utc + forecast_hours) / 24)
+#                   capped at 16, which always covers the full requested
+#                   horizon.
+#                   Startup race (harmless): right after an HA restart the
+#                   rest: platform builds its URL before the template
+#                   sensor exists, so the `| int(48)` fallback is used for
+#                   the first poll; the next poll (<= scan_interval, 15 min)
+#                   picks up the real value. Force it immediately with
+#                   `homeassistant.update_entity` on
+#                   sensor.wind_forecast_rest / sensor.wave_forecast_rest.
+#
+# Both REST requests below take forecast_days from it, and BOTH
+# `custom:plotly-graph` cards in dashboard-sailing.yaml take
+# hours_to_show / time_offset from it via `$fn ({ hass }) => ...`
+# (plotly-graph-card resolves those keys through getFromConfig, i.e. the
+# same $fn/$ex evaluator that powers the traces - verified against the
+# installed bundle in local-preview/).
+# => to change the window, edit ONE place: the chart_time_window sensor.
 
 rest:
   - resource_template: >-
-      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days=2&timezone=UTC
+      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wind Forecast REST'
@@ -49,8 +113,10 @@ rest:
   # forecast above, so the wave forecast follows the boat's live N2K GPS
   # position. Note: the marine model only covers open sea — inside closed
   # bays/marinas the API can legitimately return null values.
+  # LIMITS: same as the weather API — forecast_days 0..16, past_days 0..93
+  # (verified live); see the API-limits block at the top of this file.
   - resource_template: >-
-      https://marine-api.open-meteo.com/v1/marine?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=wave_height,wave_direction,wave_period&forecast_days=2&timezone=UTC
+      https://marine-api.open-meteo.com/v1/marine?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wave Forecast REST'
@@ -63,6 +129,31 @@ rest:
 
 template:
   - sensor:
+      # ------------------------------------------------------------------
+      # THE one place to configure the charts' time window and, through
+      # forecast_days, how much data the open-meteo APIs are asked for.
+      # Consumers:
+      #   * both rest: resource_template URLs above (forecast_days)
+      #   * both custom:plotly-graph cards, which derive
+      #       hours_to_show = history_hours + forecast_hours
+      #       time_offset   = forecast_hours + 'h'
+      # Limits: forecast_hours <= 384 (forecast_days 0..16) - see the
+      # OPEN-METEO API LIMITS block at the top of this file.
+      # ------------------------------------------------------------------
+      - name: Chart Time Window
+        unique_id: chart_time_window
+        icon: mdi:chart-timeline-variant
+        # >>> THE ONLY TWO NUMBERS TO EDIT <<<
+        #   history_hours   measured history drawn left of "Now"
+        #   forecast_hours  open-meteo forecast drawn right of "Now"
+        #                   (also decides forecast_days on both REST URLs)
+        attributes:
+          history_hours: "{{ 4 }}"
+          forecast_hours: "{{ 72 }}"
+        state: >
+          {{ state_attr('sensor.chart_time_window', 'history_hours') }}h back /
+          {{ state_attr('sensor.chart_time_window', 'forecast_hours') }}h ahead
+
       # Flattened open-meteo wind forecast — used by the apexcharts-card
       # "Wind History & Forecast" series (dashboard-sailing.yaml).
       # forecast_dir (winddirection_10m, degrees) added 2026-08-09 to feed

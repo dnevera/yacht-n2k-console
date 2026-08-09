@@ -53,6 +53,15 @@
   const latestWind = windSpeedHistory[windSpeedHistory.length - 1];
 
   const states = {
+    // Single source of truth for the chart time window + the open-meteo
+    // request horizon (mirrors sensor.chart_time_window from sensors-sailing.yaml).
+    'sensor.chart_time_window': {
+      entity_id: 'sensor.chart_time_window',
+      state: '4h back / 48h ahead',
+      attributes: { history_hours: 4, forecast_hours: 48 },
+      last_changed: NOW.toISOString(),
+      last_updated: NOW.toISOString(),
+    },
     // Entity ids below match dashboard-sailing.yaml exactly (copy-pasted
     // from the live config), so the previewed cards behave the same way
     // as on the real dashboard.
