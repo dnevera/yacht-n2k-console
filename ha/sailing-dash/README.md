@@ -22,6 +22,10 @@ edits back into HA's storage.
 
 ## Files
 
+- `deploy.sh` — **the single entry point for all deploys** (2026-08-09).
+  `--install`/`--update` run all three steps below in order; `--resources-
+  only`/`--dashboard-only`/`--sensors-only` run just one. See "Deploying"
+  below.
 - `dashboard-sailing.yaml` — the dashboard's `views:` config (Lovelace
   "sections" view layout), extracted from the live instance on 2026-08-09.
 - `deploy_dashboard.sh` — converts the YAML back into the JSON shape HA
@@ -42,10 +46,12 @@ edits back into HA's storage.
   backs up the previous file, and restarts the `homeassistant` container
   (required — unlike the dashboard, `configuration.yaml` isn't
   hot-reloadable).
-- `lovelace-resources.yaml` — reference list of the HACS frontend resources
-  (`card-mod`, `compass-card`, `apexcharts-card`) the dashboard's custom
-  cards need; these are installed/managed via HACS in the UI, not deployed
-  by a script — this file just documents what must be present.
+- `lovelace-resources.yaml` — list of ALL frontend resources the dashboard's
+  custom cards need: HACS-managed ones (`card-mod`, `compass-card`,
+  `apexcharts-card` — installed/managed via HACS in the UI, this file just
+  documents what must be present) and manually-installed ones
+  (`windrose-card`, `plotly-graph-card` — deployed by `deploy.sh`, see
+  "Deploying" below).
 - `local-preview/` — offline browser test rig (2026-08-09): renders the
   real custom card bundles against a fake `hass`, so config/schema errors
   and new draft configs (e.g. the `plotly-graph-card` sketch below) can be
@@ -103,18 +109,36 @@ All N2K-derived sensors (COG/SOG, wind, STW, depth) are published by
 `ydnu02_tcp_gateway` — see the `nmea2000-setup` skill / `AGENTS.md` for how
 those entities get into HA in the first place.
 
-## Setting this up from scratch on a new HA instance
+## Deploying (`deploy.sh` — the ONLY supported way)
 
-1. Install the HACS custom cards listed in `lovelace-resources.yaml`
-   (`card-mod`, `compass-card`, `apexcharts-card`) via HACS → Frontend.
-2. Run `./deploy_sensors.sh` to add the open-meteo forecast pipeline and
-   derived sensors/`device_tracker` from `sensors-sailing.yaml` — this
-   restarts Home Assistant, so do it first and wait for it to come back up.
-3. Run `./deploy_dashboard.sh` to create/overwrite the `dashboard-sailing`
-   storage-mode dashboard from `dashboard-sailing.yaml`. The map card uses
-   `device_tracker.nevera`, deployed by `./deploy_sensors.sh` above — no
-   phone/Companion App setup is required for the map to work (see "Boat
-   position on the map" below).
+**As of 2026-08-09, `./deploy.sh` is the single entry point for deploying
+ANY part of this stack — do not `scp`/`docker cp` files onto the HA host
+by hand.** It wraps three pieces: manually-installed card `.js` bundles
+(`windrose-card`, `plotly-graph-card` — anything not in HACS) +
+`lovelace_resources` registration, `sensors-sailing.yaml`
+(`deploy_sensors.sh`), and `dashboard-sailing.yaml` (`deploy_dashboard.sh`).
+The underlying `deploy_dashboard.sh`/`deploy_sensors.sh` scripts still exist
+and can be called directly, but `deploy.sh` is what you should reach for by
+default since it always keeps all three in sync in one command.
+
+```bash
+./deploy.sh --install [user@host]   # fresh HA instance: resources + sensors + dashboard
+./deploy.sh --update  [user@host]   # existing install, same 3 steps (default if no flag given)
+./deploy.sh --resources-only [user@host]   # just sync manually-installed card JS + resource list
+./deploy.sh --dashboard-only [user@host]   # just dashboard-sailing.yaml
+./deploy.sh --sensors-only   [user@host]   # just sensors-sailing.yaml
+```
+
+HACS-managed cards (`card-mod`, `compass-card`, `apexcharts-card`, listed in
+`lovelace-resources.yaml`) are **not** touched by `deploy.sh` — install
+those once via HACS → Frontend, same as before. `--install`/
+`--resources-only` need `local-preview/vendor/*.js` present locally (run
+`local-preview/fetch-vendor.sh` first if missing) — those are the actual
+bundles pushed to `/config/www/` on the remote host.
+
+The map card uses `device_tracker.nevera`, deployed by the sensors step
+above — no phone/Companion App setup is required for the map to work (see
+"Boat position on the map" below).
 
 ## Editing the dashboard
 
@@ -136,10 +160,9 @@ shows unexpected changes, pull the live version into the repo file first
    into `local-preview/card-configs.js` and run the offline browser check
    (`local-preview/README.md`) — it renders the real card bundle and shows
    config/schema errors immediately, without a deploy-and-restart cycle.
-3. Run `./deploy_dashboard.sh` (uses `../../deploy.conf` for the SSH
-   target by default, same file `deploy.sh` uses) or
-   `./deploy_dashboard.sh user@host` to target explicitly. Review the
-   printed pre-deploy diff before it uploads.
+3. Run `./deploy.sh --update` (or `./deploy.sh --dashboard-only` if only
+   the dashboard changed — see "Deploying" above). Review the printed
+   pre-deploy diff before it uploads.
 4. Reload the dashboard in the browser (the script already restarted HA,
    wait ~30s for it to come back up).
 
@@ -408,23 +431,26 @@ apexcharts-card. It also supports:
   from one entity via `store_var` can be read back into another entity's
   `marker.angle` via `vars.<name>.ys`.
 
-**Draft config (NOT deployed yet — validated in `local-preview/` against
-fake sensor data on 2026-08-09, still needs a real HA deploy before it's
-final)**: each data point IS the arrow — `marker.symbol: 'arrow'` (a real
-asymmetric shaft+arrowhead shape) rotated per-point via `marker.angle`
-(degrees, 0=up=North, clockwise), on the same "Measured"/"Forecast"
-marker traces that carry the (time, speed) data. **Fixed (2026-08-09):**
-an earlier revision drew the arrows as a *separate* Plotly `annotation`
-layer computed once from `vars` - clicking "Measured"/"Forecast" in the
-legend natively hides/shows a *trace*, but never touched that annotation
-layer, so the arrows kept showing regardless of the toggle ("toggle
-doesn't hide data, always shown"). Moving the arrow onto the trace's own
-marker fixes this: hiding a trace now natively hides its arrows too, no
-separate layer to fall out of sync. (See "Why annotation arrows, not a
-rotated marker" below for why two *even earlier* attempts at rotated
-markers - `triangle-up`, `arrow-bar-up` - were abandoned for being
-direction-ambiguous; `arrow` is a different, unambiguous shape from that
-same Plotly symbol family.)
+**DEPLOYED (2026-08-09) on `bumblebee.local`** as the "Wind Direction &
+Speed — Vector Chart" card in `dashboard-sailing.yaml`, installed via
+`./deploy.sh --update` (see "Deploying" below — this is now the ONLY
+supported way to push the manually-installed `.js` bundle + resource
+registration + the dashboard config together). Confirmed rendering real
+data end-to-end via a headless Playwright check against the live instance
+(no `Configuration error`, `PLOTLY-GRAPH 3.3.5 production` logged, arrows +
+"Now" line + colorbar visible on a screenshot).
+
+Two visible dot traces mark the actual (time, speed) data points (measured
+history + open-meteo forecast, colored by a fixed 0-40kt scale), and
+direction is drawn separately as real Plotly **annotation arrows** (a
+proper shaft ending in an arrowhead, `->`, not a rotated marker shape — see
+"Why annotation arrows, not a rotated marker" below for why an
+`marker.symbol: 'arrow'` variant was tried and then reverted: it still
+looked like a plain triangle, same ambiguity problem as the earlier
+rejected shapes). **Known limitation:** the legend
+click ("Measured"/"Forecast") only toggles trace visibility, not this
+separate annotation layer, so the arrows always show regardless of the
+toggle (see the long comment in the config below).
 
 ```yaml
 type: custom:plotly-graph
@@ -445,8 +471,7 @@ entities:
       - resample: 30m
       - map_y: parseFloat(y)
       - store_var: speed
-    legendgroup: measured
-    marker: { symbol: arrow, size: 13, angle: $ex vars.dir.ys, color: $ex ys, colorscale: WIND_SPEED_COLORSCALE, cmin: 0, cmax: 40, showscale: true }
+    marker: { size: 5, color: $ex ys, colorscale: WIND_SPEED_COLORSCALE, cmin: 0, cmax: 40, showscale: true, colorbar: { title: { text: kt, side: top }, ticksuffix: " kt", len: 0.9 } }
   # 3) open-meteo forecast speed + direction - same pattern as (2)/(1)
   - entity: sensor.wind_forecast_flat
     name: Forecast
@@ -461,8 +486,7 @@ entities:
       - fn: |-
           ({ meta, vars }) => { vars.forecastDir = meta.forecast_dir || []; return {}; }
       - store_var: forecastSpeed
-    legendgroup: forecast
-    marker: { symbol: arrow, size: 13, angle: $ex vars.forecastDir, color: $ex ys, colorscale: WIND_SPEED_COLORSCALE, cmin: 0, cmax: 40 }
+    marker: { size: 5, color: $ex ys, colorscale: WIND_SPEED_COLORSCALE, cmin: 0, cmax: 40 }
 layout:
   yaxis:
     title: Wind speed (kts)
@@ -477,26 +501,46 @@ layout:
     range: $fn () => [new Date(Date.now() - 2 * 3600000), new Date(Date.now() + 24 * 3600000)]
   # Bottom horizontal legend, matching the apexcharts-card chart above it
   # (Plotly's default is a vertical legend on the right, inconsistent with
-  # every other chart's bottom legend on this dashboard). groupclick lets a
-  # legendgroup with more than one trace toggle together.
-  legend: { orientation: h, x: 0.5, xanchor: center, y: -0.3, groupclick: togglegroup }
-  # Fix (2026-08-09): legend moved further down (to y: -0.3) was
-  # overlapping the x-axis's two-row date+time tick labels underneath the
-  # default margin - the card doesn't auto-grow its bottom margin for the
-  # legend, so it has to be reserved explicitly.
+  # every other chart's bottom legend on this dashboard).
+  legend: { orientation: h, x: 0.5, xanchor: center, y: -0.3 }
+  # Fix (2026-08-09): the legend (y: -0.3) was overlapping the x-axis's
+  # two-row date+time tick labels underneath the default margin - the card
+  # doesn't auto-grow its bottom margin for the legend, so it has to be
+  # reserved explicitly.
   margin: { b: 70 }
-  # Just the "Now" vertical line/label + a fixed N/S legend now (the
-  # direction arrows moved onto the traces themselves, see the `marker.*`
-  # keys on the entities above) - plotly-graph-card has no built-in `now:`
-  # feature like apexcharts-card, so this is built by hand via $fn,
-  # re-evaluated on every render so "Now" always tracks the actual time.
+  # One real Plotly *annotation arrow* per data point (shaft via ax/ay in
+  # pixel space + an arrowhead at x/y, angle = compass bearing, 0deg=up=
+  # North, clockwise), plus the "Now" vertical line/label + a fixed N/S
+  # legend (plotly-graph-card has no built-in `now:` feature like
+  # apexcharts-card, so this is built by hand via $fn, re-evaluated on
+  # every render so "Now" always tracks the actual current time).
+  # KNOWN LIMITATION (unresolved): because this is a separate
+  # `layout.annotations` array (not part of either data trace), it does
+  # NOT react to clicking "Measured"/"Forecast" in the legend - a legend
+  # click only ever native-toggles a *trace*'s visibility (Plotly
+  # restyle), and this $fn has no way to read that state back (confirmed
+  # by reading the bundled source - its call signature has no
+  # trace-visibility argument). A real fix would need e.g. an
+  # `input_boolean` HA helper read via `hass` inside this `$fn` plus a
+  # toggle switch added to the dashboard (not done).
   annotations: >-
-    $fn () => [
+    $fn ({ vars }) => { const windSpeedColor = (v) => {
+    const stops = [[5,'#b0e2ff'],[10,'#61c4e0'],[15,'#4bbf7a'],[20,'#a8d048'],[25,'#f5e642'],[30,'#f2a93b'],[35,'#eb5c2a'],[40,'#d62828']];
+    for (const [max, color] of stops) if (v < max) return color;
+    return '#8e1b8e'; }; const toArrows = (xs, ys, dirs) =>
+    (xs || []).map((x, i) => { const rad = ((dirs[i] || 0) * Math.PI) / 180;
+    const len = 10 + (ys[i] || 0); return { x, y: ys[i], xref: "x", yref: "y",
+    ax: -len * Math.sin(rad), ay: len * Math.cos(rad), axref: "pixel",
+    ayref: "pixel", showarrow: true, arrowhead: 2, arrowsize: 1,
+    arrowwidth: 1.5, arrowcolor: windSpeedColor(ys[i] || 0) }; }); const arrows = [
+    ...toArrows(vars.speed.xs, vars.speed.ys, vars.dir.ys),
+    ...toArrows(vars.forecastSpeed.xs, vars.forecastSpeed.ys, vars.forecastDir),
+    ]; return [ ...arrows,
     { xref: "x", yref: "paper", x: new Date(), y: 1, yanchor: "bottom",
     text: "Now", showarrow: false, font: { color: "#ffffff", size: 10 } },
     { xref: "paper", yref: "paper", x: 0, y: 1, xanchor: "left",
     yanchor: "bottom", text: "▲ N &nbsp;&nbsp; ▼ S", showarrow: false,
-    font: { color: "#90a4ae", size: 10 } } ]
+    font: { color: "#90a4ae", size: 10 } } ]; }
   shapes: >-
     $fn () => [{ type: "line", xref: "x", yref: "paper", x0: new Date(),
     x1: new Date(), y0: 0, y1: 1,

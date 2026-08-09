@@ -12,6 +12,20 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-09
 
+- **`plotly-graph-card` DEPLOYED to `bumblebee.local`.** Added new unified
+  `deploy.sh` (`--install`/`--update`/`--resources-only`/`--dashboard-
+  only`/`--sensors-only`) — now the ONLY supported way to deploy anything
+  in this stack, replacing ad-hoc `scp`/`docker cp` for manually-installed
+  card bundles. It installs `plotly-graph-card.js` to `/config/www/`,
+  registers it in `.storage/lovelace_resources` (idempotent, matched by
+  base URL), then deploys sensors+dashboard. Added the "Wind Direction &
+  Speed — Vector Chart" `custom:plotly-graph` card to
+  `dashboard-sailing.yaml` (dot markers + a separate `layout.annotations`
+  arrow layer — the plain-dots design, not the since-reverted
+  `marker.symbol: 'arrow'` one). Confirmed rendering real Raymarine/open-
+  meteo data on the live dashboard via a headless Playwright check
+  (`PLOTLY-GRAPH 3.3.5` logged, no `Configuration error`, arrows + "Now"
+  line + colorbar visible on screenshot).
 - **DRAFT `plotly-graph-card` (not deployed):** reverted `marker.symbol:
   'arrow'` direction markers back to real Plotly `annotation` shaft+
   arrowhead vectors — the `arrow` symbol looked like a plain triangle

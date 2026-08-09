@@ -123,6 +123,103 @@ views:
         unit: kts
         opacity: 0.9
         data_generator: const times=entity.attributes.forecast_time||[];const gusts=entity.attributes.forecast_gust||[];const rangeStart=Date.now()-2*3600000;return times.map((t,i)=>[new Date(t+"Z").getTime(),Math.round(gusts[i]*10)/10]).filter(p=>p[0]>=rangeStart);
+    - type: heading
+      heading: Wind Direction & Speed — Vector Chart
+      heading_style: subtitle
+    - type: custom:plotly-graph
+      hours_to_show: 30
+      entities:
+      - entity: sensor.wind_direction_history
+        internal: true
+        filters:
+        - resample: 30m
+        - map_y: parseFloat(y)
+        - store_var: dir
+      - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+        name: Measured
+        mode: markers
+        filters:
+        - resample: 30m
+        - map_y: parseFloat(y)
+        - store_var: speed
+        marker:
+          size: 5
+          color: $ex ys
+          colorscale:
+          - - 0
+            - '#b0e2ff'
+          - - 0.125
+            - '#61c4e0'
+          - - 0.25
+            - '#4bbf7a'
+          - - 0.375
+            - '#a8d048'
+          - - 0.5
+            - '#f5e642'
+          - - 0.625
+            - '#f2a93b'
+          - - 0.75
+            - '#eb5c2a'
+          - - 0.875
+            - '#d62828'
+          - - 1
+            - '#8e1b8e'
+          cmin: 0
+          cmax: 40
+          showscale: true
+          colorbar:
+            title:
+              text: kt
+              side: top
+            ticksuffix: ' kt'
+            len: 0.9
+      - entity: sensor.wind_forecast_flat
+        name: Forecast
+        mode: markers
+        extend_to_present: false
+        filters:
+        - fn: "({ meta }) => ({\n  xs: (meta.forecast_time || []).map((t) => new Date(t + \"Z\")),\n  ys: (meta.forecast_wind || []),\n})"
+        - fn: ({ meta, vars }) => { vars.forecastDir = meta.forecast_dir || []; return {}; }
+        - store_var: forecastSpeed
+        marker:
+          size: 5
+          color: $ex ys
+          colorscale:
+          - - 0
+            - '#b0e2ff'
+          - - 0.125
+            - '#61c4e0'
+          - - 0.25
+            - '#4bbf7a'
+          - - 0.375
+            - '#a8d048'
+          - - 0.5
+            - '#f5e642'
+          - - 0.625
+            - '#f2a93b'
+          - - 0.75
+            - '#eb5c2a'
+          - - 0.875
+            - '#d62828'
+          - - 1
+            - '#8e1b8e'
+          cmin: 0
+          cmax: 40
+      layout:
+        yaxis:
+          title: Wind speed (kts)
+          rangemode: tozero
+        xaxis:
+          range: $fn () => [new Date(Date.now() - 2 * 3600000), new Date(Date.now() + 24 * 3600000)]
+        legend:
+          orientation: h
+          x: 0.5
+          xanchor: center
+          y: -0.3
+        margin:
+          b: 70
+        annotations: "$fn ({ vars }) => {\n  const windSpeedColor = (v) => {\n    const stops = [[5,'#b0e2ff'],[10,'#61c4e0'],[15,'#4bbf7a'],[20,'#a8d048'],[25,'#f5e642'],[30,'#f2a93b'],[35,'#eb5c2a'],[40,'#d62828']];\n    for (const [max, color] of stops) if (v < max) return color;\n    return '#8e1b8e';\n  };\n  const toArrows = (xs, ys, dirs) => (xs || []).map((x, i) => {\n    const rad = ((dirs[i] || 0) * Math.PI) / 180;\n    const len = 10 + (ys[i] || 0);\n    return {\n      x, y: ys[i], xref: 'x', yref: 'y',\n      ax: -len * Math.sin(rad), ay: len * Math.cos(rad), axref: 'pixel', ayref: 'pixel',\n      showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5, arrowcolor: windSpeedColor(ys[i] || 0),\n    };\n  });\n  const arrows = [\n    ...toArrows(vars.speed.xs, vars.speed.ys, vars.dir.ys),\n    ...toArrows(vars.forecastSpeed.xs, vars.forecastSpeed.ys, vars.forecastDir),\n  ];\n  return [\n    ...arrows,\n    { xref: 'x', yref: 'paper', x: new Date(), y: 1, yanchor: 'bottom', text: 'Now', showarrow: false, font: { color: '#ffffff', size: 10 } },\n    { xref: 'paper', yref: 'paper', x: 0, y: 1, xanchor: 'left', yanchor: 'bottom', text: '▲ N &nbsp;&nbsp; ▼ S', showarrow: false, font: { color: '#90a4ae', size: 10 } },\n  ];\n}"
+        shapes: '$fn () => [{ type: "line", xref: "x", yref: "paper", x0: new Date(), x1: new Date(), y0: 0, y1: 1, line: { color: "#ffffff", width: 1, dash: "dot" } }]'
   - type: grid
     cards:
     - type: heading

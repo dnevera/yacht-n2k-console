@@ -25,3 +25,5 @@ resources:
   # Manually installed (NOT via HACS), see requirements-ha.txt section 2b:
   - url: /local/windrose-card.js?v=2.4.2
     type: module
+  - url: /local/plotly-graph-card.js?v=1.0.0
+    type: module

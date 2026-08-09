@@ -727,6 +727,33 @@ measured/forecast, как раньше) — цвет везде означает
    Добавлен `legend.groupclick: togglegroup` на случай появления второго
    trace в группе.
 
+### plotly-graph-card ЗАДЕПЛОЕН на bumblebee.local + единый deploy.sh (2026-08-09)
+Карточка "Wind Direction & Speed — Vector Chart" (`custom:plotly-graph`,
+дизайн — точки-маркеры + отдельный слой `layout.annotations` со
+стрелками-векторами) добавлена в `dashboard-sailing.yaml` и реально
+задеплоена на живой HA. Подтверждено headless Playwright-заходом на
+`http://bumblebee.local:8123/dashboard-sailing/` (логин через
+`localStorage.hassTokens` с `HA_TOKEN` из `.env`): в консоли
+`PLOTLY-GRAPH 3.3.5 production` без `Configuration error`, на скриншоте
+видны реальные точки/стрелки/цветовая шкала/линия "Now" с живыми данными
+Raymarine + open-meteo.
+
+Пользователь указал, что ручная установка ресурса через `scp`/`docker cp`
+(как раньше `windrose-card`) обходит единый процесс деплоя — создан
+`ha/sailing-dash/deploy.sh` (НЕ путать с корневым `./deploy.sh` для
+gateway/HA-патчей — разные скрипты в разных директориях), теперь это
+**единственный поддерживаемый способ** деплоя чего-либо в этом стеке:
+```bash
+./deploy.sh --install|--update             # resources + sensors + dashboard
+./deploy.sh --resources-only|--dashboard-only|--sensors-only
+```
+`--resources-only`/`--install` читают `lovelace-resources.yaml`,
+подтягивают `/local/*.js`-записи, идемпотентно (по base URL, без query)
+мержат их в `.storage/lovelace_resources` и заливают сам `.js`-бандл из
+`local-preview/vendor/` в `/config/www/` — заменяет прежние разовые SSH-
+команды. `--update`/`--install` вызывают существующие
+`deploy_dashboard.sh`/`deploy_sensors.sh` как последний шаг.
+
 ### Windy — альтернативный виджет, тап прямо по iframe (2026-08-09)
 В секцию "Wind History & Forecast" добавлена `type: iframe` карточка со
 встроенным Windy-виджетом (`embed.windy.com/embed2.html?...`, координаты
