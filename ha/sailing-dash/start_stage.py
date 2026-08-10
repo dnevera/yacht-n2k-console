@@ -69,11 +69,11 @@ def run_build_and_deploy():
 
 
 def start_docker_stage():
-    log("STAGE", "Starting local-ha Docker container ...")
-    cmd = ["docker", "compose", "up", "-d"]
+    log("STAGE", "Building and starting local-ha Docker container ...")
+    cmd = ["docker", "compose", "up", "-d", "--build"]
     res = subprocess.run(cmd, cwd=LOCAL_HA_DIR)
     if res.returncode != 0:
-        log("ERROR", "Failed to start local-ha container via docker compose.")
+        log("ERROR", "Failed to build/start local-ha container via docker compose.")
         sys.exit(1)
 
 

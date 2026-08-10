@@ -12,6 +12,12 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-10
 
+- **Stage HA Docker Build Script & Dockerfile (`build_docker.sh`, `local-ha/Dockerfile`):**
+  - Added dedicated `build_docker.sh` script in `ha/sailing-dash/` that builds source modules, builds the custom Stage Home Assistant Docker image (`local-ha`), starts the container, and deploys build artifacts in one command.
+  - Created `local-ha/Dockerfile` and updated `local-ha/docker-compose.yml` to specify custom build context for Stage HA.
+  - Updated `start_stage.py` to invoke `docker compose up -d --build` during Stage environment launch.
+  - Updated `README.md`, `INSTALLATION.md`, and `TEST.md` documentation.
+
 - **Documentation & Environment Setup (`INSTALLATION.md`, `TEST.md`, `run_stage.sh`):**
   - Created `INSTALLATION.md` detailing system requirements, Python setup, local Stage HA Docker launch, and production deployment configuration.
   - Created `TEST.md` with step-by-step test suites covering build pipeline validation, NMEA 2000 PGN simulator decoding, Stage deploy verification, and Prod safety diff checks.

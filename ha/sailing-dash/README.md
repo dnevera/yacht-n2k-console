@@ -27,6 +27,7 @@ The project is modularized into source components under `src/` and compiled into
 ```
 ha/sailing-dash/
 ├── build.py                      # Build script compiling src/ into build/
+├── build_docker.sh               # Build script for Stage HA Docker image & container
 ├── start_stage.py                # Stage HA orchestrator (--demo / --live + file watcher)
 ├── run_stage.sh                  # Shell entrypoint for launching Stage HA environment
 ├── deploy.sh                     # Unified deploy script (--stage / --prod)
@@ -35,6 +36,7 @@ ha/sailing-dash/
 ├── INSTALLATION.md               # Environment setup & installation guide
 ├── TEST.md                       # Test suites & verification procedures
 ├── local-ha/                     # Stage Home Assistant Docker environment
+│   ├── Dockerfile                # Custom Dockerfile for local-ha Stage image
 │   ├── docker-compose.yml        # Docker compose specification for local-ha
 │   ├── mock_nmea_emulator.py     # Local NMEA 2000 PGN frames emulator (Demo mode)
 │   └── config/                   # Stage HA config & .storage/ initialized artifacts
@@ -59,6 +61,7 @@ Before deploying, `deploy.sh` automatically invokes `python3 build.py` to ensure
 ## Key Files
 
 - `build.py` — **automated build engine**. Compiles modular source code from `src/` into deployable target YAML/JS files in `build/`.
+- `build_docker.sh` — **HA Docker build script**. Compiles source modules, builds the custom Stage Home Assistant Docker image (`local-ha`), starts the container, and deploys build artifacts.
 - `start_stage.py` / `run_stage.sh` — **Stage environment orchestrator**. Launches local Docker container (`local-ha`), controls NMEA telemetry (`--demo` local simulator or `--live` TCP gateway), triggers `build.py` + `./deploy.sh --stage`, and watches `src/` for live auto-rebuilding.
 - `deploy.sh` — **unified entry point for all deploys**.
   Supports target environments `--stage` (local Docker container) and `--prod` (remote Pi5 over SSH).

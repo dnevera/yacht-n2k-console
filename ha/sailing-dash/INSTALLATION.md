@@ -31,15 +31,18 @@ All Stage configuration files live under `ha/sailing-dash/local-ha/`:
 - `mock_nmea_emulator.py`: NMEA 2000 PGN frame simulator broadcasting telemetry on TCP port 4001.
 
 ### 2. Launching Stage Environment
-Run the launcher script from `ha/sailing-dash/`:
+Run the launcher or build script from `ha/sailing-dash/`:
 
 ```bash
 cd ha/sailing-dash
 
-# Launch Stage HA in Demo mode (default with local NMEA emulator)
+# Option 1: Build Docker container & deploy artifacts directly
+./build_docker.sh
+
+# Option 2: Launch full Stage orchestrator with live file watcher (Demo mode)
 ./run_stage.sh
 
-# Or launch in Live mode (connected to remote NMEA TCP gateway on Pi5)
+# Option 3: Launch in Live mode (connected to remote NMEA TCP gateway on Pi5)
 ./run_stage.sh --live --gw-host bumblebee.local
 ```
 

@@ -1,7 +1,10 @@
 services:
   local-ha:
     container_name: local-ha
-    image: ghcr.io/home-assistant/home-assistant:stable
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local-ha:latest
     restart: unless-stopped
     network_mode: host
     volumes:
