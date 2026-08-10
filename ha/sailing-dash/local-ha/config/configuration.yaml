@@ -1,20 +1,121 @@
-# Home Assistant Base Configuration for local-ha (Stage environment)
-default_config:
-
-# HTTP settings for local Stage development
+default_config: null
 http:
   cors_allowed_origins:
-    - "*"
+  - '*'
   use_x_forwarded_for: true
   trusted_proxies:
-    - 127.0.0.1
-    - ::1
-
-# Lovelace configuration
+  - 127.0.0.1
+  - ::1
 frontend:
   extra_module_url: []
+automation: !include 'automations.yaml'
+script: !include 'scripts.yaml'
+scene: !include 'scenes.yaml'
+rest:
+- resource_template: https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+  scan_interval: 900
+  sensor:
+  - name: Wind Forecast REST
+    unique_id: wind_forecast_rest
+    icon: mdi:weather-windy
+    value_template: '{{ value_json.hourly.windspeed_10m | list | first | round(1) }}'
+    unit_of_measurement: kts
+    json_attributes:
+    - hourly
+- resource_template: https://marine-api.open-meteo.com/v1/marine?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+  scan_interval: 900
+  sensor:
+  - name: Wave Forecast REST
+    unique_id: wave_forecast_rest
+    icon: mdi:waves
+    value_template: '{{ value_json.hourly.wave_height | list | first | round(1) }}'
+    unit_of_measurement: m
+    json_attributes:
+    - hourly
+template:
+- sensor:
+  - name: Chart Time Window
+    unique_id: chart_time_window
+    icon: mdi:chart-timeline-variant
+    attributes:
+      history_hours: '{{ 4 }}'
+      forecast_hours: '{{ 72 }}'
+    state: '{{ state_attr(''sensor.chart_time_window'', ''history_hours'') }}h back / {{ state_attr(''sensor.chart_time_window'', ''forecast_hours'') }}h ahead
 
-# Base includes
-automation: !include automations.yaml
-script: !include scripts.yaml
-scene: !include scenes.yaml
+      '
+  - name: Wind Forecast Flat
+    unique_id: wind_forecast_flat
+    unit_of_measurement: kts
+    icon: mdi:weather-windy
+    state: '{{ states(''sensor.wind_forecast_rest'') }}'
+    attributes:
+      forecast_time: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''time''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+      forecast_wind: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''windspeed_10m''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+      forecast_gust: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''windgusts_10m''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+      forecast_dir: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''winddirection_10m''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+  - name: Wind Forecast Next Hour
+    unique_id: wind_forecast_next_hour
+    unit_of_measurement: kts
+    icon: mdi:weather-windy
+    state: "{% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_wind') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wind Gust Next Hour
+    unique_id: wind_gust_next_hour
+    unit_of_measurement: kts
+    icon: mdi:weather-windy-variant
+    state: "{% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_gust') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wave Forecast Flat
+    unique_id: wave_forecast_flat
+    unit_of_measurement: m
+    icon: mdi:waves
+    state: '{{ states(''sensor.wave_forecast_rest'') }}'
+    attributes:
+      forecast_time: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''time''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_height: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_height''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_direction: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_direction''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_period: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_period''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+  - name: Wave Height Next Hour
+    unique_id: wave_height_next_hour
+    unit_of_measurement: m
+    icon: mdi:waves
+    state: "{% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_height') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wave Period Next Hour
+    unique_id: wave_period_next_hour
+    unit_of_measurement: s
+    icon: mdi:waves-arrow-up
+    state: "{% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_period') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wind Direction History
+    unique_id: wind_direction_history
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    state: '{{ states(''sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle'') | float(0) | round(0) }}
+
+      '
+  - name: Barometer mmHg
+    unique_id: barometer_mmhg
+    unit_of_measurement: mmHg
+    device_class: pressure
+    state: '{% set p = states(''sensor.outboard_pressure'') | float(0) %} {{ (p * 0.750062) | round(1) if p > 200 else (p * 7.50062) | round(1) }}
+
+      '
+  - name: Boat Latitude
+    unique_id: boat_latitude
+    icon: mdi:latitude
+    state: '{% set v = states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude'') | float(0) %} {% set d = v | abs | int %}{% set m = ((v | abs) - d) * 60 %} {{ d }}°{{ ''%.2f'' | format(m) }}''{{ ''N'' if v >= 0 else ''S'' }}
+
+      '
+  - name: Boat Longitude
+    unique_id: boat_longitude
+    icon: mdi:longitude
+    state: '{% set v = states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude'') | float(0) %} {% set d = v | abs | int %}{% set m = ((v | abs) - d) * 60 %} {{ d }}°{{ ''%.2f'' | format(m) }}''{{ ''E'' if v >= 0 else ''W'' }}
+
+      '
+- device_tracker:
+  - name: Nevera
+    unique_id: nevera_boat_gps
+    latitude: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude'') | float(0) }}
+
+      '
+    longitude: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude'') | float(0) }}
+
+      '
+    icon: mdi:sail-boat

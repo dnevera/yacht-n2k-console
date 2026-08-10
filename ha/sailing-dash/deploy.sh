@@ -57,6 +57,10 @@ if [[ "${TARGET_ENV}" == "stage" ]]; then
     DEPLOY_HOST="localhost"
     echo "== Sailing dashboard deploy (mode: ${MODE}, env: STAGE) → Container: ${HA_CONTAINER} =="
 
+    ha_mkdir() {
+        docker exec "${HA_CONTAINER}" mkdir -p "$1" 2>/dev/null || true
+    }
+
     ha_cat() {
         docker exec "${HA_CONTAINER}" cat "$1" 2>/dev/null
     }
@@ -87,6 +91,10 @@ else
     SSH="ssh -o ConnectTimeout=8 ${DEPLOY_HOST}"
     SCP="scp -q"
     echo "== Sailing dashboard deploy (mode: ${MODE}, env: PROD) → ${DEPLOY_HOST} (container: ${HA_CONTAINER}) =="
+
+    ha_mkdir() {
+        ${SSH} "sudo docker exec ${HA_CONTAINER} mkdir -p $1" 2>/dev/null || true
+    }
 
     ha_cat() {
         ${SSH} "sudo docker exec ${HA_CONTAINER} cat $1" 2>/dev/null
@@ -185,6 +193,9 @@ PYEOF
     while IFS= read -r line; do
         [[ -n "${line}" ]] && FILES_TO_UPLOAD+=("${line}")
     done < "${MERGED_RES}.files"
+
+    ha_mkdir "/config/www"
+    ha_mkdir "/config/.storage"
 
     for filename in "${FILES_TO_UPLOAD[@]}"; do
         LOCAL_JS="${CARDS_DIR}/${filename}"

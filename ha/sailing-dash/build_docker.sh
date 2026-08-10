@@ -26,12 +26,11 @@ python3 "${SCRIPT_DIR}/build.py"
 
 # 3. Build Docker image
 echo "🔨 Step 2: Building Home Assistant Docker image (local-ha) ..."
-BUILD_ARGS=()
 if [[ "${1:-}" == "--no-cache" ]]; then
-    BUILD_ARGS+=("--no-cache")
+    docker compose -f "${LOCAL_HA_DIR}/docker-compose.yml" build --no-cache
+else
+    docker compose -f "${LOCAL_HA_DIR}/docker-compose.yml" build
 fi
-
-docker compose -f "${LOCAL_HA_DIR}/docker-compose.yml" build "${BUILD_ARGS[@]}"
 
 # 4. Start local-ha container
 echo "🚀 Step 3: Starting local-ha container ..."

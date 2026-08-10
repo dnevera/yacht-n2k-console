@@ -117,16 +117,6 @@ class _HaTag(yaml.YAMLObject):
         self.value = value
 
     @classmethod
-    def from_yaml(cls, loader, node):
-        if isinstance(node, yaml.ScalarNode):
-            value = loader.construct_scalar(node)
-        elif isinstance(node, yaml.SequenceNode):
-            value = loader.construct_sequence(node)
-        else:
-            value = loader.construct_mapping(node)
-        return cls(node.tag, value)
-
-    @classmethod
     def to_yaml(cls, dumper, data):
         if isinstance(data.value, str):
             return dumper.represent_scalar(data.tag, data.value)
@@ -135,10 +125,19 @@ class _HaTag(yaml.YAMLObject):
         else:
             return dumper.represent_mapping(data.tag, data.value)
 
+def _ha_constructor(loader, node):
+    if isinstance(node, yaml.ScalarNode):
+        value = loader.construct_scalar(node)
+    elif isinstance(node, yaml.SequenceNode):
+        value = loader.construct_sequence(node)
+    else:
+        value = loader.construct_mapping(node)
+    return _HaTag(node.tag, value)
+
 for tag in ("!include", "!secret", "!include_dir_list", "!include_dir_named", "!include_dir_merge_list", "!include_dir_merge_named", "!env_var"):
-    yaml.add_multi_constructor(tag, _HaTag.from_yaml, Loader=yaml.SafeLoader)
-    yaml.add_multi_constructor(tag, _HaTag.from_yaml, Loader=yaml.FullLoader)
-    yaml.add_representer(_HaTag, _HaTag.to_yaml)
+    yaml.add_constructor(tag, _ha_constructor, Loader=yaml.SafeLoader)
+    yaml.add_constructor(tag, _ha_constructor, Loader=yaml.FullLoader)
+yaml.add_representer(_HaTag, _HaTag.to_yaml)
 
 remote_cfg_path, sensors_path, merged_cfg_path = sys.argv[1:4]
 

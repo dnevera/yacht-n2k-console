@@ -49,3 +49,15 @@ build.conf
 .env
 real-config.js
 .output.txt
+
+# Home Assistant Stage runtime state
+ha/sailing-dash/local-ha/config/.storage/
+ha/sailing-dash/local-ha/config/www/
+ha/sailing-dash/local-ha/config/*.db*
+ha/sailing-dash/local-ha/config/*.log*
+ha/sailing-dash/local-ha/config/.HA_VERSION
+ha/sailing-dash/local-ha/config/.ha_run.lock
+ha/sailing-dash/local-ha/config/blueprints/
+ha/sailing-dash/local-ha/config/deps/
+ha/sailing-dash/local-ha/config/tts/
+ha/sailing-dash/local-ha/config/.cloud/
