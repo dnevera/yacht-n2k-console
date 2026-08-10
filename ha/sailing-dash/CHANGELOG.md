@@ -12,6 +12,20 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-10
 
+- **Documentation & Environment Setup (`INSTALLATION.md`, `TEST.md`, `run_stage.sh`):**
+  - Created `INSTALLATION.md` detailing system requirements, Python setup, local Stage HA Docker launch, and production deployment configuration.
+  - Created `TEST.md` with step-by-step test suites covering build pipeline validation, NMEA 2000 PGN simulator decoding, Stage deploy verification, and Prod safety diff checks.
+  - Added `run_stage.sh` shell script wrapper for executing pre-launch builds and starting `start_stage.py`.
+  - Updated `README.md` to reflect the Stage HA environment architecture and stage deployment debugging workflow.
+  - Removed obsolete static preview files (`start_preview.py`, `local-preview/` directory) and simplified `build.py`.
+
+- **Stage & Prod Deployment System & Local Stage HA Environment (`start_stage.py`):**
+  - Replaced the static offline `local-preview` harness with a full Home Assistant Stage environment (`local-ha`) running in Docker.
+  - Implemented `start_stage.py`, the unified Stage environment orchestrator supporting `--demo` (background Python NMEA 2000 PGN emulator broadcasting on TCP :4001) and `--live` (connecting Stage HA to the vessel's TCP gateway).
+  - Implemented `local-ha/mock_nmea_emulator.py`, a Python simulator broadcasting realistic STW, Depth, Apparent/True Wind, Position, COG/SOG, Heading, and Pressure PGN frames on TCP port 4001.
+  - Updated `deploy.sh`, `deploy_dashboard.sh`, and `deploy_sensors.sh` to support `--stage` (direct local Docker deployment into `local-ha` without SSH) and `--prod` (SSH deployment to bumblebee Pi5).
+  - Integrated live file watcher into `start_stage.py` that monitors `src/` for source edits and automatically invokes `build.py` and `deploy.sh --stage`.
+
 - **Fixed build/dashboard-sailing.yaml drift vs the live HA dashboard:**
   - Pulled the live storage-mode config (`.storage/lovelace.dashboard_sailing`) from `bumblebee.local` via `docker exec`/`docker cp` and diffed it against `build/dashboard-sailing.yaml` to verify the section/grid/card composition still matches after the `$include:` refactor.
   - Found the only drift: `load_common_js_snippets()` was inlining the `//` doc-comment header of each `src/js/common/*.js` snippet into the generated `$fn ...` scalar, so every `$include:`-based card (`on_dblclick`, `shapes`) diverged from what is actually live (which never had those comments). Added `strip_leading_line_comments()` in `build.py` to drop the leading `//` comment block before wrapping a snippet back into `$fn`, keeping the doc comments in the source `.js` file for readers while producing byte-identical output to the live dashboard.

@@ -1,0 +1,20 @@
+# Home Assistant Base Configuration for local-ha (Stage environment)
+default_config:
+
+# HTTP settings for local Stage development
+http:
+  cors_allowed_origins:
+    - "*"
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+
+# Lovelace configuration
+frontend:
+  extra_module_url: []
+
+# Base includes
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
