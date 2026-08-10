@@ -65,6 +65,29 @@ Before deploying, `deploy.sh` automatically invokes `python3 build.py` to ensure
 - `deploy_sensors.sh` — idempotently merges `build/sensors-sailing.yaml` into the remote `/config/configuration.yaml` and restarts the `homeassistant` container.
 - `build/lovelace-resources.yaml` — list of ALL frontend resources the dashboard's custom cards need.
 - `local-preview/` — offline browser test rig (2026-08-09, updated 2026-08-10): renders the real custom card bundles against a fake `hass`, powered by auto-generated `build/local-preview/card-configs.js`. See `local-preview/README.md` for usage.
+  As of 2026-08-10, `card-configs.js` also exposes `window.PREVIEW_SECTIONS`
+  (each `src/yaml/dashboard/sections/*.yaml` file with its `type: grid`
+  blocks and column layout preserved), and `render.js` renders those as
+  titled sections with CSS-grid containers instead of one flat stacked list
+  of cards — so the offline preview's layout matches the real dashboard.
+
+## 2026-08-10 audit notes
+
+A follow-up audit of the newly-modularized `src/`/`build.py` pipeline found
+and fixed the following (see `CHANGELOG.md` for the full write-up):
+
+- `build_preview_configs()` used to discard section/grid grouping when
+  generating `build/local-preview/card-configs.js`, so `local-preview/`
+  never actually reproduced the dashboard's layout — fixed by emitting
+  `window.PREVIEW_SECTIONS` and reworking `render.js`/`index.html` to
+  render real sections and grid columns.
+- `04_wind.yaml` and `05_waves.yaml` duplicated two large `$fn` JavaScript
+  blocks (`on_dblclick` reset-zoom handler, `layout.shapes` touch-gesture
+  patch) verbatim — extracted into `src/js/common/plotly_reset_on_dblclick.js`
+  and `src/js/common/plotly_touch_patch_shapes.js`, wired into both files
+  and into `build.py` via a new `$include:<name>` placeholder mechanism.
+- Removed the stale `__pycache__/` directory (a local build artifact, not
+  source-controlled).
 
 ## Dashboard layout (re-synced 2026-08-09, after the user rearranged tiles in the HA UI)
 

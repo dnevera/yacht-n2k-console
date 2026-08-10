@@ -15,6 +15,80 @@ import yaml
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 BUILD_DIR = os.path.join(ROOT_DIR, "build")
+COMMON_JS_DIR = os.path.join(SRC_DIR, "js", "common")
+
+# Prefix used by `$fn` scalars in dashboard YAML (evaluated by plotly-graph /
+# ha-yaml-templating at runtime).
+FN_PREFIX = "$fn "
+# Prefix used by scalar placeholders in dashboard YAML to reference a shared
+# JS snippet from src/js/common/ instead of duplicating it inline.
+INCLUDE_PREFIX = "$include:"
+
+
+def strip_leading_line_comments(js_code):
+    """Strip a leading block of `//` documentation comment lines.
+
+    src/js/common/*.js files start with a `//` doc-comment block explaining
+    what the snippet does (English docs, per project conventions). That
+    block is only meant for humans reading the source file — inlining it
+    into the `$fn ...` scalar would make the generated dashboard YAML diverge
+    from what is actually deployed/live on Home Assistant (which only ever
+    saw the bare expression), so it's dropped before wrapping the snippet
+    back into a `$fn` value.
+    """
+    lines = js_code.splitlines()
+    i = 0
+    while i < len(lines) and lines[i].strip().startswith("//"):
+        i += 1
+    return "\n".join(lines[i:]).strip()
+
+
+def load_common_js_snippets():
+    """Load all shared JS snippets from src/js/common/ keyed by file stem.
+
+    Each snippet is expected to contain a single JS expression body (e.g. an
+    arrow function) that gets wrapped back into a `$fn ...` scalar when
+    injected into the dashboard YAML, so the resulting YAML stays equivalent
+    to what used to be copy-pasted inline in each section. Leading `//` doc
+    comments are stripped so the injected code matches byte-for-byte what
+    was previously duplicated inline (and what is live on Home Assistant).
+    """
+    snippets = {}
+    if not os.path.isdir(COMMON_JS_DIR):
+        return snippets
+    for fname in sorted(os.listdir(COMMON_JS_DIR)):
+        if not fname.endswith(".js"):
+            continue
+        fpath = os.path.join(COMMON_JS_DIR, fname)
+        with open(fpath, "r", encoding="utf-8") as f:
+            snippets[fname[:-3]] = strip_leading_line_comments(f.read())
+    return snippets
+
+
+def resolve_includes(node, snippets):
+    """Recursively replace `$include:<name>` scalar placeholders in-place.
+
+    Walks dicts/lists produced by yaml.safe_load and substitutes any string
+    value that equals `$include:<name>` with the shared JS snippet wrapped
+    back into a `$fn ...` expression, so multiple sections can reuse the same
+    JS code without duplicating it in every YAML file.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, str) and value.startswith(INCLUDE_PREFIX):
+                name = value[len(INCLUDE_PREFIX):]
+                if name in snippets:
+                    node[key] = FN_PREFIX + snippets[name]
+            else:
+                resolve_includes(value, snippets)
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            if isinstance(value, str) and value.startswith(INCLUDE_PREFIX):
+                name = value[len(INCLUDE_PREFIX):]
+                if name in snippets:
+                    node[i] = FN_PREFIX + snippets[name]
+            else:
+                resolve_includes(value, snippets)
 
 
 def ensure_dirs():
@@ -102,6 +176,9 @@ def build_dashboard():
                 elif isinstance(sec_data, dict):
                     sections.append(sec_data)
 
+    snippets = load_common_js_snippets()
+    resolve_includes(sections, snippets)
+
     if header_data and "views" in header_data and len(header_data["views"]) > 0:
         header_data["views"][0]["sections"] = sections
 
@@ -111,10 +188,36 @@ def build_dashboard():
     print(f"Built {dst_path}")
 
 
+def card_to_preview_entry(card, card_type, fname):
+    """Build the preview descriptor (tag/title/config) for a single card."""
+    if card_type.startswith("custom:"):
+        tag = card_type.replace("custom:", "")
+    else:
+        tag = f"hui-{card_type}-card"
+
+    label = card.get("name") or card.get("heading") or card.get("title") or card.get("entity") or tag
+    if card_type == "heading":
+        label = f"Heading: {card.get('heading', '')}"
+    elif card_type == "glance":
+        label = "Glance metrics"
+
+    title = f"{label} ({card_type} from {fname})"
+    return {"tag": tag, "title": title, "config": card}
+
+
 def build_preview_configs():
-    """Generate build/local-preview/card-configs.js from dashboard sections."""
+    """Generate build/local-preview/card-configs.js from dashboard sections.
+
+    Unlike a flat card list, this preserves the real Lovelace layout: each
+    source YAML file becomes a `section`, and every top-level grid inside it
+    (a `type: grid` card with a `cards:` list) becomes a `grid` with its own
+    `column_span`/`columns`, so local-preview/render.js can recreate the same
+    grouping and column layout as build/dashboard-sailing.yaml.
+    """
     sections_dir = os.path.join(SRC_DIR, "yaml", "dashboard", "sections")
-    preview_cards = []
+    snippets = load_common_js_snippets()
+    preview_sections = []
+    preview_cards = []  # flat list kept for backwards-compat consumers
 
     for fname in sorted(os.listdir(sections_dir)):
         if not fname.endswith(".yaml"):
@@ -124,33 +227,36 @@ def build_preview_configs():
             sec_data = yaml.safe_load(f)
             if not sec_data:
                 continue
+            resolve_includes(sec_data, snippets)
             grid_list = sec_data if isinstance(sec_data, list) else [sec_data]
+            section_grids = []
             for grid in grid_list:
-                cards = grid.get("cards", []) if isinstance(grid, dict) else ([grid] if isinstance(grid, dict) and "type" in grid else [])
+                if not isinstance(grid, dict):
+                    continue
+                is_grid_container = grid.get("type") == "grid" and "cards" in grid
+                cards = grid.get("cards", []) if is_grid_container else [grid]
+                grid_cards = []
                 for card in cards:
                     if not isinstance(card, dict):
                         continue
                     card_type = card.get("type", "")
                     if not card_type:
                         continue
-
-                    if card_type.startswith("custom:"):
-                        tag = card_type.replace("custom:", "")
-                    else:
-                        tag = f"hui-{card_type}-card"
-
-                    label = card.get("name") or card.get("heading") or card.get("title") or card.get("entity") or tag
-                    if card_type == "heading":
-                        label = f"Heading: {card.get('heading', '')}"
-                    elif card_type == "glance":
-                        label = "Glance metrics"
-
-                    title = f"{label} ({card_type} from {fname})"
-                    preview_cards.append({
-                        "tag": tag,
-                        "title": title,
-                        "config": card
+                    entry = card_to_preview_entry(card, card_type, fname)
+                    grid_cards.append(entry)
+                    preview_cards.append(entry)
+                if grid_cards:
+                    section_grids.append({
+                        "column_span": grid.get("column_span"),
+                        "columns": (grid.get("grid_options") or {}).get("columns") if is_grid_container else None,
+                        "cards": grid_cards,
                     })
+            if section_grids:
+                preview_sections.append({
+                    "source": fname,
+                    "title": fname.replace(".yaml", "").replace("_", " ").title(),
+                    "grids": section_grids,
+                })
 
     # Also load apex-wind if defined in JS cards
     apex_js_path = os.path.join(SRC_DIR, "js", "cards", "apex-wind.js")
@@ -201,13 +307,23 @@ def build_preview_configs():
                 },
             ],
         }
-        preview_cards.insert(1, {
+        apex_entry = {
             "tag": "apexcharts-card",
             "title": "Wind — History & Forecast (apexcharts-card)",
             "config": apex_cfg
-        })
+        }
+        preview_cards.insert(1, apex_entry)
+        # Add it as its own single-card grid right after the wind section
+        # (or as a standalone section if no sections were built at all).
+        wind_section = next((s for s in preview_sections if s["source"].endswith("wind.yaml")), None)
+        target_grids = wind_section["grids"] if wind_section else None
+        if target_grids is None:
+            preview_sections.append({"source": "apex-wind.js", "title": "Wind (apexcharts-card)", "grids": []})
+            target_grids = preview_sections[-1]["grids"]
+        target_grids.append({"column_span": None, "columns": None, "cards": [apex_entry]})
 
     js_content = "// Generated automatically by build.py — DO NOT EDIT MANUALLY\n\n"
+    js_content += f"window.PREVIEW_SECTIONS = {json.dumps(preview_sections, indent=2)};\n"
     js_content += f"window.PREVIEW_CARDS = {json.dumps(preview_cards, indent=2)};\n"
 
     dst_path = os.path.join(BUILD_DIR, "local-preview", "card-configs.js")
