@@ -85,7 +85,7 @@ fi
 
 # ── 1. Detect dashboard storage key and convert source of truth ─────────────
 STORAGE_KEYS=("lovelace.dashboard_sailing")
-TMP_DASHBOARDS="$(mktemp /tmp/lovelace_dashboards.XXXXXX.json)"
+TMP_DASHBOARDS="$(mktemp /tmp/lovelace_dashboards.XXXXXX)"
 trap 'rm -f "${TMP_DASHBOARDS}"' EXIT
 
 if ha_cat "/config/.storage/lovelace_dashboards" > "${TMP_DASHBOARDS}" 2>/dev/null; then
@@ -114,7 +114,7 @@ fi
 
 STORAGE_KEY="${STORAGE_KEYS[0]}"
 
-TMP_JSON="$(mktemp /tmp/lovelace_dashboard_sailing.XXXXXX.json)"
+TMP_JSON="$(mktemp /tmp/lovelace_dashboard_sailing.XXXXXX)"
 trap 'rm -f "${TMP_JSON}" "${TMP_DASHBOARDS:-}"' EXIT
 
 python3 - "${YAML_FILE}" "${TMP_JSON}" "${STORAGE_KEY}" <<'PYEOF'
@@ -157,7 +157,7 @@ if [[ "${HAS_LIVE}" == "1" && "${TARGET_ENV}" == "prod" ]]; then
     ${SCP} "/tmp/${BACKUP_NAME}" "${DEPLOY_HOST}:~/${BACKUP_NAME}" 2>/dev/null || true
 fi
 
-LIVE_AS_YAML="$(mktemp /tmp/lovelace_dashboard_sailing_live.XXXXXX.yaml)"
+LIVE_AS_YAML="$(mktemp /tmp/lovelace_dashboard_sailing_live.XXXXXX)"
 trap 'rm -f "${TMP_JSON}" "${LIVE_AS_YAML}"' EXIT
 python3 - "/tmp/${BACKUP_NAME}" "${LIVE_AS_YAML}" <<'PYEOF'
 import json

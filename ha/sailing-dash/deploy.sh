@@ -35,7 +35,7 @@ for arg in "$@"; do
     case "${arg}" in
         --stage)          TARGET_ENV="stage" ;;
         --prod)           TARGET_ENV="prod" ;;
-        --install)        MODE="install" ;;
+        --install|--clean-install) MODE="install" ;;
         --update)         MODE="update" ;;
         --resources-only) MODE="resources-only" ;;
         --dashboard-only) MODE="dashboard-only" ;;
@@ -117,6 +117,19 @@ fi
 echo "== Running build.py before deploy =="
 python3 "${SCRIPT_DIR}/build.py"
 
+if [[ "${TARGET_ENV}" == "stage" ]]; then
+    echo "== Checking Stage Home Assistant auto-provisioning =="
+    PROVISION_FLAGS=("--container" "${HA_CONTAINER}")
+    if [[ "${MODE}" == "install" ]]; then
+        PROVISION_FLAGS+=("--clean-install")
+    fi
+    # Do not let a provisioning warning/error abort the whole deploy pipeline (set -e):
+    # resource/dashboard/sensors deploy steps below must still run so a partial
+    # provisioning failure never leaves the dashboard registered-but-empty.
+    python3 "${SCRIPT_DIR}/stage_provisioner.py" provision "${PROVISION_FLAGS[@]}" || \
+        echo "WARN: stage_provisioner.py reported issues — continuing with resource/dashboard deploy." >&2
+fi
+
 deploy_resources() {
     echo "-- Step: manually-installed card resources --"
 
@@ -137,18 +150,49 @@ deploy_resources() {
     fi
 
     # Merge resource list
-    python3 - "${RESOURCES_FILE}" "${REMOTE_RES}" "${MERGED_RES}" <<'PYEOF'
+    # NOTE: On STAGE (no HACS installed), /hacsfiles/... resources are normalized
+    # to /local/<filename> and served from CARDS_DIR/VENDOR_DIR fallback bundles,
+    # mirroring stage_provisioner.py's provision_resource_registry() logic. This
+    # prevents a missing HACS-only bundle (e.g. card-mod-studio, an optional debug
+    # tool with no vendor fallback) from aborting the ENTIRE deploy pipeline before
+    # deploy_sensors.sh/deploy_dashboard.sh ever run — which previously left the
+    # dashboard registered but empty (no lovelace.<id> content file) on first install.
+    python3 - "${RESOURCES_FILE}" "${REMOTE_RES}" "${MERGED_RES}" "${TARGET_ENV}" "${CARDS_DIR}" "${VENDOR_DIR}" <<'PYEOF'
 import json
+import os
 import sys
 import uuid
 import yaml
 from urllib.parse import urlsplit
 
-resources_yaml, remote_json, out_json = sys.argv[1:4]
+resources_yaml, remote_json, out_json, target_env, cards_dir, vendor_dir = sys.argv[1:7]
 
 with open(resources_yaml) as f:
     wanted = (yaml.safe_load(f) or {}).get("resources", [])
-wanted = [r for r in wanted if urlsplit(r["url"]).path.startswith("/local/")]
+wanted = [r for r in wanted if urlsplit(r["url"]).path.startswith(("/local/", "/hacsfiles/"))]
+
+
+def has_local_bundle(filename):
+    return os.path.isfile(os.path.join(cards_dir, filename)) or os.path.isfile(os.path.join(vendor_dir, filename))
+
+
+# On stage (no HACS available), normalize /hacsfiles/ URLs to /local/<filename> so
+# they resolve against our own build/vendor card bundles. Drop any resource that
+# has neither a local build artifact nor a vendor fallback bundle instead of
+# failing the whole deploy.
+normalized = []
+for entry in wanted:
+    url = entry["url"]
+    rtype = entry.get("type", "module")
+    if target_env == "stage" and url.startswith("/hacsfiles/"):
+        filename = url.rsplit("/", 1)[-1]
+        if not has_local_bundle(filename):
+            print(f"SKIP   {url} (no local/vendor bundle for {filename}, not required on stage)")
+            continue
+        normalized.append({"url": f"/local/{filename}", "type": rtype})
+    else:
+        normalized.append(entry)
+wanted = normalized
 
 try:
     with open(remote_json) as f:
@@ -178,7 +222,8 @@ for entry in wanted:
         print(f"UPDATE {path} -> {entry['url']}")
     else:
         print(f"OK     {entry['url']} (already registered)")
-    to_upload.append(filename)
+    if path.startswith("/local/"):
+        to_upload.append(filename)
 
 registry["data"]["items"] = items
 
@@ -203,9 +248,8 @@ PYEOF
             LOCAL_JS="${VENDOR_DIR}/${filename}"
         fi
         if [[ ! -f "${LOCAL_JS}" ]]; then
-            echo "ERROR: ${filename} not found in ${CARDS_DIR} nor ${VENDOR_DIR}" >&2
-            echo "       (3rd-party bundles: place vendor JS files in ha/sailing-dash/vendor/)" >&2
-            exit 1
+            echo "WARN: ${filename} not found in ${CARDS_DIR} nor ${VENDOR_DIR} — skipping upload (resource may fail to load)." >&2
+            continue
         fi
         echo "Uploading ${filename} -> ${HA_CONTAINER}:/config/www/${filename} ..."
         ha_cp_to_container "${LOCAL_JS}" "/config/www/${filename}"

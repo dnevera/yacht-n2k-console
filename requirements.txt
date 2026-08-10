@@ -12,6 +12,12 @@ python-dotenv>=1.0.0
 # sensors YAML sources into HA's storage-mode JSON / configuration.yaml.
 pyyaml>=6.0
 
+# ha/sailing-dash/stage_provisioner.py (run on THIS machine) uses bcrypt to
+# hash the test/test login password the exact same way HA's own
+# `homeassistant` auth provider does, so it can write a ready-to-use user
+# straight into .storage/auth + .storage/auth_provider.homeassistant.
+bcrypt>=4.0
+
 # Optional: only needed to verify what the live HA frontend is actually
 # serving over the websocket API (see ha/sailing-dash/README.md,
 # "Why the dashboard deploy restarts HA") — not required for normal deploys.

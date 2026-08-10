@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # run_stage.sh — Launch the Stage Home Assistant Docker environment & auto-deploy
 # Usage:
-#   ./run_stage.sh          # Launch in Demo mode with local NMEA emulator (default)
-#   ./run_stage.sh --live   # Launch in Live mode connected to remote NMEA TCP gateway
+#   ./run_stage.sh               # Launch in Demo mode with local NMEA emulator (default)
+#   ./run_stage.sh --live        # Launch in Live mode connected to remote NMEA TCP gateway
+#   ./run_stage.sh --clean-install # Launch with forced clean re-provisioning of Stage HA
 
 set -euo pipefail
 

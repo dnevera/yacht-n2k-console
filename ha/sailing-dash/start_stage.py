@@ -52,7 +52,7 @@ def check_docker():
         sys.exit(1)
 
 
-def run_build_and_deploy():
+def run_build_and_deploy(clean_install: bool = False):
     log("BUILD", "Compiling modules via build.py ...")
     res_build = subprocess.run([sys.executable, BUILD_SCRIPT], cwd=SCRIPT_DIR)
     if res_build.returncode != 0:
@@ -60,7 +60,10 @@ def run_build_and_deploy():
         return False
 
     log("STAGE", "Deploying build artifacts to local Stage HA container ...")
-    res_deploy = subprocess.run(["bash", DEPLOY_SCRIPT, "--stage"], cwd=SCRIPT_DIR)
+    deploy_cmd = ["bash", DEPLOY_SCRIPT, "--stage"]
+    if clean_install:
+        deploy_cmd.append("--clean-install")
+    res_deploy = subprocess.run(deploy_cmd, cwd=SCRIPT_DIR)
     if res_deploy.returncode != 0:
         log("WARN", "Deploy to local-ha returned non-zero code.")
         return False
@@ -107,6 +110,7 @@ def main():
     parser.add_argument("--demo", action="store_true", default=True, help="Demo mode: run local NMEA PGN simulator (default)")
     parser.add_argument("--live", action="store_true", help="Live mode: connect Stage HA to remote NMEA TCP gateway")
     parser.add_argument("--gw-host", default="", help="Remote NMEA TCP gateway host for --live mode")
+    parser.add_argument("--clean-install", "--install", action="store_true", help="Force clean re-provisioning of Stage HA")
     parser.add_argument("--no-watch", action="store_true", help="Disable file watcher")
     args = parser.parse_args()
 
@@ -120,7 +124,19 @@ def main():
         log("STAGE", "Starting background NMEA PGN simulator on port 4001 ...")
         emulator_proc = subprocess.Popen([sys.executable, EMULATOR_SCRIPT, "--port", "4001"], cwd=LOCAL_HA_DIR)
 
-    run_build_and_deploy()
+    run_build_and_deploy(clean_install=args.clean_install)
+
+    log("STAGE", "Verifying Stage HA dashboard HTTP readiness...")
+    verify_cmd = [
+        sys.executable,
+        os.path.join(SCRIPT_DIR, "stage_provisioner.py"),
+        "verify",
+        "--url",
+        "http://localhost:8123/dashboard-sailing/",
+        "--timeout",
+        "15",
+    ]
+    subprocess.run(verify_cmd, cwd=SCRIPT_DIR)
 
     print("\n" + "=" * 70)
     print("🚀 Stage Home Assistant Environment Ready!")

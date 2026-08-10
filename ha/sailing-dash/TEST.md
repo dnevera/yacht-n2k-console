@@ -69,22 +69,29 @@ Valid decodes for PGNs: `128259` (STW), `128267` (Depth), `130306` (Wind), `1290
 
 ---
 
-## 🐳 3. Stage Deployment Verification
+## 🐳 3. Stage Deployment & Auto-Provisioning Verification
 
-Verify that deployment to the local Docker Home Assistant container (`local-ha`) works smoothly without SSH.
+Verify that deployment to the local Docker Home Assistant container (`local-ha`) handles empty instances, clean re-installation, and HTTP readiness checks.
 
-### Execution
+### 3.1 From-Scratch Provisioning Check
+Test provisioning on a clean config directory:
 ```bash
 cd ha/sailing-dash
-./deploy.sh --stage
+python3 stage_provisioner.py inspect --config-dir local-ha/config
+python3 stage_provisioner.py provision --config-dir local-ha/config
 ```
 
-### Expected Results
-1. `build.py` executes automatically before deploy.
-2. `lovelace_resources` are uploaded into `local-ha` container storage.
-3. `sensors-sailing.yaml` is merged into `/config/configuration.yaml` inside `local-ha`.
-4. `dashboard-sailing.yaml` is written into `/config/.storage/lovelace.dashboard_sailing` inside `local-ha`.
-5. `local-ha` Docker container restarts cleanly.
+### 3.2 Forced Clean Reinstall Check
+Force full re-installation of storage registries and card bundles:
+```bash
+./deploy.sh --stage --clean-install
+```
+
+### 3.3 Post-Launch HTTP Readiness Check
+Verify that Home Assistant REST API and sailing dashboard return HTTP 200 OK:
+```bash
+python3 stage_provisioner.py verify --url http://localhost:8123/dashboard-sailing/ --timeout 30
+```
 
 ---
 

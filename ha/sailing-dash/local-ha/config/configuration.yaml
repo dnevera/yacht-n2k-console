@@ -1,4 +1,7 @@
 default_config: null
+homeassistant:
+  auth_providers:
+  - type: homeassistant
 http:
   cors_allowed_origins:
   - '*'
@@ -109,6 +112,26 @@ template:
     state: '{% set v = states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude'') | float(0) %} {% set d = v | abs | int %}{% set m = ((v | abs) - d) * 60 %} {{ d }}°{{ ''%.2f'' | format(m) }}''{{ ''E'' if v >= 0 else ''W'' }}
 
       '
+- device_tracker:
+  - name: Nevera
+    unique_id: nevera_boat_gps
+    latitude: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude'') | float(0) }}
+
+      '
+    longitude: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude'') | float(0) }}
+
+      '
+    icon: mdi:sail-boat
+- device_tracker:
+  - name: Nevera
+    unique_id: nevera_boat_gps
+    latitude: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude'') | float(0) }}
+
+      '
+    longitude: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude'') | float(0) }}
+
+      '
+    icon: mdi:sail-boat
 - device_tracker:
   - name: Nevera
     unique_id: nevera_boat_gps
