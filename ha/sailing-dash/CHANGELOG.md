@@ -10,6 +10,13 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-10
+
+- **Modularization of `ha/sailing-dash/` and automated build pipeline (`build.py`):**
+  - Reorganized project into modular source components under `src/`: reusable JS utilities (`src/js/common/` for color scales, data generators, Plotly vector helpers) and card implementations (`src/js/cards/`), section-based YAML templates (`src/yaml/dashboard/sections/`), sensors (`src/yaml/sensors/`), automations (`src/yaml/automations/`), and resources (`src/yaml/resources/`).
+  - Implemented `build.py` script to compile modular source files from `src/` into target deployable artifacts inside `build/` (`dashboard-sailing.yaml`, `sensors-sailing.yaml`, `automations-sailing.yaml`, `lovelace-resources.yaml`, `cards/windy-boat-card.js`) and auto-generate `build/local-preview/card-configs.js` for offline preview testing without manual synchronization.
+  - Updated deployment scripts (`deploy.sh`, `deploy_dashboard.sh`, `deploy_sensors.sh`) and local preview harness (`local-preview/index.html`, `render.js`) to consume artifacts directly from `build/`.
+
 ## 2026-08-09
 
 - **Pulled another manual re-layout from the HA UI:** section headings renamed

@@ -1,0 +1,25 @@
+# Open-Meteo REST platform sensors for wind and wave forecast
+rest:
+  - resource_template: >-
+      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+    scan_interval: 900
+    sensor:
+      - name: 'Wind Forecast REST'
+        unique_id: wind_forecast_rest
+        icon: mdi:weather-windy
+        value_template: "{{ value_json.hourly.windspeed_10m | list | first | round(1) }}"
+        unit_of_measurement: 'kts'
+        json_attributes:
+          - hourly
+
+  - resource_template: >-
+      https://marine-api.open-meteo.com/v1/marine?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+    scan_interval: 900
+    sensor:
+      - name: 'Wave Forecast REST'
+        unique_id: wave_forecast_rest
+        icon: mdi:waves
+        value_template: "{{ value_json.hourly.wave_height | list | first | round(1) }}"
+        unit_of_measurement: 'm'
+        json_attributes:
+          - hourly

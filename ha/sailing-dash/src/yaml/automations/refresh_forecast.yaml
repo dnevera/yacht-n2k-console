@@ -1,0 +1,20 @@
+- id: sailing_forecast_refresh_on_start
+  alias: Sailing — refresh open-meteo forecast after start / window change
+  description: >-
+    Re-polls the wind + wave open-meteo REST sensors once sensor.chart_time_window
+    is available, so forecast_days matches the configured forecast_hours instead
+    of the startup fallback.
+  mode: single
+  trigger:
+    - platform: homeassistant
+      event: start
+    - platform: state
+      entity_id: sensor.chart_time_window
+  condition: []
+  action:
+    - delay: '00:00:30'
+    - service: homeassistant.update_entity
+      target:
+        entity_id:
+          - sensor.wind_forecast_rest
+          - sensor.wave_forecast_rest

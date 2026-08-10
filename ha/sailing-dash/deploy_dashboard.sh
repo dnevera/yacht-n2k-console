@@ -49,7 +49,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-YAML_FILE="${SCRIPT_DIR}/dashboard-sailing.yaml"
+
+echo "== Running build.py before deploy_dashboard =="
+python3 "${SCRIPT_DIR}/build.py"
+
+YAML_FILE="${SCRIPT_DIR}/build/dashboard-sailing.yaml"
 STORAGE_KEY="lovelace.dashboard_sailing"
 
 # ── Resolve target host + HA container name ─────────────────────────────────

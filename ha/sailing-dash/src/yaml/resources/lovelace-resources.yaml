@@ -1,0 +1,17 @@
+resources:
+  - url: /hacsfiles/card-mod-studio/card-mod-studio.js
+    type: module
+  - url: /hacsfiles/lovelace-card-mod/card-mod.js
+    type: module
+  - url: /hacsfiles/compass-card/compass-card.js
+    type: module
+  - url: /hacsfiles/apexcharts-card/apexcharts-card.js
+    type: module
+  - url: /local/windrose-card.js?v=2.4.2
+    type: module
+  - url: /local/plotly-graph-card.js?v=1.0.0
+    type: module
+  - url: /local/config-template-card.js?v=1.3.6
+    type: module
+  - url: /local/windy-boat-card.js?v=1.2.0
+    type: module

@@ -36,8 +36,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-SENSORS_FILE="${SCRIPT_DIR}/sensors-sailing.yaml"
-AUTOMATIONS_FILE="${SCRIPT_DIR}/automations-sailing.yaml"
+
+echo "== Running build.py before deploy_sensors =="
+python3 "${SCRIPT_DIR}/build.py"
+
+SENSORS_FILE="${SCRIPT_DIR}/build/sensors-sailing.yaml"
+AUTOMATIONS_FILE="${SCRIPT_DIR}/build/automations-sailing.yaml"
 
 # ── Resolve target host + HA container name ─────────────────────────────────
 if [[ -n "${1:-}" ]]; then

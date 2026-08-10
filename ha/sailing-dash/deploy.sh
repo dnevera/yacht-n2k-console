@@ -47,8 +47,8 @@ VENDOR_DIR="${SCRIPT_DIR}/local-preview/vendor"
 # Cards written for THIS project (committed to git, unlike vendor/ which holds
 # downloaded 3rd-party release bundles). Looked up first, so our own card
 # always wins over a same-named vendor file.
-CARDS_DIR="${SCRIPT_DIR}/cards"
-RESOURCES_FILE="${SCRIPT_DIR}/lovelace-resources.yaml"
+CARDS_DIR="${SCRIPT_DIR}/build/cards"
+RESOURCES_FILE="${SCRIPT_DIR}/build/lovelace-resources.yaml"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
 MODE="update"
@@ -83,6 +83,9 @@ fi
 
 SSH="ssh -o ConnectTimeout=8 ${DEPLOY_HOST}"
 SCP="scp -q"
+
+echo "== Running build.py before deploy =="
+python3 "${SCRIPT_DIR}/build.py"
 
 echo "== Sailing dashboard deploy (mode: ${MODE}) → ${DEPLOY_HOST} (container: ${HA_CONTAINER}) =="
 
