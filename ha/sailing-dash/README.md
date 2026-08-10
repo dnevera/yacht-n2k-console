@@ -16,9 +16,9 @@ every edit).
 The dashboard was originally created via the HA UI (a *storage-mode*
 dashboard), so its config only lived inside HA's internal state file
 `.storage/lovelace.dashboard_sailing` on the target host — not as a plain
-file anyone could review, diff, or restore from git. This directory makes
-`dashboard-sailing.yaml` the source of truth and provides a script to push
-edits back into HA's storage.
+file anyone could review, diff, or restore from git. This project organizes
+the dashboard into modular source components under `src/`, compiles them into
+`build/` via `build.py`, and provides scripts to preview and deploy changes.
 
 ## Structure & Build Process (2026-08-10)
 
@@ -51,6 +51,7 @@ Before deploying, `deploy.sh` automatically invokes `python3 build.py` to ensure
 ## Files
 
 - `build.py` — **the automated build engine** (2026-08-10). Compiles modular source code from `src/` into deployable target YAML/JS files in `build/` and auto-generates `build/local-preview/card-configs.js`.
+- `start_preview.py` — **the test server launcher for local-preview** (2026-08-10). Audits build status, triggers `build.py` if source files changed, verifies vendor bundles, and serves `local-preview/` over HTTP with clear console instructions.
 - `deploy.sh` — **the single entry point for all deploys** (2026-08-09, updated 2026-08-10).
   Triggers `build.py` first, then runs deployment steps using artifacts from `build/`.
   `--install`/`--update` run all three steps below in order; `--resources-
@@ -161,12 +162,11 @@ they differ). `deploy_sensors.sh` already fetches+diffs the remote
 shows unexpected changes, pull the live version into the repo file first
 (see "Dashboard layout" above) before pushing your own edits on top of it.
 
-1. Edit `dashboard-sailing.yaml` in this repo.
+1. Edit modular source code under `src/yaml/dashboard/sections/` or `src/js/cards/` in this repo.
 2. Optional but recommended for new/risky custom-card configs (dual-axis
-   charts, unfamiliar card options, etc.): copy the changed card's config
-   into `local-preview/card-configs.js` and run the offline browser check
-   (`local-preview/README.md`) — it renders the real card bundle and shows
-   config/schema errors immediately, without a deploy-and-restart cycle.
+   charts, unfamiliar card options, etc.): run `python3 start_preview.py`
+   to compile source modules, verify vendor dependencies, launch the offline
+   preview server, and open `http://localhost:8977/index.html` in your browser.
 3. Run `./deploy.sh --update` (or `./deploy.sh --dashboard-only` if only
    the dashboard changed — see "Deploying" above). Review the printed
    pre-deploy diff before it uploads.
@@ -692,11 +692,12 @@ available as a daily max or in "current"), so it cannot drive this chart.
 
 ## Editing the sensors/services (e.g. changing the open-meteo forecast location)
 
-1. Edit `sensors-sailing.yaml` in this repo (e.g. the `latitude`/`longitude`
-   query params in the `rest:` resource URL).
-2. Run `./deploy_sensors.sh` (or `./deploy_sensors.sh user@host`). It merges
-   the file into the remote `configuration.yaml` by matching `unique_id`
-   (safe to re-run — updates existing entries in place) and restarts HA,
+1. Edit modular YAML sensor files under `src/yaml/sensors/` (e.g. `open_meteo.yaml`
+   or `derived_n2k.yaml`).
+2. Run `./deploy_sensors.sh` (or `./deploy.sh --sensors-only`). It automatically
+   executes `python3 build.py` to compile `build/sensors-sailing.yaml`, merges
+   it into the remote `configuration.yaml` by matching `unique_id`
+   (safe to re-run — updates existing entries in place), and restarts HA,
    since `configuration.yaml` changes are not hot-reloadable.
 
 ## Requirements

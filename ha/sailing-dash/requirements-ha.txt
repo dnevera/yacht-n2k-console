@@ -53,7 +53,7 @@
 # registered as a Lovelace resource (/local/config-template-card.js).
 
 # ── 2d. windy-boat-card — OUR OWN card, source in this repo (2026-08-09) ────
-# ha/sailing-dash/cards/windy-boat-card.js — the Windy embed widget plus a
+# ha/sailing-dash/src/js/cards/windy-boat-card.js — the Windy embed widget plus a
 # working "center on the boat" button. It exists because the embed's built-in
 # postMessage API (enabled by `embedMake=true` in the embed URL) is the only
 # way to re-centre the map without reloading the iframe, and HA's built-in

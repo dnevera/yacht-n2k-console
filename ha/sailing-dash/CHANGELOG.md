@@ -16,6 +16,14 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
   - Reorganized project into modular source components under `src/`: reusable JS utilities (`src/js/common/` for color scales, data generators, Plotly vector helpers) and card implementations (`src/js/cards/`), section-based YAML templates (`src/yaml/dashboard/sections/`), sensors (`src/yaml/sensors/`), automations (`src/yaml/automations/`), and resources (`src/yaml/resources/`).
   - Implemented `build.py` script to compile modular source files from `src/` into target deployable artifacts inside `build/` (`dashboard-sailing.yaml`, `sensors-sailing.yaml`, `automations-sailing.yaml`, `lovelace-resources.yaml`, `cards/windy-boat-card.js`) and auto-generate `build/local-preview/card-configs.js` for offline preview testing without manual synchronization.
   - Updated deployment scripts (`deploy.sh`, `deploy_dashboard.sh`, `deploy_sensors.sh`) and local preview harness (`local-preview/index.html`, `render.js`) to consume artifacts directly from `build/`.
+  - Removed obsolete monolithic root YAML files (`dashboard-sailing.yaml`, `sensors-sailing.yaml`, `automations-sailing.yaml`, `lovelace-resources.yaml`), legacy `cards/` root folder, and draft `wave-sensor.md`. Updated `local-preview/cards` symlink to point to `../build/cards`.
+- **Added `start_preview.py` test server launcher and audited documentation:**
+  - Implemented `start_preview.py` to audit build freshness, trigger `python3 build.py` automatically if source files changed, verify vendor dependencies, report build artifacts and card count, and launch an HTTP server for `local-preview` with detailed request logging and terminal instructions.
+  - Audited and updated `ha/sailing-dash/README.md` and `local-preview/README.md` to accurately reflect the modular layout, build pipeline, and preview workflows.
+- **Enhanced `local-preview` to generate and render all 22 dashboard cards:**
+  - Refactored `build_preview_configs()` in `build.py` to recursively extract all cards (standard HA elements and custom cards) across all dashboard section YAML files (`src/yaml/dashboard/sections/*.yaml`).
+  - Added `local-preview/mock-ha-cards.js` defining custom Web Components (`hui-heading-card`, `hui-gauge-card`, `hui-entity-card`, `hui-glance-card`, `hui-map-card`, `hui-tile-card`) and extended `mock-hass.js` with mock states for STW, Depth, device tracker, position, and wave forecasts.
+  - Verified that all 22 dashboard cards render cleanly without errors in the preview test harness (`node local-preview/run-preview.js`).
 
 ## 2026-08-09
 

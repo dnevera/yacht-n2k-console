@@ -2,54 +2,12 @@
 
 window.PREVIEW_CARDS = [
   {
-    "tag": "compass-card",
-    "title": "compass-card (compass-card from 02_position.yaml)",
+    "tag": "hui-heading-card",
+    "title": "Heading: Sensors (heading from 01_sensors.yaml)",
     "config": {
-      "type": "custom:compass-card",
-      "header": {
-        "title": {
-          "value": "COG"
-        },
-        "icon": {
-          "value": "mdi:compass-outline"
-        }
-      },
-      "compass": {
-        "circle": {
-          "color": "#37474f"
-        },
-        "ticks": {
-          "show": true,
-          "color": "#90a4ae",
-          "radius": 95
-        },
-        "north": {
-          "show": true
-        },
-        "east": {
-          "show": true
-        },
-        "south": {
-          "show": true
-        },
-        "west": {
-          "show": true
-        }
-      },
-      "indicator_sensors": [
-        {
-          "sensor": "sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog",
-          "indicator": {
-            "image": "arrow_inward",
-            "color": "#ff7043"
-          }
-        }
-      ],
-      "value_sensors": [
-        {
-          "sensor": "sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog"
-        }
-      ]
+      "type": "heading",
+      "heading_style": "title",
+      "heading": "Sensors"
     }
   },
   {
@@ -125,8 +83,168 @@ window.PREVIEW_CARDS = [
     }
   },
   {
+    "tag": "hui-gauge-card",
+    "title": "STW (kn) (gauge from 01_sensors.yaml)",
+    "config": {
+      "type": "gauge",
+      "name": "STW (kn)",
+      "entity": "sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced",
+      "min": 0,
+      "max": 12,
+      "needle": true,
+      "severity": {
+        "green": 0,
+        "yellow": 8,
+        "red": 10
+      }
+    }
+  },
+  {
+    "tag": "hui-gauge-card",
+    "title": "Depth (m) (gauge from 01_sensors.yaml)",
+    "config": {
+      "type": "gauge",
+      "name": "Depth (m)",
+      "entity": "sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth",
+      "min": 0,
+      "max": 30,
+      "needle": true,
+      "severity": {
+        "red": 0,
+        "yellow": 3,
+        "green": 5
+      },
+      "card_mod": {
+        "style": "ha-card {\n  --accent-color: {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) >= 4.5 else '#888888')) }};\n}\n\nha-gauge {\n  --gauge-color: {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) >= 4.5 else '#888888')) }} !important;\n  --primary-text-color: {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) >= 4.5 else '#888888')) }} !important;\n}\n\nha-card {\n  color: {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth') | float(0) >= 4.5 else '#888888')) }};\n}"
+      }
+    }
+  },
+  {
+    "tag": "hui-gauge-card",
+    "title": "SOG (kn) (gauge from 01_sensors.yaml)",
+    "config": {
+      "type": "gauge",
+      "name": "SOG (kn)",
+      "entity": "sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog",
+      "min": 0,
+      "max": 12,
+      "needle": true,
+      "severity": {
+        "green": 0,
+        "yellow": 8,
+        "red": 10
+      }
+    }
+  },
+  {
+    "tag": "hui-heading-card",
+    "title": "Heading: Position (heading from 02_position.yaml)",
+    "config": {
+      "type": "heading",
+      "heading": "Position"
+    }
+  },
+  {
+    "tag": "compass-card",
+    "title": "compass-card (custom:compass-card from 02_position.yaml)",
+    "config": {
+      "type": "custom:compass-card",
+      "header": {
+        "title": {
+          "value": "COG"
+        },
+        "icon": {
+          "value": "mdi:compass-outline"
+        }
+      },
+      "compass": {
+        "circle": {
+          "color": "#37474f"
+        },
+        "ticks": {
+          "show": true,
+          "color": "#90a4ae",
+          "radius": 95
+        },
+        "north": {
+          "show": true
+        },
+        "east": {
+          "show": true
+        },
+        "south": {
+          "show": true
+        },
+        "west": {
+          "show": true
+        }
+      },
+      "indicator_sensors": [
+        {
+          "sensor": "sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog",
+          "indicator": {
+            "image": "arrow_inward",
+            "color": "#ff7043"
+          }
+        }
+      ],
+      "value_sensors": [
+        {
+          "sensor": "sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog"
+        }
+      ]
+    }
+  },
+  {
+    "tag": "hui-map-card",
+    "title": "hui-map-card (map from 02_position.yaml)",
+    "config": {
+      "type": "map",
+      "entities": [
+        {
+          "entity": "device_tracker.nevera"
+        }
+      ],
+      "default_zoom": 14,
+      "aspect_ratio": "16x9"
+    }
+  },
+  {
+    "tag": "hui-entity-card",
+    "title": "Latitude (entity from 02_position.yaml)",
+    "config": {
+      "type": "entity",
+      "entity": "sensor.boat_latitude",
+      "name": "Latitude",
+      "card_mod": {
+        "style": "ha-card {\n  font-size: 14px;\n  font-weight: bold;\n  color: var(--grey-color);\n}\n\n.name {\n  font-size: 14px !important;\n  font-weight: bold !important;\n  color: var(--grey-color) !important;\n}\n\n.value {\n  font-size: calc(14px * 1.75) !important;\n}\n\n.measurement {\n  font-size: 14px !important;\n  color: var(--grey-color) !important;\n}"
+      }
+    }
+  },
+  {
+    "tag": "hui-entity-card",
+    "title": "Longitude (entity from 02_position.yaml)",
+    "config": {
+      "type": "entity",
+      "entity": "sensor.boat_longitude",
+      "name": "Longitude",
+      "card_mod": {
+        "style": "ha-card {\n  font-size: 13px;\n  font-weight: bold;\n  color: var(--grey-color);\n}\n\n.name {\n  font-size: 13px !important;\n  font-weight: bold !important;\n  color: var(--grey-color) !important;\n}\n\n.value {\n  font-size: calc(14px * 1.75) !important;\n}\n\n.measurement {\n  font-size: 14px !important;\n  color: var(--grey-color) !important;\n}"
+      }
+    }
+  },
+  {
+    "tag": "hui-heading-card",
+    "title": "Heading: Conditions (heading from 03_conditions.yaml)",
+    "config": {
+      "type": "heading",
+      "heading_style": "title",
+      "heading": "Conditions"
+    }
+  },
+  {
     "tag": "windrose-card",
-    "title": "windrose-card (windrose-card from 03_conditions.yaml)",
+    "title": "windrose-card (custom:windrose-card from 03_conditions.yaml)",
     "config": {
       "type": "custom:windrose-card",
       "windspeed_bar_location": "right",
@@ -155,8 +273,95 @@ window.PREVIEW_CARDS = [
     }
   },
   {
+    "tag": "hui-gauge-card",
+    "title": "Pressure (mmHg) (gauge from 03_conditions.yaml)",
+    "config": {
+      "type": "gauge",
+      "name": "Pressure (mmHg)",
+      "entity": "sensor.barometer_mmhg",
+      "min": 720,
+      "max": 790,
+      "needle": true,
+      "severity": {
+        "red": 720,
+        "yellow": 745,
+        "green": 760
+      },
+      "grid_options": {
+        "rows": 3,
+        "columns": 12
+      }
+    }
+  },
+  {
+    "tag": "hui-tile-card",
+    "title": "sensor.barometer_mmhg (tile from 03_conditions.yaml)",
+    "config": {
+      "type": "tile",
+      "entity": "sensor.barometer_mmhg",
+      "features": [
+        {
+          "type": "trend-graph"
+        }
+      ],
+      "grid_options": {
+        "columns": 12,
+        "rows": 2
+      }
+    }
+  },
+  {
+    "tag": "hui-heading-card",
+    "title": "Heading: Wind Direction & Speed (heading from 04_wind.yaml)",
+    "config": {
+      "type": "heading",
+      "heading_style": "title",
+      "heading": "Wind Direction & Speed",
+      "icon": "mdi:weather-windy"
+    }
+  },
+  {
+    "tag": "hui-glance-card",
+    "title": "Glance metrics (glance from 04_wind.yaml)",
+    "config": {
+      "type": "glance",
+      "show_icon": false,
+      "state_color": false,
+      "columns": 3,
+      "entities": [
+        {
+          "entity": "sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed",
+          "name": "Measured now",
+          "card_mod": {
+            "style": "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n  line-height: 14px !important;\n  color: var(--secondary-text-color) !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight: 500 !important;\n  line-height: 30px !important;\n  color: #4fc3f7 !important;\n}\n"
+          }
+        },
+        {
+          "entity": "sensor.wind_forecast_next_hour",
+          "name": "Forecast next 1h",
+          "card_mod": {
+            "style": "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n  line-height: 14px !important;\n  color: var(--secondary-text-color) !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight: 500 !important;\n  line-height: 30px !important;\n  color: #b0bec5 !important;\n}\n"
+          }
+        },
+        {
+          "entity": "sensor.wind_gust_next_hour",
+          "name": "Gusts next 1h",
+          "card_mod": {
+            "style": "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n  line-height: 14px !important;\n  color: var(--secondary-text-color) !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight: 500 !important;\n  line-height: 30px !important;\n  color: #ff7043 !important;\n}\n"
+          }
+        }
+      ],
+      "card_mod": {
+        "style": "ha-card { padding: 10px 8px 6px !important; }\n.entities { padding: 0 !important; }\n.entity {\n  flex-direction: column-reverse !important;\n}\n"
+      },
+      "grid_options": {
+        "columns": 36
+      }
+    }
+  },
+  {
     "tag": "plotly-graph",
-    "title": "plotly-graph (plotly-graph from 04_wind.yaml)",
+    "title": "plotly-graph (custom:plotly-graph from 04_wind.yaml)",
     "config": {
       "type": "custom:plotly-graph",
       "hours_to_show": "$fn ({ hass }) => { const a = (hass.states['sensor.chart_time_window'] || { attributes: {} }).attributes; return Number(a.history_hours || 4) + Number(a.forecast_hours || 24); }",
@@ -383,8 +588,50 @@ window.PREVIEW_CARDS = [
     }
   },
   {
+    "tag": "hui-heading-card",
+    "title": "Heading: Waves (heading from 05_waves.yaml)",
+    "config": {
+      "type": "heading",
+      "heading_style": "title",
+      "heading": "Waves",
+      "icon": "mdi:wave"
+    }
+  },
+  {
+    "tag": "hui-glance-card",
+    "title": "Glance metrics (glance from 05_waves.yaml)",
+    "config": {
+      "type": "glance",
+      "show_icon": false,
+      "state_color": false,
+      "columns": 2,
+      "entities": [
+        {
+          "entity": "sensor.wave_height_next_hour",
+          "name": "Height next 1h",
+          "card_mod": {
+            "style": "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n  line-height: 14px !important;\n  color: var(--secondary-text-color) !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight: 500 !important;\n  line-height: 30px !important;\n  color: #4fc3f7 !important;\n}\n"
+          }
+        },
+        {
+          "entity": "sensor.wave_period_next_hour",
+          "name": "Period next 1h",
+          "card_mod": {
+            "style": "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n  line-height: 14px !important;\n  color: var(--secondary-text-color) !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight: 500 !important;\n  line-height: 30px !important;\n  color: #b0bec5 !important;\n}\n"
+          }
+        }
+      ],
+      "card_mod": {
+        "style": "ha-card { padding: 10px 8px 6px !important; }\n.entities { padding: 0 !important; }\n.entity {\n  flex-direction: column-reverse !important;\n}\n"
+      },
+      "grid_options": {
+        "columns": 36
+      }
+    }
+  },
+  {
     "tag": "plotly-graph",
-    "title": "plotly-graph (plotly-graph from 05_waves.yaml)",
+    "title": "plotly-graph (custom:plotly-graph from 05_waves.yaml)",
     "config": {
       "type": "custom:plotly-graph",
       "hours_to_show": "$fn ({ hass }) => { const a = (hass.states['sensor.chart_time_window'] || { attributes: {} }).attributes; return Number(a.history_hours || 4) + Number(a.forecast_hours || 24); }",
@@ -479,8 +726,18 @@ window.PREVIEW_CARDS = [
     }
   },
   {
+    "tag": "hui-heading-card",
+    "title": "Heading: Forecast (heading from 06_forecast.yaml)",
+    "config": {
+      "type": "heading",
+      "icon": "mdi:weather-windy-variant",
+      "heading_style": "title",
+      "heading": "Forecast"
+    }
+  },
+  {
     "tag": "windy-boat-card",
-    "title": "windy-boat-card (windy-boat-card from 06_forecast.yaml)",
+    "title": "windy-boat-card (custom:windy-boat-card from 06_forecast.yaml)",
     "config": {
       "type": "custom:windy-boat-card",
       "lat_entity": "sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude",

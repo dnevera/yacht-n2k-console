@@ -126,13 +126,26 @@ def build_preview_configs():
                 continue
             grid_list = sec_data if isinstance(sec_data, list) else [sec_data]
             for grid in grid_list:
-                cards = grid.get("cards", []) if isinstance(grid, dict) else []
+                cards = grid.get("cards", []) if isinstance(grid, dict) else ([grid] if isinstance(grid, dict) and "type" in grid else [])
                 for card in cards:
-                    card_type = card.get("type", "") if isinstance(card, dict) else ""
-                    if not card_type.startswith("custom:"):
+                    if not isinstance(card, dict):
                         continue
-                    tag = card_type.replace("custom:", "")
-                    title = f"{card.get('name', tag)} ({tag} from {fname})"
+                    card_type = card.get("type", "")
+                    if not card_type:
+                        continue
+
+                    if card_type.startswith("custom:"):
+                        tag = card_type.replace("custom:", "")
+                    else:
+                        tag = f"hui-{card_type}-card"
+
+                    label = card.get("name") or card.get("heading") or card.get("title") or card.get("entity") or tag
+                    if card_type == "heading":
+                        label = f"Heading: {card.get('heading', '')}"
+                    elif card_type == "glance":
+                        label = "Glance metrics"
+
+                    title = f"{label} ({card_type} from {fname})"
                     preview_cards.append({
                         "tag": tag,
                         "title": title,
