@@ -83,9 +83,39 @@ else
     }
 fi
 
-# ── 1. Convert our YAML source of truth into storage JSON shape ──────────────
+# ── 1. Detect dashboard storage key and convert source of truth ─────────────
+STORAGE_KEYS=("lovelace.dashboard_sailing")
+TMP_DASHBOARDS="$(mktemp /tmp/lovelace_dashboards.XXXXXX.json)"
+trap 'rm -f "${TMP_DASHBOARDS}"' EXIT
+
+if ha_cat "/config/.storage/lovelace_dashboards" > "${TMP_DASHBOARDS}" 2>/dev/null; then
+    FOUND_KEY=$(python3 - "${TMP_DASHBOARDS}" <<'PYEOF'
+import json
+import sys
+
+try:
+    with open(sys.argv[1]) as f:
+        items = json.load(f).get("data", {}).get("items", [])
+    for item in items:
+        if item.get("url_path") == "dashboard-sailing" and item.get("id"):
+            print(f"lovelace.{item['id']}")
+            sys.exit(0)
+except Exception:
+    pass
+PYEOF
+    )
+    if [[ -n "${FOUND_KEY}" ]]; then
+        STORAGE_KEYS=("${FOUND_KEY}")
+        if [[ "${FOUND_KEY}" != "lovelace.dashboard_sailing" ]]; then
+            STORAGE_KEYS+=("lovelace.dashboard_sailing")
+        fi
+    fi
+fi
+
+STORAGE_KEY="${STORAGE_KEYS[0]}"
+
 TMP_JSON="$(mktemp /tmp/lovelace_dashboard_sailing.XXXXXX.json)"
-trap 'rm -f "${TMP_JSON}"' EXIT
+trap 'rm -f "${TMP_JSON}" "${TMP_DASHBOARDS:-}"' EXIT
 
 python3 - "${YAML_FILE}" "${TMP_JSON}" "${STORAGE_KEY}" <<'PYEOF'
 import json
