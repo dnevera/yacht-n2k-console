@@ -51,8 +51,11 @@ real-config.js
 .output.txt
 
 # Home Assistant Stage runtime state
+ha/sailing-dash/.cache/
+ha/sailing-dash/local-ha/config/.cache/
 ha/sailing-dash/local-ha/config/.storage/
 ha/sailing-dash/local-ha/config/www/
+ha/sailing-dash/local-ha/config/custom_components/
 ha/sailing-dash/local-ha/config/*.db*
 ha/sailing-dash/local-ha/config/*.log*
 ha/sailing-dash/local-ha/config/.HA_VERSION

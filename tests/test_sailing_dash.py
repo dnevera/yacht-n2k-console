@@ -2,6 +2,7 @@
 
 import os
 import sys
+import json
 import yaml
 import time
 import socket
@@ -216,13 +217,25 @@ def test_stage_provisioner_passwordless_auth(tmp_path):
     assert len(provider_raw2["data"]["users"]) == len(provider_raw["data"]["users"])
 
 
-def test_stage_provisioner_card_bundle_resolution(tmp_path):
+def test_stage_provisioner_card_bundle_resolution(tmp_path, monkeypatch):
     """Test full provisioning including card bundle deployment."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
 
     # Run build to ensure build/cards exists
     build.build_cards()
+
+    # HACS install involves a real network download (~50MB) — not something a unit
+    # test suite should depend on; fake it here (still writing the manifest HACS
+    # itself would produce) and verify the real download path separately/explicitly
+    # in test_stage_provisioner_hacs_integration_deploy() with a mocked cache.
+    def _fake_deploy_hacs(self):
+        return self.write_config_file(
+            "custom_components/hacs/manifest.json",
+            json.dumps({"domain": "hacs", "name": "HACS", "version": "2.0.5", "config_flow": True}),
+        )
+
+    monkeypatch.setattr(stage_provisioner.HAProvisioner, "deploy_hacs_integration", _fake_deploy_hacs)
 
     provisioner = HAProvisioner(config_dir=str(config_dir))
     success = provisioner.run_full_provisioning()
@@ -231,3 +244,82 @@ def test_stage_provisioner_card_bundle_resolution(tmp_path):
     status = provisioner.inspect_ha_environment()
     assert status["is_clean_instance"] is False
     assert len(status["missing_cards"]) == 0
+    assert status["nmea2000_integration_installed"] is True
+    assert status["nmea2000_configured"] is True
+
+
+def test_stage_provisioner_hacs_integration_deploy(tmp_path, monkeypatch):
+    """Test that deploy_hacs_integration() installs the real HACS integration
+    (domain 'hacs') into /config/custom_components/hacs/, using a mocked/fake
+    cached release so the test never depends on network access."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    fake_hacs_dir = tmp_path / "fake_hacs_cache"
+    fake_hacs_dir.mkdir()
+    (fake_hacs_dir / "manifest.json").write_text(
+        json.dumps({"domain": "hacs", "name": "HACS", "version": "2.0.5", "config_flow": True})
+    )
+    (fake_hacs_dir / "__init__.py").write_text("# fake hacs __init__")
+
+    monkeypatch.setattr(stage_provisioner, "HACS_CACHE_EXTRACTED_DIR", str(fake_hacs_dir))
+    monkeypatch.setattr(stage_provisioner.HAProvisioner, "download_hacs_release", lambda self: True)
+
+    provisioner = HAProvisioner(config_dir=str(config_dir))
+    assert provisioner.deploy_hacs_integration() is True
+
+    manifest_raw = provisioner.read_config_file("custom_components/hacs/manifest.json")
+    assert manifest_raw is not None
+    manifest = json.loads(manifest_raw)
+    assert manifest["domain"] == "hacs"
+
+    status = provisioner.inspect_ha_environment()
+    assert status["hacs_installed"] is True
+
+
+def test_stage_provisioner_nmea2000_integration_deploy(tmp_path):
+    """Test that deploy_nmea2000_integration() copies the vendored custom_components/nmea2000
+    integration files (domain 'nmea2000') into /config/custom_components/nmea2000/."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    provisioner = HAProvisioner(config_dir=str(config_dir))
+    assert provisioner.deploy_nmea2000_integration() is True
+
+    import json
+    manifest_raw = provisioner.read_config_file("custom_components/nmea2000/manifest.json")
+    assert manifest_raw is not None
+    manifest = json.loads(manifest_raw)
+    assert manifest["domain"] == "nmea2000"
+    assert manifest["config_flow"] is True
+
+    # Core integration files must all be present, not just the manifest.
+    for filename in ["__init__.py", "config_flow.py", "const.py", "hub.py", "sensor.py"]:
+        assert provisioner.read_config_file(f"custom_components/nmea2000/{filename}") is not None
+
+
+def test_stage_provisioner_nmea2000_config_entry(tmp_path):
+    """Test provision_nmea2000_config_entry() registers a TEXT/TCP gateway config entry
+    pointed at the local mock_nmea_emulator.py, and that it's idempotent."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    provisioner = HAProvisioner(config_dir=str(config_dir))
+    assert provisioner.provision_nmea2000_config_entry(host="127.0.0.1", port=4001) is True
+
+    import json
+    entries_raw = json.loads(provisioner.read_config_file(".storage/core.config_entries"))
+    entries = entries_raw["data"]["entries"]
+    nmea_entries = [e for e in entries if e.get("domain") == "nmea2000"]
+    assert len(nmea_entries) == 1
+    entry = nmea_entries[0]
+    assert entry["data"]["gateway_type"] == "text"
+    assert entry["data"]["ip"] == "127.0.0.1"
+    assert entry["data"]["port"] == 4001
+
+    # Re-running must not create a second entry (idempotent).
+    assert provisioner.provision_nmea2000_config_entry(host="127.0.0.1", port=4001) is True
+    entries_raw2 = json.loads(provisioner.read_config_file(".storage/core.config_entries"))
+    nmea_entries2 = [e for e in entries_raw2["data"]["entries"] if e.get("domain") == "nmea2000"]
+    assert len(nmea_entries2) == 1
+    assert nmea_entries2[0]["entry_id"] == entry["entry_id"]

@@ -13,6 +13,9 @@ import json
 import uuid
 import time
 import base64
+import shutil
+import zipfile
+import tempfile
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -27,6 +30,36 @@ CARDS_BUILD_DIR = os.path.join(SCRIPT_DIR, "build", "cards")
 RESOURCES_FILE = os.path.join(SCRIPT_DIR, "build", "lovelace-resources.yaml")
 SRC_RESOURCES_FILE = os.path.join(SCRIPT_DIR, "src", "yaml", "resources", "lovelace-resources.yaml")
 LOCAL_CONFIG_DIR = os.path.join(SCRIPT_DIR, "local-ha", "config")
+
+# The "NMEA 2000" HA custom integration (domain "nmea2000") is normally installed on
+# Prod (bumblebee.local) manually through HACS — it is NOT one of the 3 HACS *frontend
+# card* resources tracked in ALL_REQUIRED_CARDS/requirements-ha.txt, and Stage never had
+# it at all: no HACS, no /config/custom_components/nmea2000, no config entry. Without it
+# there is no source of N2K-derived sensors on Stage, no matter how well the dashboard/
+# cards are provisioned — this vendored copy is mirrored from OUR OWN fork
+# github.com/dnevera/ha-nmea2000 (branch bumblebee-custom, based on upstream
+# tomer-w/ha-nmea2000), whose manifest.json already points at our own
+# dnevera/nmea2000 library fork. Copying these files directly (HACS itself is
+# just a downloader/updater) has the identical effect at runtime as installing
+# through HACS on Prod.
+NMEA2000_INTEGRATION_VENDOR_DIR = os.path.join(VENDOR_DIR, "custom_components", "nmea2000")
+NMEA2000_EMULATOR_HOST = "127.0.0.1"  # local-ha uses docker network_mode: host
+NMEA2000_EMULATOR_PORT = 4001         # mock_nmea_emulator.py default port
+
+# HACS (Home Assistant Community Store) itself — Stage used to have NO HACS at all,
+# with the nmea2000 integration/frontend cards above installed by directly copying
+# vendored files instead ("HACS is just a downloader"). Per explicit request, Stage
+# now installs the REAL HACS integration (same official release used on Prod), not a
+# copy-only emulation, so `local-ha` looks/behaves like the real bumblebee.local
+# instance (HACS panel, updates, custom repositories UI). The release .zip is heavy
+# (~50MB, mostly the prebuilt hacs_frontend/ JS bundle) so it is NOT vendored/committed
+# into git like the small card bundles — it is downloaded once from GitHub and cached
+# under .cache/hacs/ (gitignored), exactly like HACS's own real-world install script
+# (https://get.hacs.xz/download) does on Prod.
+HACS_RELEASE_URL = "https://github.com/hacs/integration/releases/latest/download/hacs.zip"
+HACS_CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "hacs")
+HACS_CACHE_ZIP = os.path.join(HACS_CACHE_DIR, "hacs.zip")
+HACS_CACHE_EXTRACTED_DIR = os.path.join(HACS_CACHE_DIR, "custom_components", "hacs")
 
 ALL_REQUIRED_CARDS = [
     "card-mod.js",
@@ -189,6 +222,27 @@ class HAProvisioner:
             log("ERROR", f"Failed docker cp for {src_file}: {e}")
             return False
 
+    def copy_dir_to_ha(self, src_dir: str, dest_rel_dir: str) -> bool:
+        """Recursively copies a local directory (e.g. a custom_component) into
+        /config/<dest_rel_dir>/ inside HA, preserving the directory tree."""
+        if not os.path.isdir(src_dir):
+            log("ERROR", f"Source directory not found: {src_dir}")
+            return False
+
+        all_ok = True
+        for root, _dirs, files in os.walk(src_dir):
+            rel_root = os.path.relpath(root, src_dir)
+            for filename in files:
+                if filename.startswith("."):
+                    continue  # skip our own metadata markers (e.g. .hacs_source.json)
+                src_file = os.path.join(root, filename)
+                dest_rel_path = os.path.join(
+                    dest_rel_dir, filename if rel_root == "." else os.path.join(rel_root, filename)
+                )
+                if not self.copy_card_to_ha(src_file, dest_rel_path):
+                    all_ok = False
+        return all_ok
+
     # ── Inspection ──────────────────────────────────────────────────────────
 
     def inspect_ha_environment(self) -> Dict[str, Any]:
@@ -200,6 +254,9 @@ class HAProvisioner:
             "dashboard_registered": False,
             "resources_registered": False,
             "missing_cards": [],
+            "hacs_installed": False,
+            "nmea2000_integration_installed": False,
+            "nmea2000_configured": False,
             "is_clean_instance": False,
         }
 
@@ -255,8 +312,47 @@ class HAProvisioner:
             if not card_found:
                 status["missing_cards"].append(card_filename)
 
+        # Check HACS itself (domain "hacs") — Stage never had it installed at all before.
+        hacs_manifest_raw = self.read_config_file("custom_components/hacs/manifest.json")
+        if hacs_manifest_raw:
+            try:
+                hacs_manifest = json.loads(hacs_manifest_raw)
+                if hacs_manifest.get("domain") == "hacs":
+                    status["hacs_installed"] = True
+            except json.JSONDecodeError:
+                pass
+
+        # Check NMEA 2000 custom integration (domain "nmea2000") — normally installed via
+        # HACS on Prod, never provisioned on Stage before: without it there is no source
+        # of N2K-derived sensors at all, regardless of dashboard/card provisioning above.
+        manifest_raw = self.read_config_file("custom_components/nmea2000/manifest.json")
+        if manifest_raw:
+            try:
+                manifest = json.loads(manifest_raw)
+                if manifest.get("domain") == "nmea2000":
+                    status["nmea2000_integration_installed"] = True
+            except json.JSONDecodeError:
+                pass
+
+        entries_raw = self.read_config_file(".storage/core.config_entries")
+        if entries_raw:
+            try:
+                data = json.loads(entries_raw)
+                entries = data.get("data", {}).get("entries", [])
+                if any(e.get("domain") == "nmea2000" for e in entries):
+                    status["nmea2000_configured"] = True
+            except json.JSONDecodeError:
+                pass
+
         # Flag clean instance
-        if not status["onboarding_done"] or not status["dashboard_registered"] or status["missing_cards"]:
+        if (
+            not status["onboarding_done"]
+            or not status["dashboard_registered"]
+            or status["missing_cards"]
+            or not status["hacs_installed"]
+            or not status["nmea2000_integration_installed"]
+            or not status["nmea2000_configured"]
+        ):
             status["is_clean_instance"] = True
 
         return status
@@ -516,6 +612,116 @@ class HAProvisioner:
 
         return all_ok
 
+    def download_hacs_release(self) -> bool:
+        """Downloads the official HACS release .zip from GitHub (cached under
+        .cache/hacs/, gitignored) and extracts custom_components/hacs/ from it,
+        mirroring what HACS's own real-world install script does on Prod."""
+        if os.path.isfile(os.path.join(HACS_CACHE_EXTRACTED_DIR, "manifest.json")):
+            return True
+        log("PROVISION", f"Downloading HACS release from {HACS_RELEASE_URL} (cached under .cache/hacs/) ...")
+        os.makedirs(HACS_CACHE_DIR, exist_ok=True)
+        try:
+            req = urllib.request.Request(HACS_RELEASE_URL, headers={"User-Agent": "HA-Stage-Provisioner"})
+            with urllib.request.urlopen(req, timeout=60) as resp, open(HACS_CACHE_ZIP, "wb") as f:
+                shutil.copyfileobj(resp, f)
+            extract_root = os.path.join(HACS_CACHE_DIR, "custom_components", "hacs")
+            os.makedirs(extract_root, exist_ok=True)
+            with zipfile.ZipFile(HACS_CACHE_ZIP) as zf:
+                zf.extractall(extract_root)
+            return os.path.isfile(os.path.join(extract_root, "manifest.json"))
+        except Exception as e:
+            log("ERROR", f"Failed downloading/extracting HACS release: {e}")
+            return False
+
+    def deploy_hacs_integration(self) -> bool:
+        """Installs the REAL HACS integration (domain hacs) into
+        /config/custom_components/hacs/, the same official release used on Prod
+        (not a copy-only emulation of "what HACS would do"). Also registers a
+        stub core.config_entries 'hacs' entry so the panel appears immediately;
+        completing the GitHub device-flow login still requires opening the HA UI
+        once, same as a fresh Prod install."""
+        log("PROVISION", "Installing real HACS integration into /config/custom_components/hacs/ ...")
+        if not self.download_hacs_release():
+            log("WARN", "HACS release unavailable (no network?) — skipping HACS install for this run.")
+            return False
+        return self.copy_dir_to_ha(HACS_CACHE_EXTRACTED_DIR, "custom_components/hacs")
+
+    def deploy_nmea2000_integration(self) -> bool:
+        """Installs the 'NMEA 2000' custom integration (domain nmea2000) into
+        /config/custom_components/nmea2000/. On Prod this is normally installed
+        manually through HACS from OUR OWN fork github.com/dnevera/ha-nmea2000
+        (branch bumblebee-custom); Stage never had it, HACS or not — copying
+        the same vendored files has an identical runtime effect (HACS itself
+        is just a downloader, not a requirement of the integration itself).
+        HA installs the manifest's pip requirement (our patched git fork,
+        same as requirements.txt) automatically on startup when it discovers
+        a config entry for this domain."""
+        log("PROVISION", "Installing NMEA 2000 custom integration into /config/custom_components/nmea2000/ ...")
+        if not os.path.isdir(NMEA2000_INTEGRATION_VENDOR_DIR):
+            log("ERROR", f"Vendored NMEA 2000 integration not found at {NMEA2000_INTEGRATION_VENDOR_DIR}")
+            return False
+        return self.copy_dir_to_ha(NMEA2000_INTEGRATION_VENDOR_DIR, "custom_components/nmea2000")
+
+    def provision_nmea2000_config_entry(
+        self, host: str = NMEA2000_EMULATOR_HOST, port: int = NMEA2000_EMULATOR_PORT
+    ) -> bool:
+        """Registers a 'nmea2000' config entry (TEXT/TCP gateway type) pointed at
+        the local mock_nmea_emulator.py, so the integration actually connects and
+        starts creating N2K sensor entities on startup — without this entry the
+        integration files alone do nothing (config_flow is never auto-triggered)."""
+        log("PROVISION", f"Registering nmea2000 config entry (gateway_type=text, {host}:{port}) ...")
+        entries_raw = self.read_config_file(".storage/core.config_entries")
+        registry = {"version": 1, "minor_version": 1, "key": "core.config_entries", "data": {"entries": []}}
+        if entries_raw:
+            try:
+                registry = json.loads(entries_raw)
+            except json.JSONDecodeError:
+                pass
+
+        entries = registry.setdefault("data", {}).setdefault("entries", [])
+        existing = next((e for e in entries if e.get("domain") == "nmea2000"), None)
+
+        entry_data = {
+            "name": "Stage NMEA 2000 Emulator",
+            "gateway_type": "text",
+            "ip": host,
+            "port": port,
+            "ms_between_updates": 5000,
+            "exclude_AIS": True,
+        }
+
+        if existing is None:
+            entries.append({
+                "created_at": "1970-01-01T00:00:00.000000+00:00",
+                "modified_at": "1970-01-01T00:00:00.000000+00:00",
+                "entry_id": uuid.uuid4().hex,
+                "version": 1,
+                "minor_version": 1,
+                "domain": "nmea2000",
+                "title": entry_data["name"],
+                "data": entry_data,
+                "options": {},
+                "pref_disable_new_entities": False,
+                "pref_disable_polling": False,
+                "source": "user",
+                "unique_id": None,
+                "disabled_by": None,
+                "discovery_keys": {},
+                # Required by this HA core version's config_entries.async_initialize()
+                # (KeyError: 'subentries' on boot without it) — empty dict means "no
+                # subentries", same as what a real config-flow-created entry gets.
+                "subentries": {},
+            })
+        else:
+            existing["data"].update(entry_data)
+            existing["title"] = entry_data["name"]
+            # Backfill "subentries" on entries created by an older version of this
+            # script (before this key was required) — HA core's
+            # config_entries.async_initialize() KeyErrors on boot without it.
+            existing.setdefault("subentries", {})
+
+        return self.write_config_file(".storage/core.config_entries", json.dumps(registry, indent=2))
+
     def run_full_provisioning(self) -> bool:
         """Performs full auto-provisioning of clean HA instance."""
         log("PROVISION", "Starting full HA stage auto-provisioning...")
@@ -524,8 +730,18 @@ class HAProvisioner:
         ok_dash = self.provision_dashboard_registry()
         ok_res = self.provision_resource_registry()
         ok_cards = self.deploy_card_bundles()
+        ok_hacs = self.deploy_hacs_integration()
+        ok_nmea_integration = self.deploy_nmea2000_integration()
+        ok_nmea_entry = self.provision_nmea2000_config_entry()
 
-        success = ok_onboarding and ok_auth and ok_dash and ok_res and ok_cards
+        if not ok_hacs:
+            log("WARN", "HACS install skipped/failed (likely no network access) — continuing without it; "
+                        "the NMEA 2000 integration/cards above are still installed directly regardless of HACS.")
+
+        success = (
+            ok_onboarding and ok_auth and ok_dash and ok_res and ok_cards
+            and ok_nmea_integration and ok_nmea_entry
+        )
         if success:
             log("PROVISION", "Full HA stage provisioning completed successfully!")
         else:
