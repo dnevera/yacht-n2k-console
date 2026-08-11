@@ -1,5 +1,5 @@
 views:
-- type: sections
-  title: Sailing
-  icon: mdi:sail-boat
-  sections:
+  - type: sections
+    title: Sailing
+    icon: mdi:sail-boat
+    sections:
