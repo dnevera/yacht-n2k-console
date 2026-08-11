@@ -102,7 +102,6 @@ const PLOTLY_WIND_CARD_CONFIG = {
   layout: {
     dragmode: 'pan',
     hovermode: 'x unified',
-    hoverdistance: -1,
     xaxis: {
       showspikes: true,
       spikemode: 'across',

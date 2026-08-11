@@ -12,6 +12,19 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-11
 
+- **Added: Universal history series filter module (`src/js/common/plotly_history_series.js`):**
+  - Created a clean, reusable JS snippet with detailed Russian code comments explaining the filtering logic line-by-line.
+  - Filters out non-finite values (`NaN`, `unknown`, `unavailable`) and timestamps past `Date.now()`.
+  - Preserves all measured historical data before/at `Date.now()` for display alongside forecast data, while strictly dropping future points so measurements never bleed into the forecast region in tooltips and charts.
+  - Connected across `04_wind.yaml` and `05_waves.yaml` dashboard section cards.
+  - Added unit tests in `tests/js/wind_chart_snippets.test.js` validating filtering before and after "Now". All JS snippet tests and 32 Python tests passed.
+
+- **Fixed: excluded measured data from unified tooltips after current time ("Now"):**
+  - Created `src/js/common/plotly_drop_future.js` which drops resampled points with timestamps in the future (`> Date.now()`) after `resample: 30m`.
+  - Added `plotly_drop_future` filter step to `sensor.wind_direction_history` and `sensor.boat_wind_speed` in `04_wind.yaml`.
+  - Removed `hoverdistance: -1` from `04_wind.yaml`, `05_waves.yaml`, `plotly-wind.js`, and `plotly-wave.js`. With `hoverdistance: -1`, Plotly searched infinitely along the X-axis for closest points, forcing measured data from "Now" to appear in tooltips when hovering over forecast times.
+  - Added unit test in `tests/js/wind_chart_snippets.test.js` and regression assertion in `tests/test_sailing_dash.py` ensuring `layout.hoverdistance != -1` and `plotly_drop_future` filters out future timestamps. All 32 Python tests and 10 Node JS snippet tests passed.
+
 - **Refactored: extracted all inline JS strings in dashboard YAML sections into standalone JS modules (`src/js/common/`):**
   - Replaced inline multi-line JavaScript strings in `04_wind.yaml` and `05_waves.yaml` with clean `$include:` references.
   - Created 11 new shared JS snippet files in `src/js/common/`: `plotly_wind_gust_bucket.js`, `plotly_forecast_wind_series.js`, `plotly_forecast_wind_store.js`, `plotly_forecast_wind_customdata.js`, `plotly_forecast_gust_series.js`, `plotly_forecast_wave_series.js`, `plotly_forecast_wave_store.js`, `plotly_forecast_wave_customdata.js`, `plotly_forecast_wave_period_series.js`, `plotly_wave_annotations.js`, and `plotly_empty_series.js`.

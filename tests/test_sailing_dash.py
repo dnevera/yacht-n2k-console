@@ -848,6 +848,10 @@ def test_config_yaml_parsing_and_filtering(tmp_path):
         for me in measured_entities:
             assert me.get("extend_to_present") is False, f"Entity {me.get('name', me.get('entity'))} missing extend_to_present: false!"
 
+        # Ensure hoverdistance is not set to -1 in layout (which caused Plotly to match nearest history point across infinite X distance)
+        layout = plotly_card.get("layout", {})
+        assert layout.get("hoverdistance") != -1, "layout.hoverdistance should not be -1"
+
         # Ensure temporary 'id' tags are stripped
         dash_str = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
         assert "id: stw_gauge" not in dash_str

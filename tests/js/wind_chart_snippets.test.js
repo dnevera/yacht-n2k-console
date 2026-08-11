@@ -20,20 +20,17 @@ const D=path.join(__dirname,'..','..','ha','sailing-dash','src','js','common')+p
 // exactly what build.py strips before inlining them into the dashboard.
 const load=(n)=>{const lines=fs.readFileSync(D+n,'utf8').split('\n'); let i=0; while(lines[i].trim().startsWith('//')) i++;
   return eval('('+lines.slice(i).join('\n')+')');};
-const drop=load('plotly_drop_non_finite.js');
+const historySeries=load('plotly_history_series.js');
 const cd=load('plotly_wind_customdata.js');
 const ann=load('plotly_wind_annotations.js');
 global.document={querySelectorAll:()=>[],};
 let ok=true; const t=(name,c)=>{console.log((c?'PASS':'FAIL')+' '+name); if(!c) ok=false;};
 
-// 1. non-finite dropped, alignment kept
-const r=drop({xs:['a','b','c','d'],ys:[1,NaN,'unknown',4].map(v=>parseFloat(v))});
-t('drop keeps only finite',JSON.stringify(r)==JSON.stringify({xs:['a','d'],ys:[1,4]}));
-
+// 1. plotly_history_series: keeps finite points <= Date.now(), drops non-finite and future points
 const pastTime = new Date(Date.now() - 60000).toISOString();
 const futureTime = new Date(Date.now() + 60000).toISOString();
-const rFuture = drop({xs:[pastTime, futureTime], ys:[10, 20]});
-t('drop filters out future timestamps (> Date.now())', JSON.stringify(rFuture) === JSON.stringify({xs:[pastTime], ys:[10]}));
+const rHistory = historySeries({xs:[pastTime, pastTime, pastTime, futureTime], ys:[1, NaN, 'unknown', 10]});
+t('historySeries keeps finite <= Date.now() and drops future/non-finite', JSON.stringify(rHistory) === JSON.stringify({xs:[pastTime], ys:[1]}));
 
 // 2. customdata: dir series shifted/shorter -> matched by time, not index
 const T=(m)=>new Date(Date.UTC(2026,0,1,0,m)).toISOString();

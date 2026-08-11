@@ -56,8 +56,9 @@
       extend_to_present: false
       filters:
       - map_y: parseFloat(y)
-      - fn: '$include:plotly_drop_non_finite'
+      - fn: '$include:plotly_history_series'
       - resample: 30m
+      - fn: '$include:plotly_history_series'
       - store_var: dir
     - entity: sensor.boat_wind_speed
       name: Measured
@@ -65,8 +66,9 @@
       extend_to_present: false
       filters:
       - map_y: parseFloat(y)
-      - fn: '$include:plotly_drop_non_finite'
+      - fn: '$include:plotly_history_series'
       - resample: 30m
+      - fn: '$include:plotly_history_series'
       - store_var: speed
       customdata: '$include:plotly_wind_customdata'
       hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Measured</extra>'
@@ -100,7 +102,7 @@
       extend_to_present: false
       filters:
       - map_y: parseFloat(y)
-      - fn: '$include:plotly_drop_non_finite'
+      - fn: '$include:plotly_history_series'
       - resample: 30m
       - fn: '$include:plotly_empty_series'
       marker:
@@ -141,8 +143,9 @@
       extend_to_present: false
       filters:
       - map_y: parseFloat(y)
-      - fn: '$include:plotly_drop_non_finite'
+      - fn: '$include:plotly_history_series'
       - fn: '$include:plotly_wind_gust_bucket'
+      - fn: '$include:plotly_history_series'
       hovertemplate: '%{y:.1f} kt<extra>Gusts (measured)</extra>'
       line:
         dash: dot
@@ -167,7 +170,6 @@
     layout:
       dragmode: pan
       hovermode: x unified
-      hoverdistance: -1
       xaxis:
         showspikes: true
         spikemode: across
