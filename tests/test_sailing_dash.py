@@ -146,6 +146,85 @@ def test_build_sensors_merges_duplicate_top_level_keys(tmp_path):
     assert "sensor.wind_forecast_rest" in defined
 
 
+SENSORS_SRC_DIR = os.path.join(SAILING_DASH_DIR, "src", "yaml", "sensors")
+
+
+def _template_sensors(fname):
+    with open(os.path.join(SENSORS_SRC_DIR, fname), encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    out = []
+    for block in data.get("template", []):
+        out.extend(block.get("sensor", []))
+    return out
+
+
+def test_derived_sensors_are_unavailable_instead_of_reporting_zero():
+    """A missing N2K source must NOT become a hard 0.
+
+    `{{ states(src) | float(0) }}` without `availability` makes the alias report
+    0 forever while the bus is quiet: the wind chart then draws a flat zero line
+    and open-meteo gets asked about 0N/0E. Every alias reading a raw entity has
+    to declare availability on that same entity.
+    """
+    for sensor in _template_sensors("derived_n2k.yaml"):
+        state = sensor.get("state", "")
+        srcs = re.findall(r"states\('(sensor\.[a-z0-9_]+)'\)", state)
+        raw_srcs = [s for s in srcs if not s.startswith("sensor.boat_")]
+        if not raw_srcs or "float(0)" not in state:
+            continue
+        availability = sensor.get("availability", "")
+        assert availability, f"{sensor['unique_id']} has no availability template"
+        for src in raw_srcs:
+            assert src in availability, (
+                f"{sensor['unique_id']} defaults to 0 when {src} is missing"
+            )
+
+
+def test_cog_and_sog_do_not_read_the_cog_reference_enum():
+    """PGN 129026 exposes `_cog_reference` (True/Magnetic enum) next to `_cog`.
+
+    A loose entity match used to pick the enum for BOTH Boat COG and Boat SOG.
+    """
+    by_id = {s["unique_id"]: s for s in _template_sensors("derived_n2k.yaml")}
+    assert "_cog_reference" not in by_id["boat_cog"]["state"]
+    assert by_id["boat_cog"]["state"].count("_cog'") == 1
+    assert "_sog'" in by_id["boat_sog"]["state"]
+    assert "_cog" not in by_id["boat_sog"]["state"]
+
+
+def test_map_nmea_sensors_matches_cog_and_sog_exactly():
+    """The generator itself must not fall for the `_cog_reference` entity."""
+    import map_nmea_sensors
+
+    entities = [
+        "sensor.cog_sog_rapid_update_x_cog_reference",
+        "sensor.cog_sog_rapid_update_x_cog",
+        "sensor.cog_sog_rapid_update_x_sog",
+    ]
+    discovered = map_nmea_sensors.match_entities(entities)
+    assert discovered["cog"] == "sensor.cog_sog_rapid_update_x_cog"
+    assert discovered["sog"] == "sensor.cog_sog_rapid_update_x_sog"
+
+
+def test_open_meteo_falls_back_to_the_home_port_without_a_gps_fix():
+    """`| float(42.43)` never fires for a 0.0 position, hence the explicit check.
+
+    Without it the forecast is fetched for 0N/0E (Gulf of Guinea) whenever the
+    boat's position aliases hold zero, and the wind chart shows a plausible but
+    completely unrelated forecast.
+    """
+    with open(os.path.join(SENSORS_SRC_DIR, "open_meteo.yaml"), encoding="utf-8") as f:
+        rest_blocks = (yaml.safe_load(f) or {}).get("rest", [])
+    assert rest_blocks
+    for block in rest_blocks:
+        template = block["resource_template"]
+        assert "float(42.43)" not in template
+        assert "42.43" in template and "18.60" in template
+        assert "abs < 0.01" in template
+        # The rendered value must stay a single-line URL.
+        assert "latitude={{ lat }}" in template
+
+
 HA_TARGET_LIB = os.path.join(HELPERS_DIR, "lib", "ha_target.sh")
 
 

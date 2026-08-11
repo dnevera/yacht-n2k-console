@@ -1,7 +1,21 @@
 # Open-Meteo REST platform sensors for wind and wave forecast
+#
+# POSITION FALLBACK — do not simplify this away. Both URLs are templated on the
+# boat's own live GPS (sensor.boat_latitude_raw / boat_longitude_raw, derived
+# from PGN 129025/129029) so the forecast follows the boat. Those aliases are
+# template sensors, i.e. they can hold a literal 0.0 while the bus is quiet;
+# `| float(42.43)` never fires for a value that IS a number, so a naive URL
+# ends up asking open-meteo about 0°N/0°E — the Gulf of Guinea — and the wind
+# chart then draws a plausible-looking but completely wrong forecast. Hence the
+# explicit "no fix yet" check against the Kotor default below.
 rest:
   - resource_template: >-
-      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.boat_latitude_raw') | float(42.43) }}&longitude={{ states('sensor.boat_longitude_raw') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+      {%- set lat = states('sensor.boat_latitude_raw') | float(0) -%}
+      {%- set lon = states('sensor.boat_longitude_raw') | float(0) -%}
+      {%- if lat | abs < 0.01 and lon | abs < 0.01 -%}
+      {%- set lat = 42.43 -%}{%- set lon = 18.60 -%}
+      {%- endif -%}
+      https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wind Forecast REST'
@@ -13,7 +27,12 @@ rest:
           - hourly
 
   - resource_template: >-
-      https://marine-api.open-meteo.com/v1/marine?latitude={{ states('sensor.boat_latitude_raw') | float(42.43) }}&longitude={{ states('sensor.boat_longitude_raw') | float(18.60) }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+      {%- set lat = states('sensor.boat_latitude_raw') | float(0) -%}
+      {%- set lon = states('sensor.boat_longitude_raw') | float(0) -%}
+      {%- if lat | abs < 0.01 and lon | abs < 0.01 -%}
+      {%- set lat = 42.43 -%}{%- set lon = 18.60 -%}
+      {%- endif -%}
+      https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wave Forecast REST'

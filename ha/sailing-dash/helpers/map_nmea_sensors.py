@@ -94,14 +94,25 @@ def match_entities(entity_list):
     wind_angle = find_match(["wind_angle"])
     if wind_angle: discovered["wind_angle"] = wind_angle
 
-    cog = find_match(["_cog", "cog_sog_rapid_update"])
-    if cog:
-        # If cog_sog_rapid_update matched, verify it's cog
-        if "sog" in cog and "cog" not in cog:
-            cog = find_match(["_cog"])
-        discovered["cog"] = cog
+    # PGN 129026 publishes both `..._cog` (degrees) and `..._cog_reference`
+    # (True/Magnetic enum). A loose match picked the *_reference enum, so Boat
+    # COG showed the reference instead of the course — require an exact suffix.
+    cog = None
+    for eid in entity_list:
+        if isinstance(eid, str) and eid.endswith("_cog"):
+            cog = eid
+            break
+    if cog: discovered["cog"] = cog
 
-    sog = find_match(["_sog"])
+    # "_sog" is a substring of "cog_sog_rapid_update_..._cog_reference", so a
+    # loose match happily returned the COG entity as SOG (Boat SOG then showed
+    # the course, not the speed). Require the entity to really end in the SOG
+    # field name.
+    sog = None
+    for eid in entity_list:
+        if isinstance(eid, str) and eid.endswith("_sog"):
+            sog = eid
+            break
     if sog: discovered["sog"] = sog
 
     lat = find_match(["_latitude"])
@@ -134,19 +145,26 @@ template:
         unique_id: boat_stw
         unit_of_measurement: 'kn'
         device_class: speed
+        availability: "{{{{ states('{stw_entity}') | is_number }}}}"
         state: >
           {{{{ states('{stw_entity}') | float(0) | round(1) }}}}
 
       - name: Boat Depth
         unique_id: boat_depth
         unit_of_measurement: 'm'
+        availability: "{{{{ states('{depth_entity}') | is_number }}}}"
         state: >
           {{{{ states('{depth_entity}') | float(0) | round(1) }}}}
 
+      # `availability` matters for every alias below: without it the `| float(0)`
+      # default turns "no data on the bus" into a hard 0, and the charts then draw
+      # a flat line of zeroes (and, for the position aliases, make open-meteo
+      # forecast 0°N/0°E) instead of simply having a gap.
       - name: Boat Wind Speed
         unique_id: boat_wind_speed
         unit_of_measurement: 'kn'
         device_class: wind_speed
+        availability: "{{{{ states('{wind_speed_entity}') | is_number }}}}"
         state: >
           {{{{ states('{wind_speed_entity}') | float(0) | round(1) }}}}
 
@@ -154,6 +172,7 @@ template:
         unique_id: boat_wind_angle
         unit_of_measurement: '°'
         icon: mdi:compass-rose
+        availability: "{{{{ states('{wind_angle_entity}') | is_number }}}}"
         state: >
           {{{{ states('{wind_angle_entity}') | float(0) | round(0) }}}}
 
@@ -161,6 +180,7 @@ template:
         unique_id: boat_cog
         unit_of_measurement: '°'
         icon: mdi:compass-rose
+        availability: "{{{{ states('{cog_entity}') | is_number }}}}"
         state: >
           {{{{ states('{cog_entity}') | float(0) | round(0) }}}}
 
@@ -168,30 +188,38 @@ template:
         unique_id: boat_sog
         unit_of_measurement: 'kn'
         device_class: speed
+        availability: "{{{{ states('{sog_entity}') | is_number }}}}"
         state: >
           {{{{ states('{sog_entity}') | float(0) | round(1) }}}}
 
       - name: Boat Latitude Raw
         unique_id: boat_latitude_raw
+        availability: "{{{{ states('{lat_entity}') | is_number }}}}"
         state: >
           {{{{ states('{lat_entity}') | float(0) }}}}
 
       - name: Boat Longitude Raw
         unique_id: boat_longitude_raw
+        availability: "{{{{ states('{lon_entity}') | is_number }}}}"
         state: >
           {{{{ states('{lon_entity}') | float(0) }}}}
 
       - name: Boat Pressure Raw
         unique_id: boat_pressure_raw
+        availability: "{{{{ states('{pressure_entity}') | is_number }}}}"
         state: >
           {{{{ states('{pressure_entity}') | float(0) }}}}
 
+      # Plain recorder history for the wind vector chart. Reads the raw entity
+      # directly (as the working version did) so it does not inherit an extra
+      # template hop, and it goes unavailable instead of reporting 0° = North.
       - name: Wind Direction History
         unique_id: wind_direction_history
         unit_of_measurement: '°'
         icon: mdi:compass-rose
+        availability: "{{{{ states('{wind_angle_entity}') | is_number }}}}"
         state: >
-          {{{{ states('sensor.boat_wind_angle') | float(0) | round(0) }}}}
+          {{{{ states('{wind_angle_entity}') | float(0) | round(0) }}}}
 
       - name: Barometer mmHg
         unique_id: barometer_mmhg
