@@ -119,3 +119,53 @@ template:
 
       '
     icon: mdi:sail-boat
+- sensor:
+  - name: Chart Time Window
+    unique_id: chart_time_window
+    icon: mdi:chart-timeline-variant
+    attributes:
+      history_hours: '{{ 4 }}'
+      forecast_hours: '{{ 72 }}'
+    state: '{{ state_attr(''sensor.chart_time_window'', ''history_hours'') }}h back / {{ state_attr(''sensor.chart_time_window'', ''forecast_hours'') }}h ahead
+
+      '
+  - name: Wind Forecast Flat
+    unique_id: wind_forecast_flat
+    unit_of_measurement: kts
+    icon: mdi:weather-windy
+    state: '{{ states(''sensor.wind_forecast_rest'') }}'
+    attributes:
+      forecast_time: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''time''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+      forecast_wind: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''windspeed_10m''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+      forecast_gust: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''windgusts_10m''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+      forecast_dir: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''winddirection_10m''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+  - name: Wind Forecast Next Hour
+    unique_id: wind_forecast_next_hour
+    unit_of_measurement: kts
+    icon: mdi:weather-windy
+    state: "{% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_wind') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wind Gust Next Hour
+    unique_id: wind_gust_next_hour
+    unit_of_measurement: kts
+    icon: mdi:weather-windy-variant
+    state: "{% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_gust') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wave Forecast Flat
+    unique_id: wave_forecast_flat
+    unit_of_measurement: m
+    icon: mdi:waves
+    state: '{{ states(''sensor.wave_forecast_rest'') }}'
+    attributes:
+      forecast_time: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''time''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_height: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_height''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_direction: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_direction''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_period: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_period''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+  - name: Wave Height Next Hour
+    unique_id: wave_height_next_hour
+    unit_of_measurement: m
+    icon: mdi:waves
+    state: "{% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_height') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wave Period Next Hour
+    unique_id: wave_period_next_hour
+    unit_of_measurement: s
+    icon: mdi:waves-arrow-up
+    state: "{% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_period') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"

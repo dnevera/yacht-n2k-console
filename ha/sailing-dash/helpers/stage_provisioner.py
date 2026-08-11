@@ -13,6 +13,7 @@ import io
 import json
 import uuid
 import time
+import hashlib
 import base64
 import shutil
 import zipfile
@@ -99,6 +100,14 @@ class HAProvisioner:
         if (not self.config_dir and self.transport == "local-docker"
                 and os.path.isdir(LOCAL_CONFIG_DIR)):
             self.config_dir = LOCAL_CONFIG_DIR
+
+        # Delivery is content-addressed: a card bundle or integration file whose
+        # sha256 already matches the target is not copied again (deploy.sh --force
+        # / HA_FORCE_DELIVERY=1 overrides). Counters are informational only.
+        self.force_delivery = os.environ.get("HA_FORCE_DELIVERY", "0") == "1"
+        self.delivered_count = 0
+        self.skipped_count = 0
+        self.last_copy_skipped = False
 
     # ── Container / File Operations ──────────────────────────────────────────
 
@@ -206,10 +215,56 @@ class HAProvisioner:
             log("ERROR", f"Failed writing to container file {container_path}: {e}")
             return False
 
+    def _target_file_sha256(self, dest_rel_path: str) -> Optional[str]:
+        """sha256 of the file as it currently exists on the target, or None."""
+        if self.config_dir:
+            full_path = os.path.join(self.config_dir, dest_rel_path.lstrip("/"))
+            if not os.path.isfile(full_path):
+                return None
+            try:
+                with open(full_path, "rb") as f:
+                    return hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                return None
+
+        container_path = os.path.join("/config", dest_rel_path.lstrip("/"))
+        if self.transport == "ssh-docker" and self.ssh_host:
+            cmd = ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", self.ssh_host,
+                   f"sudo docker exec {self.container_name} cat {container_path}"]
+            timeout = 60
+        else:
+            cmd = ["docker", "exec", self.container_name, "cat", container_path]
+            timeout = 20
+        try:
+            res = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        except Exception:
+            return None
+        if res.returncode != 0 or not res.stdout:
+            return None
+        return hashlib.sha256(res.stdout).hexdigest()
+
     def copy_card_to_ha(self, src_file: str, dest_rel_path: str) -> bool:
-        """Copies a local JS card file to /config/www/... inside HA."""
+        """Copies a local JS card file to /config/www/... inside HA.
+
+        Skips the copy when the target already holds byte-identical content: a
+        provisioning run used to re-push every card bundle and every file of the
+        two custom integrations on every deploy.
+        """
         if not os.path.isfile(src_file):
             return False
+
+        self.last_copy_skipped = False
+        if not self.force_delivery:
+            try:
+                with open(src_file, "rb") as f:
+                    local_hash = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                local_hash = None
+            if local_hash and local_hash == self._target_file_sha256(dest_rel_path):
+                self.skipped_count += 1
+                self.last_copy_skipped = True
+                return True
+        self.delivered_count += 1
 
         if self.config_dir:
             dest_full = os.path.join(self.config_dir, dest_rel_path.lstrip("/"))
@@ -266,6 +321,7 @@ class HAProvisioner:
             return False
 
         all_ok = True
+        copied = skipped = 0
         for root, _dirs, files in os.walk(src_dir):
             rel_root = os.path.relpath(root, src_dir)
             for filename in files:
@@ -277,6 +333,11 @@ class HAProvisioner:
                 )
                 if not self.copy_card_to_ha(src_file, dest_rel_path):
                     all_ok = False
+                elif self.last_copy_skipped:
+                    skipped += 1
+                else:
+                    copied += 1
+        log("INFO", f"{dest_rel_dir}: {copied} file(s) delivered, {skipped} unchanged")
         return all_ok
 
     # ── Inspection ──────────────────────────────────────────────────────────
@@ -684,7 +745,9 @@ class HAProvisioner:
 
             # Deploy to /config/www/<filename>
             ok = self.copy_card_to_ha(src_path, f"www/{card_filename}")
-            if ok:
+            if ok and self.last_copy_skipped:
+                log("INFO", f"{card_filename} unchanged in /config/www/ — skipped")
+            elif ok:
                 log("INFO", f"Deployed {card_filename} -> /config/www/{card_filename}")
             else:
                 log("ERROR", f"Failed deploying {card_filename}")

@@ -1,6 +1,7 @@
 """Unit tests for ha/sailing-dash build system, NMEA emulator, and stage environment tools."""
 
 import os
+import re
 import sys
 import json
 import yaml
@@ -84,6 +85,174 @@ def test_build_pipeline_execution(tmp_path):
         assert dashboard_path.exists()
 
 
+def _collect_unique_ids(sensors_yaml):
+    """Collect 'sensor.<unique_id>'-style entity ids from a compiled sensors artifact."""
+    entities = set()
+    for entries in sensors_yaml.values():
+        if not isinstance(entries, list):
+            entries = [entries]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for domain, items in entry.items():
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if isinstance(item, dict) and "unique_id" in item:
+                        entities.add(f"{domain}.{item['unique_id']}")
+    return entities
+
+
+def test_build_dashboard_entities_are_all_defined(tmp_path):
+    """Every sensor the dashboard references must exist in the compiled sensors.
+
+    Guards the regression where splitting the monolithic sensors-sailing.yaml
+    into src/yaml/sensors/ modules dropped the forecast template sensors
+    (chart_time_window, wind/wave *_flat and *_next_hour), leaving the
+    dashboard pointing at entities that were never defined.
+    """
+    with patch.object(build, "BUILD_DIR", str(tmp_path)):
+        build.ensure_dirs()
+        build.build_sensors()
+        build.build_dashboard()
+
+        sensors_yaml = yaml.safe_load((tmp_path / "sensors-sailing.yaml").read_text(encoding="utf-8"))
+        defined = _collect_unique_ids(sensors_yaml)
+
+        dashboard_text = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
+        referenced = set(re.findall(r"\bsensor\.[a-z0-9_]+", dashboard_text))
+
+    # Raw NMEA 2000 entities (…_pk_<hash>_…) come from the integration itself,
+    # not from our template sensors, so they are not expected to be defined here.
+    referenced = {e for e in referenced if "_pk_" not in e}
+
+    assert referenced, "dashboard references no sensors — the build produced nothing"
+    assert not (referenced - defined), (
+        f"dashboard references undefined sensors: {sorted(referenced - defined)}"
+    )
+
+
+def test_build_sensors_merges_duplicate_top_level_keys(tmp_path):
+    """Sensor modules sharing a top-level key must be merged, not overwrite each other."""
+    with patch.object(build, "BUILD_DIR", str(tmp_path)):
+        build.ensure_dirs()
+        build.build_sensors()
+        sensors_yaml = yaml.safe_load((tmp_path / "sensors-sailing.yaml").read_text(encoding="utf-8"))
+
+    defined = _collect_unique_ids(sensors_yaml)
+    # derived_n2k.yaml and forecast.yaml both declare `template:`
+    assert "sensor.boat_depth" in defined
+    assert "sensor.chart_time_window" in defined
+    assert "sensor.wind_forecast_rest" in defined
+
+
+HA_TARGET_LIB = os.path.join(HELPERS_DIR, "lib", "ha_target.sh")
+
+
+def _run_ha_target_snippet(tmp_path, snippet):
+    """Run a bash snippet against lib/ha_target.sh with the container faked out.
+
+    ha_cat / ha_cp_to_container / ha_cp_dir_to_container are replaced by plain
+    filesystem operations under FAKE_ROOT, so the delivery logic (what gets
+    copied and what is skipped) is testable without Docker or SSH.
+    """
+    import subprocess
+    import textwrap
+
+    script = tmp_path / "case.sh"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            set -euo pipefail
+            source "{HA_TARGET_LIB}"
+            HA_CONTAINER=fake
+            FAKE_ROOT="{tmp_path}/container"
+            mkdir -p "${{FAKE_ROOT}}"
+
+            ha_cat() {{ cat "${{FAKE_ROOT}}$1"; }}
+            ha_mkdir() {{ mkdir -p "${{FAKE_ROOT}}$1"; }}
+            ha_cp_to_container() {{ mkdir -p "$(dirname "${{FAKE_ROOT}}$2")"; cp "$1" "${{FAKE_ROOT}}$2"; }}
+            ha_cp_dir_to_container() {{ mkdir -p "${{FAKE_ROOT}}$2"; cp -R "${{1%/}}/." "${{FAKE_ROOT}}$2"; }}
+            """
+        )
+        + textwrap.dedent(snippet),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, cwd=str(tmp_path)
+    )
+    assert proc.returncode == 0, f"snippet failed:\n{proc.stdout}\n{proc.stderr}"
+    return proc.stdout
+
+
+def test_ha_target_file_delivery_skips_identical_content(tmp_path):
+    """A file whose content already matches the container's must not be copied."""
+    local = tmp_path / "card.js"
+    local.write_text("console.log('v1');\n", encoding="utf-8")
+
+    out = _run_ha_target_snippet(
+        tmp_path,
+        """
+        ha_cp_to_container_if_changed "%s" "/config/www/card.js" && echo "FIRST=copied"
+        ha_cp_to_container_if_changed "%s" "/config/www/card.js" || echo "SECOND=skipped"
+        echo "DELIVERED=${HA_DELIVERED} SKIPPED=${HA_SKIPPED}"
+        """
+        % (local, local),
+    )
+
+    assert "FIRST=copied" in out
+    assert "SECOND=skipped" in out
+    assert "DELIVERED=1 SKIPPED=1" in out
+
+
+def test_ha_target_file_delivery_detects_changed_content(tmp_path):
+    """Changed local content (and --force) must still trigger a copy."""
+    local = tmp_path / "card.js"
+    local.write_text("console.log('v1');\n", encoding="utf-8")
+    other = tmp_path / "card_v2.js"
+    other.write_text("console.log('v2');\n", encoding="utf-8")
+
+    out = _run_ha_target_snippet(
+        tmp_path,
+        """
+        ha_cp_to_container_if_changed "%s" "/config/www/card.js" >/dev/null
+        ha_cp_to_container_if_changed "%s" "/config/www/card.js" && echo "CHANGED=copied"
+        HA_FORCE_DELIVERY=1 ha_cp_to_container_if_changed "%s" "/config/www/card.js" && echo "FORCED=copied"
+        """
+        % (local, other, other),
+    )
+
+    assert "CHANGED=copied" in out
+    assert "FORCED=copied" in out
+
+
+def test_ha_target_dir_delivery_skips_unchanged_tree(tmp_path):
+    """A directory is re-delivered only when its tree manifest changed."""
+    src = tmp_path / "integration"
+    src.mkdir()
+    (src / "manifest.json").write_text('{"domain": "nmea2000"}\n', encoding="utf-8")
+    (src / "sensor.py").write_text("X = 1\n", encoding="utf-8")
+
+    out = _run_ha_target_snippet(
+        tmp_path,
+        """
+        ha_state_load
+        ha_cp_dir_to_container_if_changed "%s" "/config/custom_components/nmea2000" && echo "FIRST=copied"
+        ha_state_flush
+        HA_STATE_FILE="" HA_STATE_DIRTY=0
+        ha_state_load
+        ha_cp_dir_to_container_if_changed "%s" "/config/custom_components/nmea2000" || echo "SECOND=skipped"
+        """
+        % (src, src),
+    )
+
+    assert "FIRST=copied" in out
+    assert "SECOND=skipped" in out
+    # The state survived a "new deploy run" because it lives in the container.
+    assert (tmp_path / "container" / "config" / ".storage" / "sailing_deploy_state").exists()
+    assert (tmp_path / "container" / "config" / "custom_components" / "nmea2000" / "manifest.json").exists()
+
+
 def test_mock_nmea_emulator_fmt_nmea_line():
     """Test that fmt_nmea_line constructs valid NMEA ASCII lines."""
     can_id = "09F50340"
@@ -136,6 +305,29 @@ def test_start_stage_get_src_mtime():
     mtime = start_stage.get_src_mtime()
     assert isinstance(mtime, float)
     assert mtime > 0
+
+
+def test_stage_provisioner_copy_card_skips_identical_content(tmp_path):
+    """copy_card_to_ha must not re-copy a file the target already holds."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    src = tmp_path / "windy-boat-card.js"
+    src.write_text("console.log('v1');\n", encoding="utf-8")
+
+    provisioner = HAProvisioner(config_dir=str(config_dir))
+
+    assert provisioner.copy_card_to_ha(str(src), "www/windy-boat-card.js") is True
+    assert provisioner.last_copy_skipped is False
+
+    assert provisioner.copy_card_to_ha(str(src), "www/windy-boat-card.js") is True
+    assert provisioner.last_copy_skipped is True
+    assert provisioner.delivered_count == 1
+    assert provisioner.skipped_count == 1
+
+    src.write_text("console.log('v2');\n", encoding="utf-8")
+    assert provisioner.copy_card_to_ha(str(src), "www/windy-boat-card.js") is True
+    assert provisioner.last_copy_skipped is False
+    assert (config_dir / "www" / "windy-boat-card.js").read_text() == "console.log('v2');\n"
 
 
 def test_stage_provisioner_inspect_empty_ha(tmp_path):

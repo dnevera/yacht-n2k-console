@@ -20,6 +20,11 @@
 #   ./deploy.sh [--stage|--prod] --dashboard-only
 #   ./deploy.sh [--stage|--prod] --sensors-only
 #
+#   Delivery is idempotent: a file is uploaded only when its sha256 differs from
+#   what the container already has, a whole directory only when its tree manifest
+#   changed, and Home Assistant is restarted only when something was actually
+#   delivered. Use --force to re-upload everything regardless.
+#
 #   Prod bring-up:
 #   ./deploy.sh --prod --bootstrap    # push cards + integration from build/deps/
 #   ./deploy.sh --prod --preflight    # only check whether the target is ready
@@ -56,6 +61,8 @@ TARGET_ENV="stage"
 MODE="update"
 HOST_ARG=""
 SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-0}"
+# Re-upload everything even when the target already holds identical content.
+HA_FORCE_DELIVERY="${HA_FORCE_DELIVERY:-0}"
 BACKUP_KEEP=5
 
 while [[ $# -gt 0 ]]; do
@@ -74,6 +81,7 @@ while [[ $# -gt 0 ]]; do
         --preflight)      MODE="preflight" ;;
         --rollback)       MODE="rollback" ;;
         --skip-preflight) SKIP_PREFLIGHT=1 ;;
+        --force|--force-delivery) HA_FORCE_DELIVERY=1 ;;
         -h|--help)
             sed -n '2,/^set -euo pipefail/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
             exit 0
@@ -111,6 +119,8 @@ python3 "${HELPERS_DIR}/fetch_deps.py"
 
 # build.py has run once for this pipeline; the sub-scripts must not repeat it.
 export SAILING_BUILD_DONE=1
+# --force must reach deploy_sensors.sh / deploy_dashboard.sh too.
+export HA_FORCE_DELIVERY
 
 if [[ "${IS_STAGE}" == "1" && "${MODE}" != "preflight" && "${MODE}" != "rollback" ]]; then
     echo "== Checking Stage Home Assistant auto-provisioning =="
@@ -134,6 +144,8 @@ deploy_resources() {
     REMOTE_RES="${TMP_DIR}/lovelace_resources.json"
     MERGED_RES="${TMP_DIR}/lovelace_resources.merged.json"
     BACKUP_NAME="lovelace_resources.$(date +%Y%m%d%H%M%S).bak"
+
+    local delivered_before="${HA_DELIVERED}"
 
     echo "Fetching current .storage/lovelace_resources ..."
     if ! ha_cat "/config/.storage/lovelace_resources" > "${REMOTE_RES}"; then
@@ -176,14 +188,22 @@ deploy_resources() {
             echo "WARN: ${filename} not found in ${CARDS_DIR} nor ${DEPS_CARDS_DIR} — run 'python3 helpers/fetch_deps.py'; skipping upload (resource may fail to load)." >&2
             continue
         fi
-        echo "Uploading ${filename} -> ${HA_CONTAINER}:/config/www/${filename} ..."
-        ha_cp_to_container "${LOCAL_JS}" "/config/www/${filename}"
+        # Card bundles are the bulk of a deploy and change only when deps.yaml
+        # moves, so they are content-compared instead of re-uploaded blindly.
+        ha_cp_to_container_if_changed "${LOCAL_JS}" "/config/www/${filename}" "${filename}" || true
     done
 
-    echo "Uploading merged lovelace_resources ..."
-    ha_cp_to_container "${MERGED_RES}" "/config/.storage/lovelace_resources"
+    ha_cp_to_container_if_changed "${MERGED_RES}" "/config/.storage/lovelace_resources" "lovelace_resources" || true
+
+    if [[ "${HA_DELIVERED}" == "${delivered_before}" ]]; then
+        echo "Resources already up to date (${HA_SKIPPED} file(s) unchanged) — nothing uploaded, no restart."
+        return 0
+    fi
 
     echo "Resources deployed."
+    if [[ -n "${SAILING_CHANGE_FLAG:-}" ]]; then
+        echo "resources" >> "${SAILING_CHANGE_FLAG}"
+    fi
     if [[ "${SKIP_RESTART:-0}" != "1" ]]; then
         ha_restart
     fi
@@ -269,10 +289,13 @@ bootstrap_target() {
 
     # HACS files are delivered for EVERY profile, not just stage: keeping Prod on a
     # "install it by hand with wget" path is exactly how the two environments drift.
+    local delivered_before="${HA_DELIVERED}"
+    ha_state_load
+
     local hacs_dir="${SCRIPT_DIR}/build/deps/hacs/custom_components/hacs"
     if [[ -d "${hacs_dir}" ]]; then
-        echo "Delivering HACS (pinned release) -> /config/custom_components/hacs ..."
-        ha_cp_dir_to_container "${hacs_dir}" "/config/custom_components/hacs"
+        ha_cp_dir_to_container_if_changed "${hacs_dir}" "/config/custom_components/hacs" \
+            "HACS (pinned release)" || true
     else
         echo "ERROR: ${hacs_dir} is missing — run 'python3 helpers/fetch_deps.py' first." >&2
         exit 1
@@ -280,8 +303,8 @@ bootstrap_target() {
 
     local integration_dir="${SCRIPT_DIR}/build/deps/nmea2000/custom_components/nmea2000"
     if [[ -d "${integration_dir}" ]]; then
-        echo "Delivering the NMEA 2000 integration (pinned tag) -> /config/custom_components/nmea2000 ..."
-        ha_cp_dir_to_container "${integration_dir}" "/config/custom_components/nmea2000"
+        ha_cp_dir_to_container_if_changed "${integration_dir}" "/config/custom_components/nmea2000" \
+            "NMEA 2000 integration (pinned tag)" || true
     else
         echo "ERROR: ${integration_dir} is missing — run 'python3 helpers/fetch_deps.py' first." >&2
         exit 1
@@ -291,11 +314,16 @@ bootstrap_target() {
     local card
     for card in "${DEPS_CARDS_DIR}"/*.js "${CARDS_DIR}"/*.js; do
         [[ -f "${card}" ]] || continue
-        echo "Delivering $(basename "${card}") -> /config/www/"
-        ha_cp_to_container "${card}" "/config/www/$(basename "${card}")"
+        ha_cp_to_container_if_changed "${card}" "/config/www/$(basename "${card}")" || true
     done
 
-    ha_restart
+    ha_state_flush
+
+    if [[ "${HA_DELIVERED}" == "${delivered_before}" ]]; then
+        echo "Bootstrap: everything already in place (${HA_SKIPPED} artifact(s) unchanged) — no restart."
+    else
+        ha_restart
+    fi
     echo "Bootstrap done. HACS files, the pinned integration and the card bundles are in"
     echo "place. What is left CANNOT be automated — do it in the Home Assistant UI:"
     echo "  1. Settings -> Devices & services -> Add integration -> HACS,"
@@ -362,7 +390,13 @@ case "${MODE}" in
         if [[ "${IS_STAGE}" != "1" && "${SKIP_PREFLIGHT}" != "1" ]]; then
             preflight || exit 1
         fi
-        deploy_resources
+        # Shared "something really changed" marker: the sensors step runs with
+        # SKIP_RESTART=1, so the dashboard step is the one that decides whether
+        # the pipeline needs a restart at all.
+        SAILING_CHANGE_FLAG="$(mktemp -t sailing_deploy_changed)"
+        export SAILING_CHANGE_FLAG
+        trap 'rm -f "${SAILING_CHANGE_FLAG}"' EXIT
+        SKIP_RESTART=1 deploy_resources
         SKIP_RESTART=1 "${HELPERS_DIR}/deploy_sensors.sh" "${SUB_ENV_FLAGS[@]}"
         "${HELPERS_DIR}/deploy_dashboard.sh" "${SUB_ENV_FLAGS[@]}"
         ;;

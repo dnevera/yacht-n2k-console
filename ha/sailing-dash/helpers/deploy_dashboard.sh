@@ -163,12 +163,31 @@ if [[ "${DIFF_STATUS:-0}" == "1" && "${REQUIRE_CLEAN_DIFF:-0}" == "1" ]]; then
     exit 1
 fi
 
-# ── 3. Upload new config ─────────────────────────────────────────────────────
-echo "Uploading new dashboard config ..."
-ha_cp_to_container "${TMP_JSON}" "${REMOTE_PATH}"
+# ── 3. Upload new config (only when it differs from what is live) ────────────
+# The diff above already compared the live Lovelace config with the freshly
+# built one semantically (YAML, not byte-for-byte JSON), so an unchanged
+# dashboard needs neither an upload nor a restart.
+UPLOADED=0
+if [[ "${DIFF_STATUS:-0}" == "0" && "${HAS_LIVE}" == "1" && "${HA_FORCE_DELIVERY:-0}" != "1" ]]; then
+    echo "= dashboard config unchanged — nothing uploaded."
+else
+    echo "Uploading new dashboard config ..."
+    ha_cp_to_container "${TMP_JSON}" "${REMOTE_PATH}"
+    UPLOADED=1
+fi
 
 # ── 4. Restart HA ────────────────────────────────────────────────────────────
-if [[ "${SKIP_RESTART:-0}" == "1" ]]; then
+# An earlier step of the same pipeline (deploy_sensors.sh) may have changed
+# configuration.yaml with SKIP_RESTART=1, so the restart must still happen here
+# even when the dashboard itself was up to date.
+CHANGED_EARLIER=0
+if [[ -n "${SAILING_CHANGE_FLAG:-}" && -s "${SAILING_CHANGE_FLAG}" ]]; then
+    CHANGED_EARLIER=1
+fi
+
+if [[ "${UPLOADED}" == "0" && "${CHANGED_EARLIER}" == "0" ]]; then
+    echo "Nothing changed on ${HA_CONTAINER} — no restart."
+elif [[ "${SKIP_RESTART:-0}" == "1" ]]; then
     echo "SKIP_RESTART=1 — not restarting ${HA_CONTAINER}."
 else
     echo "Restarting ${HA_CONTAINER} ..."

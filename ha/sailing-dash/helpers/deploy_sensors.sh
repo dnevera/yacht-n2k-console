@@ -81,12 +81,10 @@ if ! ha_cat "${REMOTE_PATH}" > "${REMOTE_CFG}"; then
     fi
 fi
 
-if [[ "${HA_TRANSPORT}" == "ssh-docker" ]]; then
-    ${SCP} "${REMOTE_CFG}" "${DEPLOY_HOST}:~/${BACKUP_NAME}" 2>/dev/null || true
-fi
 
 # ── 2. Merge sensors-sailing.yaml into configuration.yaml (idempotent) ──────
 python3 - "${REMOTE_CFG}" "${SENSORS_FILE}" "${MERGED_CFG}" <<'PYEOF'
+import copy
 import sys
 import yaml
 
@@ -122,6 +120,8 @@ remote_cfg_path, sensors_path, merged_cfg_path = sys.argv[1:4]
 
 with open(remote_cfg_path) as f:
     remote_cfg = yaml.safe_load(f) or {}
+
+original_cfg = copy.deepcopy(remote_cfg)
 
 with open(sensors_path) as f:
     sailing_cfg = yaml.safe_load(f) or {}
@@ -161,14 +161,43 @@ def merge_section(remote_cfg, sailing_cfg, key):
 merge_section(remote_cfg, sailing_cfg, "rest")
 merge_section(remote_cfg, sailing_cfg, "template")
 
+merged_text = yaml.dump(remote_cfg, sort_keys=False, allow_unicode=True, width=1000)
 with open(merged_cfg_path, "w") as f:
-    yaml.dump(remote_cfg, f, sort_keys=False, allow_unicode=True, width=1000)
+    f.write(merged_text)
+
+# The merge is idempotent, so re-running a deploy usually produces exactly the
+# configuration that is already live. Tell the shell so it can skip both the
+# upload and the Home Assistant restart instead of bouncing HA for nothing.
+# The comparison is on the SERIALIZED form, not on the object graphs: HA tags
+# (!include, !secret, ...) are loaded as _HaTag instances, which have no
+# __eq__, so every object-level comparison would report a difference.
+original_text = yaml.dump(original_cfg, sort_keys=False, allow_unicode=True, width=1000)
+if merged_text == original_text:
+    open(merged_cfg_path + ".unchanged", "w").close()
+    print("configuration.yaml already contains this exact sensor set")
 
 PYEOF
 
-# ── 3. Upload merged configuration ──────────────────────────────────────────
+# ── 3. Upload merged configuration (only when the merge changed something) ──
+if [[ -f "${MERGED_CFG}.unchanged" && "${HA_FORCE_DELIVERY:-0}" != "1" ]]; then
+    echo "= configuration.yaml unchanged — nothing uploaded, ${HA_CONTAINER} not restarted."
+    echo "Done. Sensors already up to date in container ${HA_CONTAINER}."
+    exit 0
+fi
+
+# Only a deploy that really rewrites configuration.yaml needs a rollback point.
+if [[ "${HA_TRANSPORT}" == "ssh-docker" ]]; then
+    ${SCP} "${REMOTE_CFG}" "${DEPLOY_HOST}:~/${BACKUP_NAME}" 2>/dev/null || true
+fi
+
 echo "Uploading merged configuration.yaml ..."
 ha_cp_to_container "${MERGED_CFG}" "${REMOTE_PATH}"
+
+# deploy.sh restarts Home Assistant once at the end of the pipeline; this tells
+# it that a restart is actually warranted (see SAILING_CHANGE_FLAG).
+if [[ -n "${SAILING_CHANGE_FLAG:-}" ]]; then
+    echo "sensors" >> "${SAILING_CHANGE_FLAG}"
+fi
 
 # ── 4. Restart HA ────────────────────────────────────────────────────────────
 if [[ "${SKIP_RESTART:-0}" == "1" ]]; then

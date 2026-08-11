@@ -111,7 +111,35 @@ When launched, `start_stage.py`:
 # Specific component deploys
 ./deploy.sh --stage --dashboard-only
 ./deploy.sh --prod --sensors-only
+
+# Re-upload everything even if the target already holds identical content
+./deploy.sh --prod --force
 ```
+
+### Incremental delivery (what is actually copied)
+
+A deploy delivers **only what differs from the target**, so re-running it is
+cheap and safe:
+
+- **Single files** (card bundles, `lovelace_resources`, `configuration.yaml`,
+  the dashboard storage document) are compared by content: the sha256 of the
+  local file against the sha256 of the file *as the container currently sees
+  it* (`ha_cat`). A file edited by hand on the target therefore still gets
+  overwritten, while an unchanged one is skipped (`= <name> unchanged`).
+- **Directories** (HACS, the `nmea2000` integration in `--bootstrap`) are
+  compared by a tree-manifest hash stored inside the container in
+  `/config/.storage/sailing_deploy_state` — hashing a whole tree remotely on
+  every run would cost more than the copy it saves.
+- **Sensors**: the merge into `configuration.yaml` is idempotent, so
+  `deploy_sensors.sh` compares the merge result with the live file (on the
+  serialized YAML — HA tags such as `!include` are opaque objects that never
+  compare equal) and skips both the upload and the backup when they match.
+- **Dashboard**: the pre-deploy diff that is printed anyway is reused as the
+  upload condition.
+- **Restart**: Home Assistant is restarted **once and only if** something was
+  really delivered (the steps share the `SAILING_CHANGE_FLAG` marker). A
+  no-op deploy prints `Nothing changed … — no restart`.
+- `--force` (or `HA_FORCE_DELIVERY=1`) bypasses every check above.
 
 ## Canonical Entity Alias Layer & Auto-Discovery Engine
 
@@ -154,7 +182,9 @@ correct while HA kept serving the old, broken config (verified 2026-08-09 by
 querying `lovelace/config` over the websocket API before and after a
 `docker restart homeassistant`). `deploy_dashboard.sh` now restarts the
 container itself; pass `SKIP_RESTART=1` to opt out (e.g. when the next step
-is `deploy_sensors.sh`, which restarts HA anyway).
+is `deploy_sensors.sh`, which restarts HA anyway). The restart is skipped
+automatically when the deploy delivered nothing at all — see *Incremental
+delivery* above.
 
 To verify what HA actually serves (needs `HA_URL`/`HA_TOKEN` from `.env`
 and `pip install websockets`):
