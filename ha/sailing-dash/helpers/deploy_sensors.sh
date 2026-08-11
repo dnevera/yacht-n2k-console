@@ -3,15 +3,19 @@
 # into the live Home Assistant instance's /config/configuration.yaml (Stage or Prod).
 #
 # USAGE
-#   ./deploy_sensors.sh --stage               # deploy to local Stage HA container (local-ha)
-#   ./deploy_sensors.sh --prod [user@host]    # deploy to production HA host via SSH (bumblebee)
+#   ./deploy_sensors.sh --stage                  # the "stage" target profile
+#   ./deploy_sensors.sh --prod [user@host]       # the "prod" target profile
+#   ./deploy_sensors.sh --target <profile>       # any profile from .env (e.g. stage-pi5)
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This script lives in ha/sailing-dash/helpers/; build/ and local-ha/ belong to
+# the subproject root one level up.
+HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "${HELPERS_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-echo "== Running build.py before deploy_sensors =="
-python3 "${SCRIPT_DIR}/build.py"
+# shellcheck source=lib/ha_target.sh
+source "${HELPERS_DIR}/lib/ha_target.sh"
 
 SENSORS_FILE="${SCRIPT_DIR}/build/sensors-sailing.yaml"
 AUTOMATIONS_FILE="${SCRIPT_DIR}/build/automations-sailing.yaml"
@@ -20,77 +24,52 @@ AUTOMATIONS_FILE="${SCRIPT_DIR}/build/automations-sailing.yaml"
 TARGET_ENV="stage"
 HOST_ARG=""
 
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+    arg="$1"
     case "${arg}" in
-        --stage) TARGET_ENV="stage" ;;
-        --prod)  TARGET_ENV="prod" ;;
+        --stage)     TARGET_ENV="stage" ;;
+        --prod)      TARGET_ENV="prod" ;;
+        --target)    TARGET_ENV="${2:?--target needs a profile name}"; shift ;;
+        --target=*)  TARGET_ENV="${arg#*=}" ;;
         *)
             HOST_ARG="${arg}"
-            TARGET_ENV="prod"
+            if [[ "${TARGET_ENV}" == "stage" ]]; then
+                TARGET_ENV="prod"
+            fi
             ;;
     esac
+    shift
 done
 
-if [[ "${TARGET_ENV}" == "stage" ]]; then
-    HA_CONTAINER="${HA_CONTAINER:-local-ha}"
-    DEPLOY_HOST="localhost"
-    echo "== Sailing sensors deploy (env: STAGE) → Container: ${HA_CONTAINER} =="
-
-    ha_cat() {
-        docker exec "${HA_CONTAINER}" cat "$1" 2>/dev/null
-    }
-
-    ha_cp_to_container() {
-        local src="$1"
-        local dest="$2"
-        docker cp "${src}" "${HA_CONTAINER}:${dest}"
-    }
-
-    ha_restart() {
-        docker restart "${HA_CONTAINER}"
-    }
-else
-    if [[ -n "${HOST_ARG}" ]]; then
-        DEPLOY_HOST="${HOST_ARG}"
-        HA_CONTAINER="${HA_CONTAINER:-homeassistant}"
-    elif [[ -f "${PROJECT_ROOT}/deploy.conf" ]]; then
-        # shellcheck source=/dev/null
-        source "${PROJECT_ROOT}/deploy.conf"
-    else
-        echo "ERROR: no host given and ${PROJECT_ROOT}/deploy.conf not found." >&2
-        echo "       Usage: $0 --prod [user@host]" >&2
-        exit 1
-    fi
-
-    SSH="ssh -o ConnectTimeout=8 ${DEPLOY_HOST}"
-    SCP="scp -q"
-    echo "== Sailing sensors deploy (env: PROD) → ${DEPLOY_HOST} (container: ${HA_CONTAINER}) =="
-
-    ha_cat() {
-        ${SSH} "sudo docker exec ${HA_CONTAINER} cat $1" 2>/dev/null
-    }
-
-    ha_cp_to_container() {
-        local src="$1"
-        local dest="$2"
-        local filename="$(basename "${src}")"
-        ${SCP} "${src}" "${DEPLOY_HOST}:/tmp/${filename}" < /dev/null
-        ${SSH} "sudo docker cp /tmp/${filename} ${HA_CONTAINER}:${dest} && rm -f /tmp/${filename}" < /dev/null
-    }
-
-    ha_restart() {
-        ${SSH} "sudo docker restart ${HA_CONTAINER}"
-    }
-fi
+ha_target_init "${TARGET_ENV}" "${HOST_ARG}"
+echo "== Sailing sensors deploy (profile: ${TARGET_ENV}) → ${HA_HOST} (container: ${HA_CONTAINER}, transport: ${HA_TRANSPORT}) =="
 
 REMOTE_PATH="/config/configuration.yaml"
 
-# ── 1. Fetch current remote configuration.yaml + back it up ─────────────────
+# ── 1. Auto-discover NMEA 2000 sensors & compile build artifacts ───────────
 TMP_DIR="$(mktemp -d /tmp/sailing_sensors_deploy.XXXXXX)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 REMOTE_CFG="${TMP_DIR}/configuration.yaml"
 MERGED_CFG="${TMP_DIR}/configuration.merged.yaml"
+ENTITY_REG_TMP="${TMP_DIR}/core.entity_registry"
 BACKUP_NAME="configuration.yaml.$(date +%Y%m%d%H%M%S).bak"
+
+echo "== Step 0: Auto-discovering NMEA 2000 sensors =="
+if ha_cat "/config/.storage/core.entity_registry" > "${ENTITY_REG_TMP}" 2>/dev/null && [[ -s "${ENTITY_REG_TMP}" ]]; then
+    python3 "${HELPERS_DIR}/map_nmea_sensors.py" --entity-registry "${ENTITY_REG_TMP}" || true
+elif [[ -n "${HA_URL}" && -n "${HA_TOKEN}" ]]; then
+    # No readable registry file (e.g. a hardened target): fall back to the REST
+    # API of THIS profile — never a hardcoded host.
+    python3 "${HELPERS_DIR}/map_nmea_sensors.py" --api-url "${HA_URL}" --api-token "${HA_TOKEN}" || true
+else
+    python3 "${HELPERS_DIR}/map_nmea_sensors.py" --config-dir "${SCRIPT_DIR}/local-ha/config" || true
+fi
+
+# This build.py call is NOT the duplicate one: map_nmea_sensors.py has just
+# rewritten src/yaml/sensors/derived_n2k.yaml with the entity ids discovered on
+# THIS vessel, so the sensor artifacts must be recompiled from it.
+echo "== Rebuilding artifacts from the freshly discovered sensor mapping =="
+python3 "${HELPERS_DIR}/build.py"
 
 echo "Fetching current ${REMOTE_PATH} ..."
 if ! ha_cat "${REMOTE_PATH}" > "${REMOTE_CFG}"; then
@@ -102,7 +81,7 @@ if ! ha_cat "${REMOTE_PATH}" > "${REMOTE_CFG}"; then
     fi
 fi
 
-if [[ "${TARGET_ENV}" == "prod" ]]; then
+if [[ "${HA_TRANSPORT}" == "ssh-docker" ]]; then
     ${SCP} "${REMOTE_CFG}" "${DEPLOY_HOST}:~/${BACKUP_NAME}" 2>/dev/null || true
 fi
 
@@ -152,7 +131,7 @@ def item_uid(entry):
         return None
     if "unique_id" in entry:
         return entry["unique_id"]
-    for subkey in ("sensor", "binary_sensor", "switch"):
+    for subkey in ("sensor", "binary_sensor", "switch", "device_tracker"):
         subs = entry.get(subkey)
         if isinstance(subs, list) and subs and isinstance(subs[0], dict) and "unique_id" in subs[0]:
             return subs[0]["unique_id"]

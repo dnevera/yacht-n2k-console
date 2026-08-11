@@ -13,7 +13,7 @@ const PLOTLY_WIND_CARD_CONFIG = {
       filters: [{ resample: '30m' }, { map_y: 'parseFloat(y)' }, { store_var: 'dir' }],
     },
     {
-      entity: 'sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed',
+      entity: 'sensor.boat_wind_speed',
       name: 'Measured',
       mode: 'markers',
       filters: [
@@ -40,7 +40,7 @@ const PLOTLY_WIND_CARD_CONFIG = {
       marker: { size: 6, symbol: 'diamond', color: '#ff7043', line: { width: 0 } },
     },
     {
-      entity: 'sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed',
+      entity: 'sensor.boat_wind_speed',
       name: 'kt scale',
       mode: 'markers',
       showlegend: false,
@@ -69,7 +69,7 @@ const PLOTLY_WIND_CARD_CONFIG = {
       },
     },
     {
-      entity: 'sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed',
+      entity: 'sensor.boat_wind_speed',
       name: 'Gusts (measured)',
       mode: 'lines',
       filters: [

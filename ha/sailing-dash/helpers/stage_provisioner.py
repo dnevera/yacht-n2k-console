@@ -9,6 +9,7 @@ HTTP readiness checks.
 
 import os
 import sys
+import io
 import json
 import uuid
 import time
@@ -23,43 +24,37 @@ import subprocess
 import argparse
 from typing import Dict, List, Any, Optional, Tuple
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+from merge_lovelace_resources import merge_registry
+from env_profile import load_profile
+
+# This script lives in ha/sailing-dash/helpers/; build/, src/, local-ha/ and .env
+# belong to the subproject root one level up.
+HELPERS_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(HELPERS_DIR)
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
-VENDOR_DIR = os.path.join(SCRIPT_DIR, "vendor")
+DEPS_DIR = os.path.join(SCRIPT_DIR, "build", "deps")
+DEPS_CARDS_DIR = os.path.join(DEPS_DIR, "cards")
+FETCH_DEPS = os.path.join(HELPERS_DIR, "fetch_deps.py")
 CARDS_BUILD_DIR = os.path.join(SCRIPT_DIR, "build", "cards")
 RESOURCES_FILE = os.path.join(SCRIPT_DIR, "build", "lovelace-resources.yaml")
 SRC_RESOURCES_FILE = os.path.join(SCRIPT_DIR, "src", "yaml", "resources", "lovelace-resources.yaml")
 LOCAL_CONFIG_DIR = os.path.join(SCRIPT_DIR, "local-ha", "config")
 
-# The "NMEA 2000" HA custom integration (domain "nmea2000") is normally installed on
-# Prod (bumblebee.local) manually through HACS — it is NOT one of the 3 HACS *frontend
-# card* resources tracked in ALL_REQUIRED_CARDS/requirements-ha.txt, and Stage never had
-# it at all: no HACS, no /config/custom_components/nmea2000, no config entry. Without it
-# there is no source of N2K-derived sensors on Stage, no matter how well the dashboard/
-# cards are provisioned — this vendored copy is mirrored from OUR OWN fork
-# github.com/dnevera/ha-nmea2000 (branch bumblebee-custom, based on upstream
-# tomer-w/ha-nmea2000), whose manifest.json already points at our own
-# dnevera/nmea2000 library fork. Copying these files directly (HACS itself is
-# just a downloader/updater) has the identical effect at runtime as installing
-# through HACS on Prod.
-NMEA2000_INTEGRATION_VENDOR_DIR = os.path.join(VENDOR_DIR, "custom_components", "nmea2000")
-NMEA2000_EMULATOR_HOST = "127.0.0.1"  # local-ha uses docker network_mode: host
-NMEA2000_EMULATOR_PORT = 4001         # mock_nmea_emulator.py default port
-
-# HACS (Home Assistant Community Store) itself — Stage used to have NO HACS at all,
-# with the nmea2000 integration/frontend cards above installed by directly copying
-# vendored files instead ("HACS is just a downloader"). Per explicit request, Stage
-# now installs the REAL HACS integration (same official release used on Prod), not a
-# copy-only emulation, so `local-ha` looks/behaves like the real bumblebee.local
-# instance (HACS panel, updates, custom repositories UI). The release .zip is heavy
-# (~50MB, mostly the prebuilt hacs_frontend/ JS bundle) so it is NOT vendored/committed
-# into git like the small card bundles — it is downloaded once from GitHub and cached
-# under .cache/hacs/ (gitignored), exactly like HACS's own real-world install script
-# (https://get.hacs.xz/download) does on Prod.
-HACS_RELEASE_URL = "https://github.com/hacs/integration/releases/latest/download/hacs.zip"
-HACS_CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache", "hacs")
-HACS_CACHE_ZIP = os.path.join(HACS_CACHE_DIR, "hacs.zip")
-HACS_CACHE_EXTRACTED_DIR = os.path.join(HACS_CACHE_DIR, "custom_components", "hacs")
+# Every external artifact (the "NMEA 2000" integration — OUR OWN fork
+# github.com/dnevera/ha-nmea2000 pinned to a tag — HACS itself and the frontend
+# card bundles) is declared in deps.yaml and downloaded by fetch_deps.py into
+# build/deps/. Nothing is vendored/committed into the repo any more, and there is
+# no hidden .cache/: build/deps/ is an ordinary build artifact directory.
+# Copying the integration files directly (HACS itself is just a downloader/
+# updater) has the identical runtime effect as installing through HACS on Prod.
+NMEA2000_INTEGRATION_DEPS_DIR = os.path.join(DEPS_DIR, "nmea2000", "custom_components", "nmea2000")
+HACS_INTEGRATION_DEPS_DIR = os.path.join(DEPS_DIR, "hacs", "custom_components", "hacs")
+# The target is a NAMED PROFILE from ha/sailing-dash/.env (see .env.template):
+# it carries the container name AND the YDNU-02 tcp-gw this instance must talk to.
+# Nothing here is hardcoded to local-ha / 127.0.0.1:4001 any more, and the repo
+# root .env / deploy.conf (the ydnu-02 manager's own config) is never read.
+DEFAULT_PROFILE = os.environ.get("HA_PROFILE") or "stage"
+DEFAULT_CONTAINER = os.environ.get("HA_CONTAINER") or load_profile(DEFAULT_PROFILE).container
 
 ALL_REQUIRED_CARDS = [
     "card-mod.js",
@@ -86,21 +81,41 @@ def log(level: str, msg: str):
 class HAProvisioner:
     """Provisioner engine for Stage/Prod Home Assistant instances."""
 
-    def __init__(self, config_dir: Optional[str] = None, container_name: str = "local-ha"):
+    def __init__(self, config_dir: Optional[str] = None, container_name: str = DEFAULT_CONTAINER,
+                 profile: Optional[str] = None):
         self.config_dir = os.path.abspath(config_dir) if config_dir else None
         self.container_name = container_name
+        # The tcp-gw address of THIS profile — what the nmea2000 config entry points at.
+        self.profile = load_profile(profile or DEFAULT_PROFILE)
+        self.gw_host = self.profile.gw_host
+        self.gw_port = self.profile.gw_data_port
+        # A profile may live on another machine: every docker call then has to be
+        # tunnelled through SSH, exactly like lib/ha_target.sh does for the shell side.
+        self.transport = self.profile.transport
+        self.ssh_host = self.profile.ssh_host
 
-        # Fallback to local-ha/config if it exists and config_dir not explicitly passed
-        if not self.config_dir and os.path.isdir(LOCAL_CONFIG_DIR):
+        # Fallback to local-ha/config if it exists and config_dir not explicitly passed.
+        # Only valid for a local target — a remote container's /config is not on this disk.
+        if (not self.config_dir and self.transport == "local-docker"
+                and os.path.isdir(LOCAL_CONFIG_DIR)):
             self.config_dir = LOCAL_CONFIG_DIR
 
     # ── Container / File Operations ──────────────────────────────────────────
 
     def _exec_docker(self, cmd: List[str]) -> Tuple[int, str]:
-        """Runs docker exec in target container."""
-        full_cmd = ["docker", "exec", self.container_name] + cmd
+        """Runs docker exec in the target container, locally or over SSH depending
+        on the profile's transport."""
+        if self.transport == "ssh-docker" and self.ssh_host:
+            remote = "sudo docker exec {} {}".format(
+                self.container_name, " ".join(f"'{part}'" for part in cmd))
+            full_cmd = ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes",
+                        self.ssh_host, remote]
+            timeout = 30
+        else:
+            full_cmd = ["docker", "exec", self.container_name] + cmd
+            timeout = 10
         try:
-            res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=10)
+            res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
             return res.returncode, res.stdout
         except Exception as e:
             return 1, str(e)
@@ -211,6 +226,27 @@ class HAProvisioner:
         container_path = os.path.join("/config", dest_rel_path.lstrip("/"))
         dir_path = os.path.dirname(container_path)
         self._exec_docker(["mkdir", "-p", dir_path])
+
+        # A remote target needs two hops: scp the file to the host, then docker cp it
+        # into the container from there (same as lib/ha_target.sh does for the shell).
+        if self.transport == "ssh-docker" and self.ssh_host:
+            staged = f"/tmp/sailing_{uuid.uuid4().hex}"
+            try:
+                if subprocess.run(["scp", "-q", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes",
+                                   src_file, f"{self.ssh_host}:{staged}"],
+                                  capture_output=True, timeout=120).returncode != 0:
+                    return False
+                res = subprocess.run(
+                    ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", self.ssh_host,
+                     f"sudo docker cp {staged} {self.container_name}:{container_path}; "
+                     f"rc=$?; rm -f {staged}; exit $rc"],
+                    capture_output=True, timeout=120,
+                )
+                return res.returncode == 0
+            except Exception as e:
+                log("ERROR", f"Failed delivering {src_file} to {self.ssh_host}: {e}")
+                return False
+
         try:
             res = subprocess.run(
                 ["docker", "cp", src_file, f"{self.container_name}:{container_path}"],
@@ -255,6 +291,7 @@ class HAProvisioner:
             "resources_registered": False,
             "missing_cards": [],
             "hacs_installed": False,
+            "hacs_activated": False,
             "nmea2000_integration_installed": False,
             "nmea2000_configured": False,
             "is_clean_instance": False,
@@ -341,6 +378,12 @@ class HAProvisioner:
                 entries = data.get("data", {}).get("entries", [])
                 if any(e.get("domain") == "nmea2000" for e in entries):
                     status["nmea2000_configured"] = True
+                # HACS ACTIVATION (as opposed to delivery of its files above) can only
+                # happen through the UI: adding the integration and authorizing via the
+                # GitHub device-flow. That is what creates a config entry for domain
+                # "hacs" — so this entry, and nothing else, proves activation.
+                if any(e.get("domain") == "hacs" for e in entries):
+                    status["hacs_activated"] = True
             except json.JSONDecodeError:
                 pass
 
@@ -359,6 +402,51 @@ class HAProvisioner:
 
     # ── Provisioning Operations ─────────────────────────────────────────────
 
+    def check_hacs(self) -> Tuple[bool, List[str]]:
+        """Separates the two HACS states that are constantly confused:
+
+          * DELIVERED  — custom_components/hacs/manifest.json with domain "hacs" is
+            in place. This part is automated (deps.yaml -> fetch_deps.py ->
+            deploy_hacs_integration()) and identical on Stage and Prod.
+          * ACTIVATED  — a config entry for domain "hacs" exists. This can ONLY be
+            done by a human in the UI (Settings -> Add integration -> HACS, then the
+            GitHub device-flow at github.com/login/device); it is impossible to
+            automate, hence it must be *verified* and used as a hard gate instead.
+
+        Returns (ok, messages_for_the_human).
+        """
+        status = self.inspect_ha_environment()
+        missing: List[str] = []
+
+        if status["hacs_installed"]:
+            log("INFO", "HACS files are delivered (custom_components/hacs/manifest.json, domain hacs)")
+        else:
+            missing.append(
+                "HACS is NOT DELIVERED: custom_components/hacs/manifest.json is missing. "
+                "This part IS automated — run `python3 helpers/fetch_deps.py` and then "
+                f"`./deploy.sh --target {self.profile.name} --bootstrap` "
+                "(or `helpers/stage_provisioner.py provision`) to put the pinned HACS release in place."
+            )
+
+        if status["hacs_activated"]:
+            log("INFO", "HACS is activated (config entry for domain hacs exists)")
+        else:
+            missing.append(
+                "HACS is NOT ACTIVATED: no config entry for domain 'hacs'. This CANNOT be "
+                "automated — do it by hand: restart Home Assistant, then "
+                f"{self.profile.ha_url or 'the HA UI'} -> Settings -> Devices & services -> "
+                "Add integration -> HACS -> authorize at https://github.com/login/device."
+            )
+
+        if missing:
+            log("ERROR", "HACS check failed:")
+            for i, item in enumerate(missing, 1):
+                print(f"  {i}. {item}")
+            return False, missing
+
+        log("PROVISION", "HACS check passed: delivered AND activated \u2713")
+        return True, []
+
     def provision_onboarding(self) -> bool:
         """Bypasses onboarding wizard by writing completed .storage/onboarding."""
         log("PROVISION", "Bypassing onboarding wizard in .storage/onboarding ...")
@@ -376,6 +464,28 @@ class HAProvisioner:
             },
         }
         return self.write_config_file(".storage/onboarding", json.dumps(onboarding_data, indent=2))
+
+    def provision_core_config(self) -> bool:
+        """Writes .storage/core.config setting location and unit system."""
+        log("PROVISION", "Writing .storage/core.config ...")
+        core_config = {
+            "version": 1,
+            "minor_version": 4,
+            "key": "core.config",
+            "data": {
+                "latitude": 42.43,
+                "longitude": 18.60,
+                "elevation": 0,
+                "radius": 100,
+                "unit_system_v2": "metric",
+                "location_name": "Sailing Boat",
+                "time_zone": "UTC",
+                "currency": "EUR",
+                "country": "ME",
+                "language": "en",
+            },
+        }
+        return self.write_config_file(".storage/core.config", json.dumps(core_config, indent=2))
 
     def provision_auth(self, username: str = "test", password: str = "test") -> bool:
         """Ensures a real owner user exists with a fixed username/password via the
@@ -536,45 +646,21 @@ class HAProvisioner:
                 {"url": "/local/windy-boat-card.js?v=1.2.0", "type": "module"},
             ]
 
-        # Convert /hacsfiles/ to /local/ for standalone/clean stage setup
-        normalized_wanted = []
-        for r in wanted_resources:
-            url = r.get("url", "")
-            rtype = r.get("type", "module")
-            if url.startswith("/hacsfiles/"):
-                card_name = url.rsplit("/", 1)[-1]
-                normalized_wanted.append({"url": f"/local/{card_name}", "type": rtype})
-            else:
-                normalized_wanted.append({"url": url, "type": rtype})
-
         # Load existing lovelace_resources from HA
         resources_raw = self.read_config_file(".storage/lovelace_resources")
-        registry = {"version": 1, "minor_version": 1, "key": "lovelace_resources", "data": {"items": []}}
+        registry = {}
         if resources_raw:
             try:
                 registry = json.loads(resources_raw)
             except json.JSONDecodeError:
                 pass
 
-        items = registry.setdefault("data", {}).setdefault("items", [])
-
-        def clean_url(u: str) -> str:
-            return urllib.parse.urlsplit(u).path
-
-        existing_paths = {clean_url(it.get("url", "")): it for it in items}
-
-        for entry in normalized_wanted:
-            url = entry["url"]
-            path = clean_url(url)
-            if path in existing_paths:
-                existing_paths[path]["url"] = url
-                existing_paths[path]["type"] = entry.get("type", "module")
-            else:
-                items.append({
-                    "id": uuid.uuid4().hex[:24],
-                    "url": url,
-                    "type": entry.get("type", "module"),
-                })
+        # merge_lovelace_resources.merge_registry() is the SINGLE implementation
+        # of this merge — deploy.sh runs the very same module as a CLI, so Stage
+        # and Prod can never drift apart.
+        registry, _ = merge_registry(
+            registry, wanted_resources,
+            target_env="stage", cards_dir=CARDS_BUILD_DIR, deps_cards_dir=DEPS_CARDS_DIR)
 
         return self.write_config_file(".storage/lovelace_resources", json.dumps(registry, indent=2))
 
@@ -584,13 +670,15 @@ class HAProvisioner:
         all_ok = True
 
         for card_filename in ALL_REQUIRED_CARDS:
-            # Check build/cards first, then vendor/
+            # windy-boat-card is ours and is compiled by build.py into build/cards/;
+            # the third-party bundles are downloaded by fetch_deps.py into build/deps/cards/.
             src_path = os.path.join(CARDS_BUILD_DIR, card_filename)
             if not os.path.isfile(src_path):
-                src_path = os.path.join(VENDOR_DIR, card_filename)
+                src_path = os.path.join(DEPS_CARDS_DIR, card_filename)
 
             if not os.path.isfile(src_path):
-                log("WARN", f"Card bundle {card_filename} not found in build/cards nor vendor/")
+                log("WARN", f"Card bundle {card_filename} not found in build/cards nor build/deps/cards "
+                            f"— run `python3 fetch_deps.py`")
                 all_ok = False
                 continue
 
@@ -612,63 +700,63 @@ class HAProvisioner:
 
         return all_ok
 
-    def download_hacs_release(self) -> bool:
-        """Downloads the official HACS release .zip from GitHub (cached under
-        .cache/hacs/, gitignored) and extracts custom_components/hacs/ from it,
-        mirroring what HACS's own real-world install script does on Prod."""
-        if os.path.isfile(os.path.join(HACS_CACHE_EXTRACTED_DIR, "manifest.json")):
+    @staticmethod
+    def fetch_dependency(section: str, dest_dir: str) -> bool:
+        """Makes sure one deps.yaml section is present in build/deps/ by delegating
+        to fetch_deps.py — the single downloader in this project."""
+        if os.path.isfile(os.path.join(dest_dir, "manifest.json")):
             return True
-        log("PROVISION", f"Downloading HACS release from {HACS_RELEASE_URL} (cached under .cache/hacs/) ...")
-        os.makedirs(HACS_CACHE_DIR, exist_ok=True)
+        log("PROVISION", f"Fetching '{section}' from deps.yaml into build/deps/ ...")
         try:
-            req = urllib.request.Request(HACS_RELEASE_URL, headers={"User-Agent": "HA-Stage-Provisioner"})
-            with urllib.request.urlopen(req, timeout=60) as resp, open(HACS_CACHE_ZIP, "wb") as f:
-                shutil.copyfileobj(resp, f)
-            extract_root = os.path.join(HACS_CACHE_DIR, "custom_components", "hacs")
-            os.makedirs(extract_root, exist_ok=True)
-            with zipfile.ZipFile(HACS_CACHE_ZIP) as zf:
-                zf.extractall(extract_root)
-            return os.path.isfile(os.path.join(extract_root, "manifest.json"))
+            res = subprocess.run([sys.executable, FETCH_DEPS, "--only", section],
+                                 capture_output=True, text=True, timeout=600)
+            if res.stdout:
+                print(res.stdout.rstrip())
+            if res.returncode != 0:
+                log("ERROR", res.stderr.strip() or "fetch_deps.py failed")
         except Exception as e:
-            log("ERROR", f"Failed downloading/extracting HACS release: {e}")
+            log("ERROR", f"Failed running fetch_deps.py: {e}")
             return False
+        return os.path.isfile(os.path.join(dest_dir, "manifest.json"))
 
     def deploy_hacs_integration(self) -> bool:
         """Installs the REAL HACS integration (domain hacs) into
         /config/custom_components/hacs/, the same official release used on Prod
-        (not a copy-only emulation of "what HACS would do"). Also registers a
-        stub core.config_entries 'hacs' entry so the panel appears immediately;
-        completing the GitHub device-flow login still requires opening the HA UI
-        once, same as a fresh Prod install."""
+        (not a copy-only emulation of "what HACS would do"). Runs for EVERY profile,
+        local-docker and ssh-docker alike, so Stage and Prod never drift apart.
+
+        Delivery only — no config entry is faked here: adding the HACS integration
+        and completing the GitHub device-flow in the UI stays a manual step, and
+        check_hacs() is what verifies it actually happened."""
         log("PROVISION", "Installing real HACS integration into /config/custom_components/hacs/ ...")
-        if not self.download_hacs_release():
-            log("WARN", "HACS release unavailable (no network?) — skipping HACS install for this run.")
+        if not self.fetch_dependency("integrations", HACS_INTEGRATION_DEPS_DIR):
+            # NOT a silent warning: HACS delivery is an automated part of the pipeline and
+            # its absence blocks every HACS-dependent manual step later on.
+            log("ERROR", "HACS release missing from build/deps/ — run `python3 helpers/fetch_deps.py` "
+                         "(GitHub must be reachable; the release is pinned in deps.yaml).")
             return False
-        return self.copy_dir_to_ha(HACS_CACHE_EXTRACTED_DIR, "custom_components/hacs")
+        return self.copy_dir_to_ha(HACS_INTEGRATION_DEPS_DIR, "custom_components/hacs")
 
     def deploy_nmea2000_integration(self) -> bool:
-        """Installs the 'NMEA 2000' custom integration (domain nmea2000) into
-        /config/custom_components/nmea2000/. On Prod this is normally installed
-        manually through HACS from OUR OWN fork github.com/dnevera/ha-nmea2000
-        (branch bumblebee-custom); Stage never had it, HACS or not — copying
-        the same vendored files has an identical runtime effect (HACS itself
-        is just a downloader, not a requirement of the integration itself).
-        HA installs the manifest's pip requirement (our patched git fork,
-        same as requirements.txt) automatically on startup when it discovers
-        a config entry for this domain."""
+        """Installs the 'NMEA 2000' custom integration (domain nmea2000, our own
+        dnevera/ha-nmea2000 fork pinned to a tag in deps.yaml) into
+        /config/custom_components/nmea2000/."""
         log("PROVISION", "Installing NMEA 2000 custom integration into /config/custom_components/nmea2000/ ...")
-        if not os.path.isdir(NMEA2000_INTEGRATION_VENDOR_DIR):
-            log("ERROR", f"Vendored NMEA 2000 integration not found at {NMEA2000_INTEGRATION_VENDOR_DIR}")
+        if not self.fetch_dependency("integrations", NMEA2000_INTEGRATION_DEPS_DIR):
+            log("ERROR", "NMEA 2000 integration missing from build/deps/ — run `python3 fetch_deps.py`")
             return False
-        return self.copy_dir_to_ha(NMEA2000_INTEGRATION_VENDOR_DIR, "custom_components/nmea2000")
+        return self.copy_dir_to_ha(NMEA2000_INTEGRATION_DEPS_DIR, "custom_components/nmea2000")
 
     def provision_nmea2000_config_entry(
-        self, host: str = NMEA2000_EMULATOR_HOST, port: int = NMEA2000_EMULATOR_PORT
+        self, host: Optional[str] = None, port: Optional[int] = None
     ) -> bool:
-        """Registers a 'nmea2000' config entry (TEXT/TCP gateway type) pointed at
-        the local mock_nmea_emulator.py, so the integration actually connects and
-        starts creating N2K sensor entities on startup — without this entry the
-        integration files alone do nothing (config_flow is never auto-triggered)."""
+        """Registers a 'nmea2000' config entry (TEXT/TCP gateway type) pointed at the
+        tcp-gw of the selected profile (the local mock_nmea_emulator.py by default),
+        so the integration actually connects and starts creating N2K sensor entities
+        on startup — without this entry the integration files alone do nothing
+        (config_flow is never auto-triggered)."""
+        host = host or self.gw_host
+        port = port if port is not None else self.gw_port
         log("PROVISION", f"Registering nmea2000 config entry (gateway_type=text, {host}:{port}) ...")
         entries_raw = self.read_config_file(".storage/core.config_entries")
         registry = {"version": 1, "minor_version": 1, "key": "core.config_entries", "data": {"entries": []}}
@@ -681,21 +769,30 @@ class HAProvisioner:
         entries = registry.setdefault("data", {}).setdefault("entries", [])
         existing = next((e for e in entries if e.get("domain") == "nmea2000"), None)
 
+        # TRAP ("Unknown mode 'None' during migration", custom_components/nmea2000/
+        # __init__.py:58): the integration's config flow is VERSION = 2, and its
+        # async_migrate_entry() only runs for version 1 entries — where it pops the
+        # legacy "mode" key and hard-fails when it is absent. An entry we write by
+        # hand must therefore be a v2 entry AND still carry the legacy keys, so it
+        # survives being migrated by any older/newer variant of the integration.
         entry_data = {
-            "name": "Stage NMEA 2000 Emulator",
+            "name": f"NMEA 2000 ({self.profile.name})",
             "gateway_type": "text",
+            "mode": "TCP",          # CONF_MODE_TCP — legacy v1 key, maps to GatewayType.TEXT
+            "device_type": "TCP",   # anything but "EBYTE" migrates to TEXT
             "ip": host,
             "port": port,
             "ms_between_updates": 5000,
             "exclude_AIS": True,
         }
+        entry_version = 2
 
         if existing is None:
             entries.append({
                 "created_at": "1970-01-01T00:00:00.000000+00:00",
                 "modified_at": "1970-01-01T00:00:00.000000+00:00",
                 "entry_id": uuid.uuid4().hex,
-                "version": 1,
+                "version": entry_version,
                 "minor_version": 1,
                 "domain": "nmea2000",
                 "title": entry_data["name"],
@@ -715,6 +812,11 @@ class HAProvisioner:
         else:
             existing["data"].update(entry_data)
             existing["title"] = entry_data["name"]
+            # Backfill for entries written by an older version of this script: they
+            # were stored as version 1 without "mode", which made the integration's
+            # migration log "Unknown mode 'None'" and refuse to load the entry.
+            existing["data"].setdefault("mode", "TCP")
+            existing["version"] = entry_version
             # Backfill "subentries" on entries created by an older version of this
             # script (before this key was required) — HA core's
             # config_entries.async_initialize() KeyErrors on boot without it.
@@ -726,6 +828,7 @@ class HAProvisioner:
         """Performs full auto-provisioning of clean HA instance."""
         log("PROVISION", "Starting full HA stage auto-provisioning...")
         ok_onboarding = self.provision_onboarding()
+        ok_core_cfg = self.provision_core_config()
         ok_auth = self.provision_auth()
         ok_dash = self.provision_dashboard_registry()
         ok_res = self.provision_resource_registry()
@@ -735,12 +838,12 @@ class HAProvisioner:
         ok_nmea_entry = self.provision_nmea2000_config_entry()
 
         if not ok_hacs:
-            log("WARN", "HACS install skipped/failed (likely no network access) — continuing without it; "
-                        "the NMEA 2000 integration/cards above are still installed directly regardless of HACS.")
+            log("ERROR", "HACS files were NOT delivered — the HACS gate will block the install. "
+                         "Fix the download and re-run; do not continue as if HACS were optional.")
 
         success = (
-            ok_onboarding and ok_auth and ok_dash and ok_res and ok_cards
-            and ok_nmea_integration and ok_nmea_entry
+            ok_onboarding and ok_core_cfg and ok_auth and ok_dash and ok_res and ok_cards
+            and ok_hacs and ok_nmea_integration and ok_nmea_entry
         )
         if success:
             log("PROVISION", "Full HA stage provisioning completed successfully!")
@@ -780,12 +883,14 @@ def main():
     # Inspect command
     inspect_parser = subparsers.add_parser("inspect", help="Inspect target HA state")
     inspect_parser.add_argument("--config-dir", help="Path to local HA /config directory")
-    inspect_parser.add_argument("--container", default="local-ha", help="Target HA container name")
+    inspect_parser.add_argument("--container", default=DEFAULT_CONTAINER, help="Target HA container name")
+    inspect_parser.add_argument("--target", default=DEFAULT_PROFILE, help="Target profile from .env")
 
     # Provision command
     provision_parser = subparsers.add_parser("provision", help="Provision target HA instance")
     provision_parser.add_argument("--config-dir", help="Path to local HA /config directory")
-    provision_parser.add_argument("--container", default="local-ha", help="Target HA container name")
+    provision_parser.add_argument("--container", help="Target HA container name (default: the profile's)")
+    provision_parser.add_argument("--target", default=DEFAULT_PROFILE, help="Target profile from .env")
     provision_parser.add_argument("--clean-install", action="store_true", help="Force clean re-provisioning")
     provision_parser.add_argument(
         "--no-container-cycle", action="store_true",
@@ -793,21 +898,42 @@ def main():
              "silently overwriting .storage/ edits with its stale in-memory state on next restart)",
     )
 
+    # check-hacs command: the gate between "we delivered the files" and "the human
+    # activated it in the UI". Used by install_wizard.sh and deploy.sh --preflight.
+    hacs_parser = subparsers.add_parser(
+        "check-hacs", help="Check HACS delivery (files) and activation (config entry) separately")
+    hacs_parser.add_argument("--config-dir", help="Path to local HA /config directory")
+    hacs_parser.add_argument("--container", help="Target HA container name (default: the profile's)")
+    hacs_parser.add_argument("--target", default=DEFAULT_PROFILE, help="Target profile from .env")
+
+    # deploy-hacs command: (re)deliver the pinned HACS release into the target,
+    # identically for local-docker (Stage) and ssh-docker (Prod) profiles.
+    deploy_hacs_parser = subparsers.add_parser(
+        "deploy-hacs", help="Deliver the pinned HACS release into the target's custom_components/hacs")
+    deploy_hacs_parser.add_argument("--config-dir", help="Path to local HA /config directory")
+    deploy_hacs_parser.add_argument("--container", help="Target HA container name (default: the profile's)")
+    deploy_hacs_parser.add_argument("--target", default=DEFAULT_PROFILE, help="Target profile from .env")
+
     # Verify command
     verify_parser = subparsers.add_parser("verify", help="Verify HTTP readiness")
-    verify_parser.add_argument("--url", default="http://localhost:8123/dashboard-sailing/", help="Dashboard URL")
+    verify_parser.add_argument("--url", help="Dashboard URL (default: the profile's HA url)")
+    verify_parser.add_argument("--target", default=DEFAULT_PROFILE, help="Target profile from .env")
     verify_parser.add_argument("--timeout", type=int, default=30, help="Timeout in seconds")
 
     args = parser.parse_args()
 
     if args.command == "inspect":
-        provisioner = HAProvisioner(config_dir=args.config_dir, container_name=args.container)
+        provisioner = HAProvisioner(config_dir=args.config_dir, container_name=args.container,
+                                    profile=args.target)
         status = provisioner.inspect_ha_environment()
         print(json.dumps(status, indent=2))
         sys.exit(0 if not status["is_clean_instance"] else 1)
 
     elif args.command == "provision":
-        provisioner = HAProvisioner(config_dir=args.config_dir, container_name=args.container)
+        profile = load_profile(args.target)
+        provisioner = HAProvisioner(config_dir=args.config_dir,
+                                    container_name=args.container or profile.container,
+                                    profile=args.target)
 
         needs_provisioning = args.clean_install or provisioner.inspect_ha_environment()["is_clean_instance"]
 
@@ -840,8 +966,25 @@ def main():
 
         sys.exit(0 if success else 1)
 
+    elif args.command == "check-hacs":
+        profile = load_profile(args.target)
+        provisioner = HAProvisioner(config_dir=args.config_dir,
+                                    container_name=args.container or profile.container,
+                                    profile=args.target)
+        ok, _missing = provisioner.check_hacs()
+        sys.exit(0 if ok else 1)
+
+    elif args.command == "deploy-hacs":
+        profile = load_profile(args.target)
+        provisioner = HAProvisioner(config_dir=args.config_dir,
+                                    container_name=args.container or profile.container,
+                                    profile=args.target)
+        sys.exit(0 if provisioner.deploy_hacs_integration() else 1)
+
     elif args.command == "verify":
-        ok = verify_http_readiness(url=args.url, timeout_sec=args.timeout)
+        base_url = (load_profile(args.target).ha_url or "http://localhost:8123").rstrip("/")
+        url = args.url or f"{base_url}/dashboard-sailing/"
+        ok = verify_http_readiness(url=url, timeout_sec=args.timeout)
         sys.exit(0 if ok else 1)
 
     else:

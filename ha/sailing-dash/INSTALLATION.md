@@ -1,186 +1,414 @@
-# Installation & Deployment Guide for Sailing Dashboard
+# Installation — Sailing Dashboard
 
-This guide describes how to install, configure, launch, and re-install the **Sailing Dashboard** for Home Assistant in both **Stage (Local Docker)** and **Prod (Vessel Pi5)** environments.
+Installing this from scratch is **not** "one script does everything". There is a
+hard synchronisation point in the middle: auto-discovery maps canonical sensor
+aliases (`sensor.boat_stw`, …) by reading an entity registry that only exists
+**after** you have created the NMEA 2000 config entry by hand and the bus has
+carried real traffic.
 
-> For the manual UI steps to set up **HACS itself** (device-flow activation) and add our custom
-> **NMEA 2000** integration (`github.com/dnevera/ha-nmea2000`) as a HACS custom repository, see the
-> dedicated [`HACS_SETUP.md`](./HACS_SETUP.md) guide.
+So the procedure is always three phases:
 
----
-
-## 📋 System Requirements & Dependencies
-
-### General Prerequisites
-- **Python**: Python 3.9 or newer with `pyyaml` installed.
-- **Docker**: Docker Engine 20.10+ and Docker Compose v2 (for Stage environment).
-- **SSH/SCP**: `ssh` and `scp` CLI tools (for Prod remote deployment).
-
-### Python Environment Setup
-```bash
-# Install PyYAML dependency required by build engine
-pip install pyyaml
+```
+[AUTO stage 1]  container + HACS files + integration + cards
+      ↓
+[GATE A]        activate HACS in the UI (device-flow)  → verified by check-hacs
+      ↓
+[GATE B]        NMEA 2000 config entry (host:4001, type text) + traffic on the bus
+                → verified by deploy.sh --preflight
+      ↓
+[AUTO stage 2]  ./deploy.sh --target <profile> --install  (discovery + sensors + dashboard)
 ```
 
----
+`--install` refuses to run before the gates are green (see
+[Preflight gate](#preflight-gate)) instead of deploying a dashboard bound to
+nothing.
 
-## 🆕 1. First-Time Setup (From Scratch / Clean HA)
+### The guided way: `./install_wizard.sh`
 
-Use this workflow when starting with a **clean or uninitialized Home Assistant instance** (e.g. fresh local Docker container or fresh Home Assistant installation on a vessel).
+One command walks the whole thing for any profile and **stops** at each gate:
 
-### Stage Environment (Local Docker)
-
-When starting a fresh local Docker container with an empty `/config` directory, Home Assistant normally lands on the initial onboarding wizard (`/onboarding.html`) and lacks registered Lovelace dashboards, resources, and custom card JS files. The Sailing Dashboard includes an automated provisioning engine (`stage_provisioner.py`) that initializes everything automatically.
-
-#### Step-by-Step Initial Launch:
-
-1. **Navigate to the dashboard directory**:
-   ```bash
-   cd ha/sailing-dash
-   ```
-
-2. **Launch Stage environment**:
-   ```bash
-   ./run_stage.sh
-   ```
-
-#### What Happens Automatically during First Launch:
-- **HA Container Startup**: Starts `local-ha` Docker container via `docker compose up -d`.
-- **Health & Readiness Check**: `stage_provisioner.py` inspects HA state and detects an uninitialized/empty Home Assistant instance.
-- **Onboarding Wizard Bypass**: Writes `.storage/onboarding` status to bypass the setup wizard automatically.
-- **Dashboard Registry Setup**: Registers `dashboard-sailing` in `.storage/lovelace_dashboards`.
-- **Card Bundle Deployment**: Copies all 7 custom card JS bundles (`card-mod`, `compass-card`, `apexcharts-card`, `windrose-card`, `plotly-graph-card`, `config-template-card`, `windy-boat-card`) from local build and `vendor/` directories into `/config/www/` (and `/config/www/community/`).
-- **Resource Registry Population**: Populates `.storage/lovelace_resources` with proper card path mappings (`/local/<card>.js`).
-- **Real HACS Install**: Downloads the official HACS release (cached under `.cache/hacs/`, ~50MB, requires internet on first run) and installs it into `/config/custom_components/hacs/` — the same real HACS used on Prod, not an emulation. If offline, this step is skipped with a warning and the rest of provisioning (including the NMEA 2000 integration below) still completes.
-- **NMEA 2000 Integration & Data Source**: Installs the vendored `NMEA 2000` custom integration (our own `dnevera/ha-nmea2000` fork) into `/config/custom_components/nmea2000/` and registers a config entry pointed at `127.0.0.1:4001` (`mock_nmea_emulator.py`) — this is what actually creates the N2K sensor entities the dashboard displays.
-- **Sensor & Config Merge**: Merges `sensors-sailing.yaml` into `configuration.yaml` (REST sensors, template entities, automations).
-- **Dashboard Deployment**: Compiles `src/` files into `build/dashboard-sailing.yaml` and deploys it to HA storage.
-- **HTTP Readiness Verification**: Polls `http://localhost:8123/dashboard-sailing/` until HTTP 200 OK is returned.
-
-3. **Access Dashboard**:
-   Open browser and navigate to: `http://localhost:8123/dashboard-sailing/`
-   If HA shows a login form, sign in with **`test` / `test`** (provisioned automatically by `stage_provisioner.py provision_auth()` — see Troubleshooting below).
-
----
-
-## 🔄 2. Complete Re-installation / Reset (`--clean-install`)
-
-Use this workflow if Home Assistant configuration becomes corrupted, custom card resources fail to render, or you want to force a **complete reset and re-installation** of all dashboard components, storage registries, and card bundles.
-
-### Force Re-install on Stage:
 ```bash
 cd ha/sailing-dash
+./install_wizard.sh                          # profile "stage"
+./install_wizard.sh --target prod            # any profile from .env
+./install_wizard.sh --target prod --reinstall
+./install_wizard.sh --list                   # the 8 steps
+./install_wizard.sh --from 5                 # resume at a gate
+```
+
+| Step | What it does |
+|---|---|
+| 1 | profile (`.env`) + prerequisites (python, docker / ssh) |
+| 2 | wipe (only with `--reinstall`, and only a local stage target) |
+| 3 | `build.py` + `fetch_deps.py` |
+| 4 | container up, HACS files + pinned integration + cards delivered, HA provisioned (no deploy yet) |
+| 5 | **GATE A** — you activate HACS in the UI, then `stage_provisioner.py check-hacs` must pass |
+| 6 | **GATE B** — you finish the NMEA 2000 setup, then `deploy.sh --preflight` must pass |
+| 7 | deploy: auto-discovery, sensors, cards, dashboard |
+| 8 | verify (`inspect`, HTTP 200 on the dashboard) |
+
+A gate prints its checklist, waits for Enter, then runs its check. If the check
+fails it says why and waits again — it never continues on a warning, and it
+behaves identically for stage and for a vessel server.
+
+---
+
+## 0. Concepts you need before starting
+
+### Configuring targets — this subproject is self-contained
+
+Everything about environments lives in `ha/sailing-dash/.env`, created from
+[`.env.template`](.env.template):
+
+```bash
+cd ha/sailing-dash
+cp .env.template .env      # then edit
+```
+
+The repo root `.env` / `deploy.conf` belong to the **ydnu-02 manager** and are
+never read from here — that is why a production host configured there can no
+longer leak into a stage deploy.
+
+Targets are **named profiles**, not a fixed stage/prod pair. List them in
+`HA_PROFILES` and describe each one with variables prefixed by the profile name
+uppercased, `-` becoming `_` (`stage-pi5` → `STAGE_PI5_*`). Two Pi5 boxes side by
+side:
+
+```env
+HA_PROFILES="stage stage-pi5 prod"
+
+STAGE_PI5_TRANSPORT="ssh-docker"
+STAGE_PI5_SSH_HOST="pi@stage-pi5.local"
+STAGE_PI5_CONTAINER="homeassistant"
+STAGE_PI5_HA_URL="http://stage-pi5.local:8123"
+STAGE_PI5_GW_HOST="192.168.1.51"
+STAGE_PI5_GW_DATA_PORT="4001"
+
+PROD_TRANSPORT="ssh-docker"
+PROD_SSH_HOST="pi@vessel-pi5.local"
+PROD_CONTAINER="homeassistant"
+PROD_HA_URL="http://vessel-pi5.local:8123"
+PROD_GW_HOST="192.168.1.50"
+PROD_GW_DATA_PORT="4001"
+```
+
+| Field | Meaning |
+|---|---|
+| `<P>_TRANSPORT` | `local-docker` (docker on this machine) or `ssh-docker` (ssh + docker) |
+| `<P>_SSH_HOST` | ssh destination, ignored for `local-docker` |
+| `<P>_CONTAINER` | Home Assistant container name on that machine |
+| `<P>_CONFIG_DIR` | HA config directory inside the container |
+| `<P>_HA_URL` / `<P>_HA_TOKEN` | readiness checks and REST auto-discovery |
+| `<P>_GW_HOST` / `<P>_GW_DATA_PORT` | the YDNU-02 tcp-gw **that instance** connects to (the nmea2000 config entry) |
+
+Pick a profile with `--target`; `--stage` / `--prod` are aliases of
+`--target stage` / `--target prod`:
+
+```bash
+./deploy.sh --target stage-pi5 --install
+PROD_CONTAINER=ha-test ./deploy.sh --prod      # env still overrides .env
+```
+
+A profile whose name starts with `stage` is a *verification* environment — only
+there are provisioning shortcuts (onboarding bypass, `test`/`test`, mock
+emulator) allowed. The gates themselves are **not** relaxed on stage: HACS
+activation and the NMEA 2000 readiness check are the same everywhere, so stage
+really rehearses the vessel procedure. Everything else is treated as a real
+vessel target.
+
+### Nothing external lives in this repo
+
+There is no `vendor/` directory. Every external artifact is declared once in
+[`deps.yaml`](deps.yaml) and downloaded by `fetch_deps.py` into `build/deps/` —
+an ordinary build artifact directory (gitignored, wiped together with `build/`):
+
+```
+build/deps/cards/*.js                            the 6 third-party Lovelace cards
+build/deps/hacs/custom_components/hacs/          HACS itself
+build/deps/nmea2000/custom_components/nmea2000/  our ha-nmea2000 fork, by tag
+```
+
+Everything is pinned to a **tag**, never a branch, so two installs on different
+days produce identical code. If GitHub is unreachable the deploy stops with the
+list of missing artifacts — it never silently falls back to a stale local copy.
+
+```bash
+python3 helpers/fetch_deps.py                 # fetch what's missing
+python3 helpers/fetch_deps.py --force         # re-download everything
+python3 helpers/fetch_deps.py --update-hashes # record sha256 after a version bump
+```
+
+### The nmea2000 library comes from our fork, by tag
+
+`nmea2000 @ git+https://github.com/dnevera/nmea2000.git@cpu-overload-fix`
+
+The same tag applies in all three places: the repo root `requirements.txt` (our
+venv/Docker), the `manifest.json` of the `ha-nmea2000` fork (inside the HA
+container), and `deps.yaml` (the single source of truth). There are **no patch
+scripts** — both fixes are inside the tag. Verify with
+`./deploy.sh --check-ha` from the repo root.
+
+---
+
+## 1. Stage — AUTO stage 1
+
+```bash
+cd ha/sailing-dash
+./run_stage.sh                 # demo mode: local NMEA PGN emulator on the profile's port
+./run_stage.sh --clean-install # force clean re-provisioning
+./run_stage.sh --live --gw-host <gateway-host>   # against a real gateway
+./run_stage.sh --target stage-pi5                # a stage container on another Pi5
+```
+
+This single entry point starts the container, runs `build.py` and
+`fetch_deps.py` exactly once, provisions HA (onboarding bypass, `test`/`test`
+user, HACS, the NMEA 2000 integration from the pinned tag, a config entry on the
+profile's `GW_HOST:GW_DATA_PORT` with `gateway_type: text`), deploys cards,
+sensors and the dashboard, and then watches `src/` for changes.
+
+`./build_docker.sh` is a thin wrapper around the same entry point, kept only for
+muscle memory (`--no-cache` forces a docker image rebuild first).
+
+### Manual steps (Stage)
+
+| # | Step | Why it is manual |
+|---|---|---|
+| 1 | Log into `http://localhost:8123` with `test` / `test` and confirm onboarding really was bypassed | verification, not automatable meaningfully |
+| 2 | Restart HA after custom components were delivered | HA does not pick up `custom_components/` at runtime |
+| 3 | Settings → Devices & services → Add integration → **HACS**, then authorize at `github.com/login/device` | **CANNOT be automated** — needs a live GitHub account |
+
+HACS **files** are installed by the scripts (from the pin in `deps.yaml`),
+identically on Stage and Prod — only the activation above is manual. Check it
+with:
+
+```bash
+python3 helpers/stage_provisioner.py check-hacs --target stage
+```
+
+It reports the two states separately: *not delivered* (our bug — re-run
+`fetch_deps.py` / bootstrap) versus *not activated* (your turn, in the UI).
+
+---
+
+## 2. Prod — AUTO stage 1
+
+Configure the `prod` profile once in `.env` (`PROD_SSH_HOST`, `PROD_CONTAINER`,
+`PROD_HA_URL`, `PROD_GW_HOST`), then:
+
+```bash
+cd ha/sailing-dash
+./deploy.sh --prod --bootstrap      # delivers cards + the pinned integration
+```
+
+`--bootstrap` checks SSH/Docker/container, delivers `build/deps/` artifacts —
+**HACS included**, so Prod and Stage get the exact same files (`scp` +
+`docker cp`) — and restarts HA. It is idempotent: re-running it does not
+duplicate anything. If you prefer letting HACS own the integration/cards
+updates, install them through its UI as well; preflight accepts either outcome.
+
+### Manual steps (Prod)
+
+| # | Step | Why it is manual |
+|---|---|---|
+| 1 | Install Docker and run the `homeassistant` container on the vessel server | outside this pipeline |
+| 2 | Complete the real onboarding: owner account, home name, coordinates, units, timezone | a real installation — `test`/`test` is not acceptable |
+| 3 | Add HACS under Settings → Devices & Services → Add integration (its files are already delivered by `--bootstrap`; `wget -O - https://get.hacs.xyz \| bash -` is only an alternative way to deliver the same files) | UI only |
+| 4 | Activate HACS through the GitHub device-flow (`github.com/login/device`) | **CANNOT be automated** |
+| 5 | Add the custom repository `dnevera/ha-nmea2000`, tag `ydnu-02-usb-tcp-gw`, and install it | HACS UI only (skip if you used `--bootstrap`) |
+| 6 | Install the 6 frontend cards through the HACS UI | HACS UI only (skip if you used `--bootstrap`) |
+| 7 | Create the NMEA 2000 config entry: **Host** = gateway IP, **Port** = `4001`, **Gateway type** = `text` | config-flow, UI only |
+| 8 | Restart HA and wait for raw `nmea2000` entities to appear | needs real traffic on the bus (two-phase announce, SA 64/200) |
+
+Only after step 8 does auto-discovery have anything to map.
+
+---
+
+## 3. AUTO stage 2 — discovery, sensors, dashboard
+
+```bash
+./deploy.sh --prod  --install    # or --stage
+./deploy.sh --prod  --update     # incremental, same pipeline
+```
+
+What runs, in order: `build.py` → `fetch_deps.py` → preflight → Lovelace
+resources merge → `map_nmea_sensors.py` (auto-discovery) → rebuild →
+`configuration.yaml` merge → dashboard upload → restart.
+
+Partial modes: `--resources-only`, `--sensors-only`, `--dashboard-only`.
+
+### Preflight gate
+
+```bash
+./deploy.sh --prod --preflight    # read-only, changes nothing
+```
+
+Checks that the container is running, HACS is **delivered and activated**
+(delegated to `stage_provisioner.py check-hacs`, so "the files are there" is
+never mistaken for "it works"), the NMEA 2000 integration is installed, a config
+entry exists, and raw `nmea2000` entities are present in `core.entity_registry`.
+On failure it stops and prints the exact remaining manual steps. It is enforced
+automatically for `--prod --install` / `--update`; `--skip-preflight` overrides it
+at your own risk. `install_wizard.sh` runs the same check as GATE B for every
+profile, stage included.
+
+### Rollback
+
+```bash
+./deploy.sh --prod --rollback
+```
+
+Restores the newest timestamped backups of `configuration.yaml` and
+`.storage/lovelace_resources` taken by previous deploys, restarts HA, and prunes
+all but the 5 most recent backups.
+
+---
+
+## 4. Verification
+
+```bash
+python3 env_profile.py --list                 # which profiles are declared
+python3 env_profile.py prod                   # what the profile resolves to
+python3 stage_provisioner.py inspect          # what the target actually has
+./deploy.sh --prod --preflight                # readiness of a real target
+../../deploy.sh --check-ha                    # is the installed library our fork?
+```
+
+Dashboard URL: `http://<host>:8123/dashboard-sailing/`.
+
+---
+
+## 5. Examples
+
+### 5.1 Stage (`local-ha`) from scratch, with a full wipe
+
+Everything below runs from `ha/sailing-dash`.
+
+**Step 0 — the profile (once).**
+
+```bash
+cd ha/sailing-dash
+cp .env.template .env          # only if .env does not exist yet
+```
+
+For stage there is usually nothing to edit: `STAGE_TRANSPORT=local-docker`,
+`STAGE_CONTAINER=local-ha`, `STAGE_GW_HOST=127.0.0.1`,
+`STAGE_GW_DATA_PORT=4001`. Check that the profile is picked up:
+
+```bash
+python3 helpers/env_profile.py --list
+python3 helpers/env_profile.py stage
+```
+
+**Step 1 — the wipe (this is what makes the install "clean").**
+
+```bash
+docker compose -f local-ha/docker-compose.yml down -v
+rm -rf local-ha/config          # the whole HA config incl. .storage
+rm -rf build                    # build artifacts incl. build/deps
+```
+
+`local-ha/config` and `build/` are gitignored — nothing of yours lives there.
+
+**Step 2 — the clean install.**
+
+Guided (recommended — stops at the two gates):
+
+```bash
+./install_wizard.sh --target stage --reinstall
+```
+
+Or the unguided one-shot, which provisions *and* deploys without stopping:
+
+```bash
 ./run_stage.sh --clean-install
-# OR
-./deploy.sh --stage --clean-install
 ```
 
-### Force Re-install on Prod:
+What happens automatically, in order:
+
+1. `docker compose up` of the `local-ha` container (`network_mode: host`);
+2. `build.py` + `fetch_deps.py` — exactly once per run; dependencies are fetched
+   by tag into `build/deps/`;
+3. the mock NMEA emulator starts on `127.0.0.1:4001` (demo mode is the default);
+4. `stage_provisioner.py provision --clean-install`: onboarding bypass,
+   `test`/`test` user, HACS, the `nmea2000` integration from tag
+   `ydnu-02-usb-tcp-gw`, and a config entry on `GW_HOST:GW_DATA_PORT` with
+   `gateway_type: text`;
+5. `deploy.sh --target stage --install`: card bundles into `/config/www/`, the
+   `lovelace_resources` merge, `map_nmea_sensors.py` auto-discovery, sensors into
+   `configuration.yaml`, the dashboard into
+   `.storage/lovelace.dashboard_sailing`, HA restart;
+6. a watcher stays on `src/` — edits are rebuilt and redeployed automatically.
+
+Need the HA image rebuilt too: `./build_docker.sh --no-cache` (a thin wrapper
+around the same entry point).
+
+**Step 3 — check.**
+
 ```bash
-cd ha/sailing-dash
-./deploy.sh --prod --clean-install
+python3 helpers/stage_provisioner.py inspect --target stage
+python3 helpers/stage_provisioner.py check-hacs --target stage
+open http://localhost:8123/dashboard-sailing/
 ```
 
-#### What Happens during Clean Re-installation:
-1. **Registry Reset**: Re-generates `.storage/lovelace_dashboards` and `.storage/lovelace_resources` from scratch, resolving any broken or missing resource mappings.
-2. **Card Bundle Overwrite**: Re-copies all 7 vendor and built JS card bundles into `/config/www/` (and `/config/www/community/`).
-3. **Configuration Refresh**: Re-applies base sensor YAML configurations (`sensors-sailing.yaml`) into `configuration.yaml`.
-4. **Dashboard Overwrite**: Overwrites dashboard storage file (`lovelace.dashboard-sailing`) with freshly built `dashboard-sailing.yaml`.
-5. **HA Service Restart**: Triggers a Home Assistant service/container restart and verifies HTTP 200 OK response.
+Log in with `test` / `test`. The dashboard must answer HTTP 200 and show values
+coming from the emulator.
+
+**Manual steps on stage.** Confirm in the UI that onboarding really was
+bypassed, then restart HA and add the **HACS** integration, authorizing at
+`github.com/login/device` — this **cannot be automated**. The HACS *files* are
+already in place (delivered from the pin), so this is activation only; the wizard
+blocks at GATE A until `check-hacs` confirms it. The order of manual steps is
+identical to Prod on purpose.
+
+### 5.2 Partial commands
+
+```bash
+./deploy.sh --target stage --resources-only    # cards + Lovelace resources only
+./deploy.sh --target stage --sensors-only      # sensors only (with auto-discovery)
+./deploy.sh --target stage --dashboard-only    # dashboard only
+SKIP_RESTART=1 ./deploy.sh --target stage ...  # no HA restart
+./run_stage.sh --live --gw-host <host>         # a real gateway, not the emulator
+```
+
+### 5.3 A second Pi5 as a remote stage box
+
+```bash
+# .env
+HA_PROFILES="stage stage-pi5 prod"
+STAGE_PI5_TRANSPORT=ssh-docker
+STAGE_PI5_SSH_HOST=pi@stage-pi5.local
+STAGE_PI5_CONTAINER=homeassistant
+STAGE_PI5_HA_URL=http://stage-pi5.local:8123
+STAGE_PI5_GW_HOST=192.168.1.50
+```
+
+```bash
+./deploy.sh --target stage-pi5 --preflight
+./deploy.sh --target stage-pi5 --install
+```
+
+### 5.4 Prod, end to end
+
+Guided:
+
+```bash
+./install_wizard.sh --target prod
+```
+
+The same thing by hand:
+
+```bash
+./deploy.sh --prod --bootstrap     # AUTO stage 1 (HACS files + integration + cards)
+#  … GATE A: add HACS in the UI, authorize at github.com/login/device …
+python3 helpers/stage_provisioner.py check-hacs --target prod
+#  … GATE B: config entry on <gw>:4001 (type text), restart HA, wait for raw entities …
+./deploy.sh --prod --preflight     # read-only readiness gate
+./deploy.sh --prod --install       # AUTO stage 2
+./deploy.sh --prod --rollback      # if something went wrong
+```
 
 ---
 
-## ⚡ 3. Incremental Stage Deployments (Development)
-
-During active dashboard or sensor development, you do not need to re-provision Home Assistant. Use incremental deployment to recompile and apply changes instantly.
-
-### Mode A: Auto-Rebuild with File Watcher (Recommended for Dev)
-```bash
-cd ha/sailing-dash
-./run_stage.sh
-```
-- Monitors `ha/sailing-dash/src/` for file changes.
-- Automatically compiles YAML files and deploys updated dashboard and sensors on save.
-
-### Mode B: Single-Shot Incremental Update
-```bash
-cd ha/sailing-dash
-./deploy.sh --stage
-```
-
-### Mode C: Partial Updates
-If you only changed a specific component:
-```bash
-# Update dashboard UI layout only
-./deploy.sh --stage --dashboard-only
-
-# Update REST/template sensors only
-./deploy.sh --stage --sensors-only
-
-# Update JS card bundles only
-./deploy.sh --stage --resources-only
-```
-
----
-
-## 🚀 4. Production Deployment (Vessel Pi5)
-
-Deploying to the live vessel Home Assistant instance running on Pi5 (`bumblebee.local`).
-
-### 1. Configure Target Credentials
-Copy `deploy.conf.template` to `deploy.conf` in the project root if not already present:
-```bash
-cp deploy.conf.template deploy.conf
-```
-Configure `deploy.conf` with production details:
-```bash
-DEPLOY_HOST="user@bumblebee.local"
-HA_CONTAINER="homeassistant"
-```
-
-### 2. First-Time Prod Install:
-```bash
-cd ha/sailing-dash
-./deploy.sh --prod --install
-```
-
-### 3. Production Updates (Incremental):
-```bash
-# Standard full update (Sensors + Dashboard + Resources)
-./deploy.sh --prod
-
-# Deploy dashboard only
-./deploy.sh --prod --dashboard-only
-```
-
----
-
-## ⚙️ Summary of Deployment Commands & Flags
-
-| Command | Environment | Mode / Purpose | What it Does |
-| :--- | :--- | :--- | :--- |
-| `./run_stage.sh` | Stage | **Auto-Detect / Watcher** | Checks HA state -> auto-provisions if clean -> starts NMEA emulator -> deploys -> launches watcher |
-| `./run_stage.sh --clean-install` | Stage | **Force Reinstall** | Overwrites storage registries & JS card bundles -> redeploys dashboard -> starts watcher |
-| `./deploy.sh --stage` | Stage | **Incremental Update** | Compiles `src/` and updates HA sensors and dashboard once |
-| `./deploy.sh --stage --clean-install` | Stage | **Force Reinstall** | Forces re-provisioning of storage, card bundles, sensors, and dashboard |
-| `./deploy.sh --prod --install` | Prod | **First-time Install** | Installs card resources, registers dashboard, and deploys configuration to Prod HA |
-| `./deploy.sh --prod` | Prod | **Incremental Update** | Compiles `src/`, shows diff against live Prod dashboard, and deploys updates |
-| `./deploy.sh --prod --dashboard-only` | Prod | **Dashboard Only** | Deploys dashboard YAML only |
-| `./deploy.sh --prod --sensors-only` | Prod | **Sensors Only** | Merges sensors into production `configuration.yaml` |
-
----
-
-## 🔍 Troubleshooting Installation
-
-| Problem | Cause | Solution |
-| :--- | :--- | :--- |
-| `Docker daemon is not running` | Docker process stopped | Start Docker Desktop / `systemctl start docker` |
-| `ModuleNotFoundError: No module named 'yaml'` | Missing Python PyYAML library | Run `pip install pyyaml` |
-| `Permission denied` on deploy | Missing SSH key or sudo privileges | Ensure SSH key is added and sudo has passwordless docker access |
-| HA Dashboard displays "Custom element doesn't exist" | Custom JS resources missing or unregistered | Run `./run_stage.sh --clean-install` or `./deploy.sh --resources-only` |
-| HA stuck on onboarding wizard | Onboarding registry not set | Run `python3 stage_provisioner.py provision` |
-| Dashboard registered but shows completely empty (no cards) on first install | On Stage, `/hacsfiles/...` resources (e.g. `card-mod-studio`) had no vendor fallback, so `deploy.sh` used to abort the whole pipeline before `deploy_dashboard.sh` ever ran, leaving `dashboard-sailing` registered without a content file | Fixed: `deploy.sh` now normalizes `/hacsfiles/` → `/local/` on Stage and skips resources without a vendor bundle instead of aborting. Re-run `./deploy.sh --stage --clean-install` if you still see this on an older checkout. |
-| Stage HA redirects to a login page and there is no known user/password | Stage config had no auth provider/owner user configured, so HA fell back to the login form with no credentials ever created | `stage_provisioner.py`'s `provision_auth()` creates a real owner user via the standard `homeassistant` auth provider with a fixed **login `test` / password `test`**, writing a valid bcrypt hash straight into `.storage/auth` + `.storage/auth_provider.homeassistant`. Just run `./deploy.sh --stage --clean-install` (or `python3 stage_provisioner.py provision --clean-install`) and log in with `test` / `test` at `http://localhost:8123/` — no manual container restart needed, see next row. (An earlier attempt used the `trusted_networks` provider to skip login entirely, but that provider crashed inside HA's auth flow with `TypeError: 'NoneType' object is not subscriptable` — replaced with this real test/test user instead.) |
-| After provisioning, `test`/`test` login (or any `.storage/*` edit) silently reverts / stops working once the container is next stopped or restarted | HA keeps `.storage/auth`, `.storage/onboarding`, etc. loaded **in memory** and flushes that in-memory copy back to disk on container shutdown. If `stage_provisioner.py` edits those files while an *already-running* container still holds an older/stale copy in memory, the next `docker restart` silently overwrites the fresh edit with the stale one (this is how the `test`/`test` credential's `data` field was observed reverting to `null`, crashing login with `TypeError: 'NoneType' object is not subscriptable`) | Fixed at the source: `stage_provisioner.py provision` now automatically **stops** the `local-ha` container before writing to `.storage/`, and **starts** it again afterwards, so HA only ever boots by reading exactly what was just written (no stale in-memory state to flush). `deploy.sh` already calls `stage_provisioner.py provision` first, so this happens transparently. If you ever edit `.storage/` files by hand, always `docker stop local-ha` first, edit, then `docker start local-ha` — never `docker restart`/`docker compose restart` on a container that was running while you edited its storage. |
-| Dashboard/cards render fine but every N2K sensor (COG/SOG, wind, STW, depth, GPS) shows "unavailable" on a fresh Stage install | Stage never had HACS **or** the "NMEA 2000" custom integration (domain `nmea2000`, normally installed via HACS on Prod from **our own fork** `github.com/dnevera/ha-nmea2000` (branch `bumblebee-custom`), added as a HACS custom repository — not the upstream `tomer-w/ha-nmea2000`) — `stage_provisioner.py` used to provision only the dashboard/cards/auth, never the actual data source that connects to `:4001` and creates the N2K entities in the first place | Fixed: `deploy_nmea2000_integration()` installs a vendored copy of the integration (`vendor/custom_components/nmea2000/`, mirrored from our own `dnevera/ha-nmea2000` fork — HACS is just a downloader, copying the same files works identically) into `/config/custom_components/nmea2000/`, and `provision_nmea2000_config_entry()` auto-registers a `gateway_type: text` config entry pointed at `127.0.0.1:4001` (`local-ha` uses `network_mode: host`, reaching `mock_nmea_emulator.py` directly) — both run automatically as part of `stage_provisioner.py provision` / `./deploy.sh --stage --clean-install`. HA installs the integration's pip dependency (our patched `dnevera/nmea2000` git fork, see `requirements-ha.txt` section 0) on next start; give it ~10-20s after `--clean-install` before checking entities. |
-| `local-ha` had the NMEA 2000/frontend cards working but **no HACS integration at all** (no `Settings -> HACS` panel), even though Prod installs everything through HACS | Stage provisioning only ever copied vendored files directly into `/config/custom_components/` and `/config/www/`, bypassing HACS entirely — functionally equivalent for the dashboard, but not a faithful Stage/Prod parity, and made it impossible to add *other* HACS repos through the UI for further testing | `stage_provisioner.py`'s `deploy_hacs_integration()` now downloads the real official HACS release from `github.com/hacs/integration` (cached in `ha/sailing-dash/.cache/hacs/`, gitignored, **not** committed to git — it's a ~50MB prebuilt frontend bundle) and installs it into `/config/custom_components/hacs/`, exactly like HACS's own install script does on a real HA instance. This is not a copy-of-files emulation of "what HACS would install" — it's the actual HACS integration. Runs automatically as part of `stage_provisioner.py provision`; requires internet access on the machine running `docker` the first time (subsequent runs reuse the cache). If offline, HACS install is skipped with a `WARN` and the rest of provisioning (dashboard, cards, NMEA 2000 data source) still completes normally, since none of it ever depended on HACS being present. To finish activating HACS itself (GitHub device-flow login, adding `dnevera/ha-nmea2000` as a custom repository through the real UI instead of the vendored copy), open `Settings -> Devices & Services -> HACS` once in the browser, same one-time step as a fresh Prod install. |
-| HA container **crash-loops** right after `--clean-install` (`docker logs local-ha` shows `KeyError: 'subentries'` in `config_entries.async_initialize()`, dashboard never comes up) | The `nmea2000` config entry written by `provision_nmea2000_config_entry()` was missing the `subentries` key that this HA core version requires on every config entry at boot (a schema field added after this script was first written) | Fixed: the entry dict now always includes `"subentries": {}`, and re-running `provision` on an entry created by an older version of this script backfills it via `existing.setdefault("subentries", {})` — no manual `.storage/` editing needed, just re-run `./deploy.sh --stage --clean-install` (or `python3 stage_provisioner.py provision --clean-install`). |
+See [HACS_SETUP.md](HACS_SETUP.md) for the HACS and NMEA 2000 UI details,
+[README.md](README.md) for the architecture, and [TEST.md](TEST.md) for the
+verification procedures.

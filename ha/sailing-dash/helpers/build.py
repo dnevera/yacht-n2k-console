@@ -12,7 +12,10 @@ import shutil
 import sys
 import yaml
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+# This script lives in ha/sailing-dash/helpers/; every path below is relative to
+# the subproject root one level up (src/, build/, deps.yaml, .env stay there).
+HELPERS_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(HELPERS_DIR)
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 BUILD_DIR = os.path.join(ROOT_DIR, "build")
 COMMON_JS_DIR = os.path.join(SRC_DIR, "js", "common")

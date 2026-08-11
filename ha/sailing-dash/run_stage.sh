@@ -9,9 +9,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Ensure build script runs first
-echo "== Executing pre-launch build == "
-python3 "${SCRIPT_DIR}/build.py"
-
-# Delegate to Stage orchestrator
-exec python3 "${SCRIPT_DIR}/start_stage.py" "$@"
+# This is the single Stage entry point. build.py is NOT called here: deploy.sh
+# runs it exactly once per pipeline, together with fetch_deps.py.
+exec python3 "${SCRIPT_DIR}/helpers/start_stage.py" "$@"

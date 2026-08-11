@@ -5,8 +5,13 @@
 # dashboard-sailing.yaml (the Lovelace dashboard itself).
 #
 # USAGE
-#   ./deploy.sh --stage               # deploy to local Stage HA container (local-ha)
-#   ./deploy.sh --prod  [user@host]   # deploy to production HA host via SSH (bumblebee)
+#   ./deploy.sh --stage                 # deploy to the "stage" target profile
+#   ./deploy.sh --prod  [user@host]     # deploy to the "prod" target profile
+#   ./deploy.sh --target <profile>      # deploy to ANY profile from .env (e.g. stage-pi5)
+#
+#   Target profiles are declared in ha/sailing-dash/.env (see .env.template):
+#   transport, ssh host, container, config dir, HA url/token and the YDNU-02
+#   tcp-gw of that instance. --stage/--prod are aliases of --target stage/prod.
 #
 #   Sub-mode options (work for both --stage and --prod):
 #   ./deploy.sh [--stage|--prod] --install
@@ -15,109 +20,99 @@
 #   ./deploy.sh [--stage|--prod] --dashboard-only
 #   ./deploy.sh [--stage|--prod] --sensors-only
 #
+#   Prod bring-up:
+#   ./deploy.sh --prod --bootstrap    # push cards + integration from build/deps/
+#   ./deploy.sh --prod --preflight    # only check whether the target is ready
+#   ./deploy.sh --prod --rollback     # restore the last configuration/lovelace backup
+#
+# PREFLIGHT GATE
+#   Sensor auto-discovery reads an entity registry that only exists AFTER the
+#   manual steps (HACS device-flow, NMEA2000 config entry on the tcp-gw, real
+#   traffic on the bus). --install/--update therefore refuse to run against an
+#   unprepared instance and print exactly what is still missing instead of
+#   silently deploying a dashboard bound to nothing. Use --skip-preflight to
+#   override at your own risk.
+#
 # REQUIRES
 #   - python3 + PyYAML on THIS machine
-#   - Docker running locally (for --stage) or SSH target (for --prod)
+#   - ha/sailing-dash/.env for anything beyond the two default profiles
+#   - Docker running locally (local-docker profiles) or SSH access (ssh-docker)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Everything that is not an entry point lives in helpers/ (build.py, fetch_deps.py,
+# stage_provisioner.py, deploy_sensors.sh, deploy_dashboard.sh, lib/, ...).
+HELPERS_DIR="${SCRIPT_DIR}/helpers"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-VENDOR_DIR="${SCRIPT_DIR}/vendor"
 CARDS_DIR="${SCRIPT_DIR}/build/cards"
+DEPS_CARDS_DIR="${SCRIPT_DIR}/build/deps/cards"
 RESOURCES_FILE="${SCRIPT_DIR}/build/lovelace-resources.yaml"
+
+# shellcheck source=lib/ha_target.sh
+source "${HELPERS_DIR}/lib/ha_target.sh"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
 TARGET_ENV="stage"
 MODE="update"
 HOST_ARG=""
+SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-0}"
+BACKUP_KEEP=5
 
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+    arg="$1"
     case "${arg}" in
         --stage)          TARGET_ENV="stage" ;;
         --prod)           TARGET_ENV="prod" ;;
+        --target)         TARGET_ENV="${2:?--target needs a profile name}"; shift ;;
+        --target=*)       TARGET_ENV="${arg#*=}" ;;
         --install|--clean-install) MODE="install" ;;
         --update)         MODE="update" ;;
         --resources-only) MODE="resources-only" ;;
         --dashboard-only) MODE="dashboard-only" ;;
         --sensors-only)   MODE="sensors-only" ;;
+        --bootstrap)      MODE="bootstrap" ;;
+        --preflight)      MODE="preflight" ;;
+        --rollback)       MODE="rollback" ;;
+        --skip-preflight) SKIP_PREFLIGHT=1 ;;
         -h|--help)
             sed -n '2,/^set -euo pipefail/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
+            # A bare argument is an ssh destination; it only overrides the host of
+            # the selected profile, never the profile itself (unless still default).
             HOST_ARG="${arg}"
-            TARGET_ENV="prod" # Explicit host parameter implies prod
+            if [[ "${TARGET_ENV}" == "stage" ]]; then
+                TARGET_ENV="prod"
+            fi
             ;;
     esac
+    shift
 done
 
-# ── Resolve target container / SSH settings ─────────────────────────────────
-if [[ "${TARGET_ENV}" == "stage" ]]; then
-    HA_CONTAINER="${HA_CONTAINER:-local-ha}"
-    DEPLOY_HOST="localhost"
-    echo "== Sailing dashboard deploy (mode: ${MODE}, env: STAGE) → Container: ${HA_CONTAINER} =="
+# ── Resolve the target profile (transport / host / container) ───────────────
+ha_target_init "${TARGET_ENV}" "${HOST_ARG}"
+# NOTE: no ${VAR^^} anywhere in these scripts — macOS ships bash 3.2, where case
+# conversion expansion does not exist ("bad substitution").
+# A profile whose name starts with "stage" is a verification environment: only
+# there are provisioning shortcuts (onboarding bypass, test/test, mock emulator)
+# allowed, and only there is the preflight gate relaxed. Everything else is
+# treated as a real target.
+IS_STAGE=0
+case "${TARGET_ENV}" in stage|stage-*|stage_*) IS_STAGE=1 ;; esac
 
-    ha_mkdir() {
-        docker exec "${HA_CONTAINER}" mkdir -p "$1" 2>/dev/null || true
-    }
-
-    ha_cat() {
-        docker exec "${HA_CONTAINER}" cat "$1" 2>/dev/null
-    }
-
-    ha_cp_to_container() {
-        local src="$1"
-        local dest="$2"
-        docker cp "${src}" "${HA_CONTAINER}:${dest}"
-    }
-
-    ha_restart() {
-        echo "Restarting local container ${HA_CONTAINER} ..."
-        docker restart "${HA_CONTAINER}"
-    }
-else
-    if [[ -n "${HOST_ARG}" ]]; then
-        DEPLOY_HOST="${HOST_ARG}"
-        HA_CONTAINER="${HA_CONTAINER:-homeassistant}"
-    elif [[ -f "${PROJECT_ROOT}/deploy.conf" ]]; then
-        # shellcheck source=/dev/null
-        source "${PROJECT_ROOT}/deploy.conf"
-    else
-        echo "ERROR: no host given and ${PROJECT_ROOT}/deploy.conf not found." >&2
-        echo "       Usage: $0 --prod [user@host]" >&2
-        exit 1
-    fi
-
-    SSH="ssh -o ConnectTimeout=8 ${DEPLOY_HOST}"
-    SCP="scp -q"
-    echo "== Sailing dashboard deploy (mode: ${MODE}, env: PROD) → ${DEPLOY_HOST} (container: ${HA_CONTAINER}) =="
-
-    ha_mkdir() {
-        ${SSH} "sudo docker exec ${HA_CONTAINER} mkdir -p $1" 2>/dev/null || true
-    }
-
-    ha_cat() {
-        ${SSH} "sudo docker exec ${HA_CONTAINER} cat $1" 2>/dev/null
-    }
-
-    ha_cp_to_container() {
-        local src="$1"
-        local dest="$2"
-        local filename="$(basename "${src}")"
-        ${SCP} "${src}" "${DEPLOY_HOST}:/tmp/${filename}" < /dev/null
-        ${SSH} "sudo docker cp /tmp/${filename} ${HA_CONTAINER}:${dest} && rm -f /tmp/${filename}" < /dev/null
-    }
-
-    ha_restart() {
-        echo "Restarting remote container ${HA_CONTAINER} on ${DEPLOY_HOST} ..."
-        ${SSH} "sudo docker restart ${HA_CONTAINER}"
-    }
-fi
+echo "== Sailing dashboard deploy (mode: ${MODE}, profile: ${TARGET_ENV}) → ${HA_HOST} (container: ${HA_CONTAINER}, transport: ${HA_TRANSPORT}) =="
 
 echo "== Running build.py before deploy =="
-python3 "${SCRIPT_DIR}/build.py"
+python3 "${HELPERS_DIR}/build.py"
 
-if [[ "${TARGET_ENV}" == "stage" ]]; then
+echo "== Fetching external dependencies declared in deps.yaml =="
+python3 "${HELPERS_DIR}/fetch_deps.py"
+
+# build.py has run once for this pipeline; the sub-scripts must not repeat it.
+export SAILING_BUILD_DONE=1
+
+if [[ "${IS_STAGE}" == "1" && "${MODE}" != "preflight" && "${MODE}" != "rollback" ]]; then
     echo "== Checking Stage Home Assistant auto-provisioning =="
     PROVISION_FLAGS=("--container" "${HA_CONTAINER}")
     if [[ "${MODE}" == "install" ]]; then
@@ -126,7 +121,8 @@ if [[ "${TARGET_ENV}" == "stage" ]]; then
     # Do not let a provisioning warning/error abort the whole deploy pipeline (set -e):
     # resource/dashboard/sensors deploy steps below must still run so a partial
     # provisioning failure never leaves the dashboard registered-but-empty.
-    python3 "${SCRIPT_DIR}/stage_provisioner.py" provision "${PROVISION_FLAGS[@]}" || \
+    PROVISION_FLAGS+=("--target" "${TARGET_ENV}")
+    python3 "${HELPERS_DIR}/stage_provisioner.py" provision "${PROVISION_FLAGS[@]}" || \
         echo "WARN: stage_provisioner.py reported issues — continuing with resource/dashboard deploy." >&2
 fi
 
@@ -145,94 +141,23 @@ deploy_resources() {
         echo '{"version":1,"minor_version":1,"key":"lovelace_resources","data":{"items":[]}}' > "${REMOTE_RES}"
     fi
 
-    if [[ "${TARGET_ENV}" == "prod" ]]; then
+    if [[ "${HA_TRANSPORT}" == "ssh-docker" ]]; then
         ${SCP} "${REMOTE_RES}" "${DEPLOY_HOST}:~/${BACKUP_NAME}" 2>/dev/null || true
     fi
 
-    # Merge resource list
-    # NOTE: On STAGE (no HACS installed), /hacsfiles/... resources are normalized
-    # to /local/<filename> and served from CARDS_DIR/VENDOR_DIR fallback bundles,
-    # mirroring stage_provisioner.py's provision_resource_registry() logic. This
-    # prevents a missing HACS-only bundle (e.g. card-mod-studio, an optional debug
-    # tool with no vendor fallback) from aborting the ENTIRE deploy pipeline before
-    # deploy_sensors.sh/deploy_dashboard.sh ever run — which previously left the
-    # dashboard registered but empty (no lovelace.<id> content file) on first install.
-    python3 - "${RESOURCES_FILE}" "${REMOTE_RES}" "${MERGED_RES}" "${TARGET_ENV}" "${CARDS_DIR}" "${VENDOR_DIR}" <<'PYEOF'
-import json
-import os
-import sys
-import uuid
-import yaml
-from urllib.parse import urlsplit
+    # merge_lovelace_resources.py only distinguishes stage from prod (it rewrites
+    # /hacsfiles/ to /local/ on stage), so pass the class, not the profile name.
+    local MERGE_ENV="prod"
+    if [[ "${IS_STAGE}" == "1" ]]; then
+        MERGE_ENV="stage"
+    fi
 
-resources_yaml, remote_json, out_json, target_env, cards_dir, vendor_dir = sys.argv[1:7]
-
-with open(resources_yaml) as f:
-    wanted = (yaml.safe_load(f) or {}).get("resources", [])
-wanted = [r for r in wanted if urlsplit(r["url"]).path.startswith(("/local/", "/hacsfiles/"))]
-
-
-def has_local_bundle(filename):
-    return os.path.isfile(os.path.join(cards_dir, filename)) or os.path.isfile(os.path.join(vendor_dir, filename))
-
-
-# On stage (no HACS available), normalize /hacsfiles/ URLs to /local/<filename> so
-# they resolve against our own build/vendor card bundles. Drop any resource that
-# has neither a local build artifact nor a vendor fallback bundle instead of
-# failing the whole deploy.
-normalized = []
-for entry in wanted:
-    url = entry["url"]
-    rtype = entry.get("type", "module")
-    if target_env == "stage" and url.startswith("/hacsfiles/"):
-        filename = url.rsplit("/", 1)[-1]
-        if not has_local_bundle(filename):
-            print(f"SKIP   {url} (no local/vendor bundle for {filename}, not required on stage)")
-            continue
-        normalized.append({"url": f"/local/{filename}", "type": rtype})
-    else:
-        normalized.append(entry)
-wanted = normalized
-
-try:
-    with open(remote_json) as f:
-        registry = json.load(f)
-except Exception:
-    registry = {"version": 1, "minor_version": 1, "key": "lovelace_resources", "data": {"items": []}}
-
-items = registry.get("data", {}).get("items", [])
-
-
-def base_path(url):
-    return urlsplit(url).path
-
-
-existing_by_path = {base_path(it["url"]): it for it in items}
-
-to_upload = []
-for entry in wanted:
-    path = base_path(entry["url"])
-    filename = path.rsplit("/", 1)[-1]
-    existing = existing_by_path.get(path)
-    if existing is None:
-        items.append({"id": uuid.uuid4().hex[:24], "url": entry["url"], "type": entry.get("type", "module")})
-        print(f"ADD    {entry['url']}")
-    elif existing["url"] != entry["url"]:
-        existing["url"] = entry["url"]
-        print(f"UPDATE {path} -> {entry['url']}")
-    else:
-        print(f"OK     {entry['url']} (already registered)")
-    if path.startswith("/local/"):
-        to_upload.append(filename)
-
-registry["data"]["items"] = items
-
-with open(out_json, "w") as f:
-    json.dump(registry, f, indent=2)
-
-with open(out_json + ".files", "w") as f:
-    f.write("\n".join(to_upload) + "\n")
-PYEOF
+    # Merge the resource list. merge_lovelace_resources.py is the SINGLE
+    # implementation of this merge — stage_provisioner.py imports the very same
+    # module, so Stage and Prod can never drift apart.
+    python3 "${HELPERS_DIR}/merge_lovelace_resources.py" \
+        "${RESOURCES_FILE}" "${REMOTE_RES}" "${MERGED_RES}" \
+        "${MERGE_ENV}" "${CARDS_DIR}" "${DEPS_CARDS_DIR}"
 
     FILES_TO_UPLOAD=()
     while IFS= read -r line; do
@@ -245,10 +170,10 @@ PYEOF
     for filename in "${FILES_TO_UPLOAD[@]}"; do
         LOCAL_JS="${CARDS_DIR}/${filename}"
         if [[ ! -f "${LOCAL_JS}" ]]; then
-            LOCAL_JS="${VENDOR_DIR}/${filename}"
+            LOCAL_JS="${DEPS_CARDS_DIR}/${filename}"
         fi
         if [[ ! -f "${LOCAL_JS}" ]]; then
-            echo "WARN: ${filename} not found in ${CARDS_DIR} nor ${VENDOR_DIR} — skipping upload (resource may fail to load)." >&2
+            echo "WARN: ${filename} not found in ${CARDS_DIR} nor ${DEPS_CARDS_DIR} — run 'python3 helpers/fetch_deps.py'; skipping upload (resource may fail to load)." >&2
             continue
         fi
         echo "Uploading ${filename} -> ${HA_CONTAINER}:/config/www/${filename} ..."
@@ -264,27 +189,192 @@ PYEOF
     fi
 }
 
+# ── preflight(): is this instance actually ready for a dashboard deploy? ─────
+# Returns 0 when everything is in place, 1 otherwise (printing the remaining
+# manual steps). Read-only: touches nothing in /config.
+preflight() {
+    echo "-- Step: preflight (${TARGET_ENV}) --"
+    local missing=()
+
+    if ! ha_container_running; then
+        echo "PREFLIGHT: container '${HA_CONTAINER}' is not running on ${HA_HOST}" >&2
+        echo "  Start it first:  docker start ${HA_CONTAINER}" >&2
+        return 1
+    fi
+    echo "OK     container ${HA_CONTAINER} is running"
+
+    # HACS has TWO independent states and conflating them is what used to let a
+    # not-really-working instance pass this gate: the files are delivered by us
+    # (automated), while activation happens only in the UI via the GitHub
+    # device-flow (cannot be automated). check-hacs reports them separately.
+    if python3 "${HELPERS_DIR}/stage_provisioner.py" check-hacs --target "${TARGET_ENV}" \
+            --container "${HA_CONTAINER}"; then
+        echo "OK     HACS is delivered and activated"
+    else
+        missing+=("Fix HACS — see the check-hacs output above (it says whether the files are missing, which we can deliver automatically, or whether activation in the UI is missing, which you must do by hand at github.com/login/device).")
+    fi
+
+    if ha_cat "/config/custom_components/nmea2000/manifest.json" | grep -q '"domain"'; then
+        echo "OK     NMEA 2000 integration is installed"
+    else
+        missing+=("Install the NMEA 2000 integration from our fork: HACS -> Integrations -> Custom repositories -> dnevera/ha-nmea2000 (tag ydnu-02-usb-tcp-gw), then restart Home Assistant.")
+    fi
+
+    # TRAP: HA writes .storage compactly ('"domain":"nmea2000"') while a
+    # hand-formatted/provisioned file may have a space after the colon. Always
+    # match with an optional-whitespace regex, never a fixed string.
+    if ha_cat "/config/.storage/core.config_entries" | grep -Eq '"domain": *"nmea2000"'; then
+        echo "OK     an nmea2000 config entry exists"
+    else
+        missing+=("Create the NMEA 2000 config entry in the UI: Host = the gateway's IP, Port = 4001, Gateway type = text.")
+    fi
+
+    local raw_count
+    raw_count=$(ha_cat "/config/.storage/core.entity_registry" | grep -Eoc '"platform": *"nmea2000"' || true)
+    if [[ "${raw_count:-0}" -gt 0 ]]; then
+        echo "OK     ${raw_count} raw nmea2000 entities in the registry"
+    else
+        missing+=("Wait for raw nmea2000 entities to appear: the bus must carry traffic so the devices announce themselves (two-phase announce, SA 64/200). Auto-discovery has nothing to map until then.")
+    fi
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        echo "PREFLIGHT: target is ready ✓"
+        return 0
+    fi
+
+    echo "" >&2
+    echo "PREFLIGHT FAILED — do these MANUAL steps first (nothing was changed):" >&2
+    local i=1
+    for item in "${missing[@]}"; do
+        echo "  ${i}. ${item}" >&2
+        i=$((i + 1))
+    done
+    echo "" >&2
+    echo "Then re-run: $0 --target ${TARGET_ENV} --install" >&2
+    echo "(Override with --skip-preflight only if you know what you are doing.)" >&2
+    return 1
+}
+
+# ── bootstrap(): push cards + integration from build/deps/ into the target ───
+# Idempotent. Use it when the target has no HACS yet, or to guarantee the exact
+# pinned tag is what actually sits in /config.
+bootstrap_target() {
+    echo "-- Step: bootstrap (${TARGET_ENV}) --"
+
+    if ! ha_container_running; then
+        echo "ERROR: container '${HA_CONTAINER}' is not running on ${HA_HOST}." >&2
+        echo "       Install Docker and start Home Assistant there first." >&2
+        exit 1
+    fi
+
+    # HACS files are delivered for EVERY profile, not just stage: keeping Prod on a
+    # "install it by hand with wget" path is exactly how the two environments drift.
+    local hacs_dir="${SCRIPT_DIR}/build/deps/hacs/custom_components/hacs"
+    if [[ -d "${hacs_dir}" ]]; then
+        echo "Delivering HACS (pinned release) -> /config/custom_components/hacs ..."
+        ha_cp_dir_to_container "${hacs_dir}" "/config/custom_components/hacs"
+    else
+        echo "ERROR: ${hacs_dir} is missing — run 'python3 helpers/fetch_deps.py' first." >&2
+        exit 1
+    fi
+
+    local integration_dir="${SCRIPT_DIR}/build/deps/nmea2000/custom_components/nmea2000"
+    if [[ -d "${integration_dir}" ]]; then
+        echo "Delivering the NMEA 2000 integration (pinned tag) -> /config/custom_components/nmea2000 ..."
+        ha_cp_dir_to_container "${integration_dir}" "/config/custom_components/nmea2000"
+    else
+        echo "ERROR: ${integration_dir} is missing — run 'python3 helpers/fetch_deps.py' first." >&2
+        exit 1
+    fi
+
+    ha_mkdir "/config/www"
+    local card
+    for card in "${DEPS_CARDS_DIR}"/*.js "${CARDS_DIR}"/*.js; do
+        [[ -f "${card}" ]] || continue
+        echo "Delivering $(basename "${card}") -> /config/www/"
+        ha_cp_to_container "${card}" "/config/www/$(basename "${card}")"
+    done
+
+    ha_restart
+    echo "Bootstrap done. HACS files, the pinned integration and the card bundles are in"
+    echo "place. What is left CANNOT be automated — do it in the Home Assistant UI:"
+    echo "  1. Settings -> Devices & services -> Add integration -> HACS,"
+    echo "     authorize at https://github.com/login/device"
+    echo "  2. Add the NMEA 2000 config entry (Host = the gateway, Port = 4001, type 'text')"
+    echo "Verify with:  python3 helpers/stage_provisioner.py check-hacs --target ${TARGET_ENV}"
+    echo "Then run:     $0 --target ${TARGET_ENV} --install"
+}
+
+# ── rollback(): restore the newest backup taken by a previous deploy ─────────
+rollback_target() {
+    echo "-- Step: rollback (${TARGET_ENV}) --"
+    if [[ "${HA_TRANSPORT}" != "ssh-docker" ]]; then
+        echo "ERROR: rollback restores backups stored on the target's home directory," >&2
+        echo "       which only exists for ssh-docker targets." >&2
+        exit 1
+    fi
+
+    local restored=0 newest
+    local pair
+    for pair in "configuration.yaml:/config/configuration.yaml" \
+                "lovelace_resources:/config/.storage/lovelace_resources"; do
+        local prefix="${pair%%:*}" dest="${pair##*:}"
+        newest=$(${SSH} "ls -1t ~/${prefix}.*.bak 2>/dev/null | head -1" < /dev/null || true)
+        if [[ -z "${newest}" ]]; then
+            echo "(no backup found for ${prefix} — skipping)"
+            continue
+        fi
+        echo "Restoring ${newest} -> ${dest}"
+        ${SSH} "sudo docker cp ${newest} ${HA_CONTAINER}:${dest}" < /dev/null
+        restored=$((restored + 1))
+        # Keep only the newest BACKUP_KEEP backups of this kind.
+        ${SSH} "ls -1t ~/${prefix}.*.bak 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs -r rm -f" < /dev/null || true
+    done
+
+    if [[ ${restored} -eq 0 ]]; then
+        echo "Nothing to roll back." >&2
+        exit 1
+    fi
+    ha_restart
+    echo "Rollback done (${restored} file(s) restored)."
+}
+
 # Subscript execution helpers
-SUB_ENV_FLAGS=("--${TARGET_ENV}")
-if [[ "${TARGET_ENV}" == "prod" && -n "${DEPLOY_HOST}" ]]; then
-    SUB_ENV_FLAGS+=("${DEPLOY_HOST}")
+SUB_ENV_FLAGS=("--target" "${TARGET_ENV}")
+if [[ "${HA_TRANSPORT}" == "ssh-docker" && -n "${HA_HOST}" ]]; then
+    SUB_ENV_FLAGS+=("${HA_HOST}")
 fi
 
 case "${MODE}" in
+    bootstrap)
+        bootstrap_target
+        ;;
+    preflight)
+        preflight
+        ;;
+    rollback)
+        rollback_target
+        ;;
     install|update)
+        # The gate is enforced on real targets only: Stage is provisioned by
+        # stage_provisioner.py right above and may legitimately have no raw
+        # entities yet (the mock emulator has just started).
+        if [[ "${IS_STAGE}" != "1" && "${SKIP_PREFLIGHT}" != "1" ]]; then
+            preflight || exit 1
+        fi
         deploy_resources
-        SKIP_RESTART=1 "${SCRIPT_DIR}/deploy_sensors.sh" "${SUB_ENV_FLAGS[@]}"
-        "${SCRIPT_DIR}/deploy_dashboard.sh" "${SUB_ENV_FLAGS[@]}"
+        SKIP_RESTART=1 "${HELPERS_DIR}/deploy_sensors.sh" "${SUB_ENV_FLAGS[@]}"
+        "${HELPERS_DIR}/deploy_dashboard.sh" "${SUB_ENV_FLAGS[@]}"
         ;;
     resources-only)
         deploy_resources
         ;;
     dashboard-only)
-        "${SCRIPT_DIR}/deploy_dashboard.sh" "${SUB_ENV_FLAGS[@]}"
+        "${HELPERS_DIR}/deploy_dashboard.sh" "${SUB_ENV_FLAGS[@]}"
         ;;
     sensors-only)
-        "${SCRIPT_DIR}/deploy_sensors.sh" "${SUB_ENV_FLAGS[@]}"
+        "${HELPERS_DIR}/deploy_sensors.sh" "${SUB_ENV_FLAGS[@]}"
         ;;
 esac
 
-echo "== Done (mode: ${MODE}, env: ${TARGET_ENV}) =="
+echo "== Done (mode: ${MODE}, profile: ${TARGET_ENV}) =="

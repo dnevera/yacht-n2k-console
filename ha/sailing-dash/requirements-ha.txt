@@ -8,40 +8,41 @@
 # HACS-installed frontend custom cards, plus the deploy tooling requirements
 # already covered in the repo root requirements.txt.
 #
-# See ha/sailing-dash/README.md ("Setting this up from scratch on a new HA
-# instance") for the exact deploy order/commands.
+# See ha/sailing-dash/INSTALLATION.md for the exact deploy order/commands, and
+# ha/sailing-dash/deps.yaml for the pinned version of every artifact below.
+#
+# NOTHING here is committed into this repo: every external artifact is declared
+# in `deps.yaml` and downloaded by `fetch_deps.py` into `build/deps/` (an
+# ordinary build directory, gitignored). There is no `vendor/` folder.
 
 # ── 0. NMEA 2000 integration (domain "nmea2000") — THE ACTUAL DATA SOURCE ───
-# https://github.com/dnevera/ha-nmea2000 (our own fork, branch
-# "bumblebee-custom", of upstream tomer-w/ha-nmea2000) — installed via HACS
-# (custom repository) on Prod (bumblebee.local), NOT one of the 3 frontend
-# cards in section 2 below. This is the integration that connects to
-# ydnu02_tcp_gateway (or, on Stage, local-ha/mock_nmea_emulator.py) on :4001
-# and creates ALL N2K-derived sensor entities (COG/SOG, wind angle/speed,
-# STW, depth, GPS lat/lon) this dashboard depends on — without it,
-# dashboard-sailing.yaml renders with a fully provisioned Lovelace/cards but
-# every N2K entity is "unavailable"/empty.
-# For a LONG TIME this was missing from Stage entirely: no HACS, no
-# /config/custom_components/nmea2000, no config entry — `stage_provisioner.py`
-# only ever provisioned the dashboard/cards/auth, never the data source itself.
-# Fixed: `stage_provisioner.py`'s `deploy_nmea2000_integration()` +
-# `provision_nmea2000_config_entry()` now install a vendored copy of the
-# integration (`ha/sailing-dash/vendor/custom_components/nmea2000/`, mirrored
-# from OUR OWN fork above, whose manifest.json is already patched to require
-# our own `dnevera/nmea2000` library fork — HACS is just a downloader, copying
-# the same files has the same runtime effect) and auto-register a
-# `gateway_type: text` config entry pointed at `127.0.0.1:4001` (local-ha
-# uses `network_mode: host`, so it reaches `mock_nmea_emulator.py` directly).
-# HA then installs the manifest's own pip requirement automatically on first
-# load — pinned in our vendored `manifest.json` to the SAME patched git fork
-# as this project's own `requirements.txt`
-# (`dnevera/nmea2000@fix/pgn-126996-hash-collision-per-source`), so Bug 1/
-# Bug 2 from the nmea2000-setup skill are already fixed, no separate
-# `--patch-ha` step needed on Stage.
-# On Prod, this is still installed for real through HACS (Settings -> HACS ->
-# Integrations -> Custom repositories -> add `dnevera/ha-nmea2000`) pointed
-# at the real gateway's host:4001 — the vendored copy here is Stage-only
-# tooling.
+# https://github.com/dnevera/ha-nmea2000 — OUR OWN fork of upstream
+# tomer-w/ha-nmea2000, pinned to the TAG `ydnu-02-usb-tcp-gw` (commit
+# 2cdef78c6df2). This is the integration that connects to ydnu02_tcp_gateway
+# (or, on Stage, local-ha/mock_nmea_emulator.py) on :4001 and creates ALL
+# N2K-derived sensor entities (COG/SOG, wind angle/speed, STW, depth, GPS
+# lat/lon) this dashboard depends on — without it, dashboard-sailing.yaml
+# renders with a fully provisioned Lovelace/cards but every N2K entity is
+# "unavailable"/empty.
+#
+# Prod:  installed through HACS as a custom repository (Settings -> HACS ->
+#        Integrations -> Custom repositories -> `dnevera/ha-nmea2000`), then a
+#        config entry created by hand against the real gateway's host:4001.
+# Stage: `stage_provisioner.py` downloads the same tag through `fetch_deps.py`
+#        into `build/deps/nmea2000/` and copies it into
+#        /config/custom_components/nmea2000/, then auto-registers a
+#        `gateway_type: text` config entry pointed at `127.0.0.1:4001` (the
+#        container uses `network_mode: host`, so it reaches the mock emulator
+#        directly). HACS is just a downloader — copying the same files has the
+#        identical runtime effect.
+#
+# HA installs the integration's own pip requirement automatically on first
+# load: its manifest.json requires the nmea2000 LIBRARY from our fork's tag
+# `dnevera/nmea2000@cpu-overload-fix` — the same pin as this project's root
+# requirements.txt. Both library bugs (ioclient EOF spin-loop, PGN 126996 hash
+# collision) are fixed inside that tag, so there are no patch steps anywhere.
+# `./deploy.sh --check-ha` (repo root) verifies the installed library really is
+# the fork.
 #
 # ── 1. HACS (Home Assistant Community Store) ────────────────────────────────
 # Required on PROD to install the NMEA 2000 integration above (as a custom
@@ -50,21 +51,17 @@
 # install via the official HACS installer:
 # https://hacs.xyz/docs/use/download/download/
 # then add HACS through Settings -> Devices & Services -> Add Integration.
-# Also installed for real on Stage (`local-ha`) since 2026-08-10:
-# `stage_provisioner.py`'s `deploy_hacs_integration()` downloads the SAME
-# official HACS release used on Prod (github.com/hacs/integration, cached
-# under `ha/sailing-dash/.cache/hacs/`, gitignored — not vendored/committed,
-# it's a ~50MB prebuilt frontend bundle) into `/config/custom_components/hacs/`,
-# so Stage genuinely has HACS installed, not just a copy-only emulation of
-# what it would do. The one manual step that can't be automated headlessly is
+# Also installed for real on Stage: `stage_provisioner.py`'s
+# `deploy_hacs_integration()` uses the SAME official HACS release used on Prod
+# (github.com/hacs/integration, declared in deps.yaml, downloaded into
+# `build/deps/hacs/`) and copies it into `/config/custom_components/hacs/`, so
+# Stage genuinely has HACS installed, not a copy-only emulation of what it
+# would do. The one manual step that CANNOT be automated headlessly is
 # completing HACS's GitHub device-flow login once in the HA UI (Settings ->
 # Devices & Services -> HACS) to activate it, same as on a fresh Prod install
-# — after that you can add `dnevera/ha-nmea2000` as a custom repository
-# through the real HACS UI instead of relying on the vendored
-# `deploy_nmea2000_integration()` copy below. If the container has no
-# internet access during provisioning, HACS install is skipped with a
-# warning and the vendored nmea2000/card install below still runs regardless
-# (it never depended on HACS being present).
+# — after that you can add `dnevera/ha-nmea2000` as a custom repository through
+# the real HACS UI. Without network access the deploy fails with an explicit
+# list of the missing artifacts instead of silently using a stale local copy.
 
 # ── 2. HACS Frontend custom cards (Settings -> HACS -> Frontend) ────────────
 # Install these three, in this order (card-mod is a soft dependency others
@@ -102,7 +99,10 @@
 # registered as a Lovelace resource (/local/config-template-card.js).
 
 # ── 2d. windy-boat-card — OUR OWN card, source in this repo (2026-08-09) ────
-# ha/sailing-dash/src/js/cards/windy-boat-card.js — the Windy embed widget plus a
+# ha/sailing-dash/src/js/cards/windy-boat-card.js — our own card and the only JS
+# bundle living in this repo (as source, compiled by build.py); every other card
+# above is downloaded by fetch_deps.py from the tag pinned in deps.yaml.
+# It is the Windy embed widget plus a
 # working "center on the boat" button. It exists because the embed's built-in
 # postMessage API (enabled by `embedMake=true` in the embed URL) is the only
 # way to re-centre the map without reloading the iframe, and HA's built-in
@@ -125,8 +125,8 @@
 # Already covered by the repo root requirements.txt:
 #   pyyaml>=6.0       (deploy_dashboard.sh / deploy_sensors.sh YAML <-> JSON)
 #   websockets>=12.0  (optional, only for verifying live lovelace/config)
-# Plus SSH + passwordless sudo on the HA host for docker exec/cp/restart
-# (same as deploy.sh:patch_ha(), see repo root README/TECHNICAL.md).
+# Plus SSH + passwordless sudo on the HA host for docker exec/cp/restart when
+# the target profile uses `TRANSPORT=ssh-docker` (see .env.template).
 
 # ── 5. Entities this dashboard assumes exist already ────────────────────────
 # All N2K-derived sensors (COG/SOG, wind angle/speed, STW, depth, GPS

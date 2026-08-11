@@ -5,7 +5,7 @@
     heading: Sensors
   - type: gauge
     name: STW (kn)
-    entity: sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced
+    entity: sensor.boat_stw
     min: 0
     max: 12
     needle: true
@@ -15,7 +15,7 @@
       red: 10
   - type: gauge
     name: Depth (m)
-    entity: sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth
+    entity: sensor.boat_depth
     min: 0
     max: 30
     needle: true
@@ -24,25 +24,25 @@
       yellow: 3
       green: 5
     card_mod:
-      style: "ha-card {\n  --accent-color: {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
-        \ | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
-        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+      style: "ha-card {\n  --accent-color: {{ '#ff1100' if states('sensor.boat_depth')\
+        \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
+        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
         \ | float(0) >= 4.5 else '#888888')) }};\n}\n\nha-gauge {\n  --gauge-color:\
-        \ {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
-        \ | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
-        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+        \ {{ '#ff1100' if states('sensor.boat_depth')\
+        \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
+        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
         \ | float(0) >= 4.5 else '#888888')) }} !important;\n  --primary-text-color:\
-        \ {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
-        \ | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
-        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+        \ {{ '#ff1100' if states('sensor.boat_depth')\
+        \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
+        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
         \ | float(0) >= 4.5 else '#888888')) }} !important;\n}\n\nha-card {\n  color:\
-        \ {{ '#ff1100' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
-        \ | float(0) < 3 else ('#ff8866' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
-        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth')\
+        \ {{ '#ff1100' if states('sensor.boat_depth')\
+        \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
+        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
         \ | float(0) >= 4.5 else '#888888')) }};\n}"
   - type: gauge
     name: SOG (kn)
-    entity: sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog
+    entity: sensor.boat_sog
     min: 0
     max: 12
     needle: true

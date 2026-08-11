@@ -16,7 +16,7 @@ const APEX_WIND_CARD_CONFIG = {
   },
   series: [
     {
-      entity: 'sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed',
+      entity: 'sensor.boat_wind_speed',
       name: 'Measured (kts)',
       type: 'area',
       color: '#00bcd4',

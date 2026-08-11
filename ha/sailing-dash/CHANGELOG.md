@@ -10,6 +10,38 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-11
+
+- **No-vendor refactor: every external artifact comes from a pinned repository (`deps.yaml`, `helpers/fetch_deps.py`):**
+  - Added `deps.yaml` as the single source of truth for versions: the 6 HACS card bundles, the HACS release, the `nmea2000` HA integration (our fork `dnevera/ha-nmea2000` at tag `ydnu-02-usb-tcp-gw`) and the `nmea2000` Python library (our fork `dnevera/nmea2000` at tag `cpu-overload-fix`).
+  - Added `helpers/fetch_deps.py`: the only downloader — retry + timeout + sha256 verification, artifacts land in the ordinary build directory `build/deps/` (gitignored, wiped together with `build/`). No `.cache/` as a deployment concept, and no silent use of stale local copies: a missing artifact is a hard error listing exactly what is missing.
+  - Deleted `ha/sailing-dash/vendor/**` (7.7 MB of third-party bundles plus a full copy of `custom_components/nmea2000`) and added `vendor/` to `.gitignore`.
+- **Patch mechanics removed — the library is installed from the fork's tag:**
+  - `requirements.txt` / `requirements-ha.txt` now pin `nmea2000 @ git+https://github.com/dnevera/nmea2000.git@cpu-overload-fix` (both fixes are inside the tag: the `ioclient.py` EOF spin-loop and the PGN 126996 primary-key collision).
+  - Deleted `patches/nmea2000_ioclient.py`, `patches/README.md`, `scripts/patch_ha_nmea2000_message.py`, `scripts/apply_ha_patch.sh` and the root `deploy.sh --patch-ha` mode; replaced by `deploy.sh --check-ha` / `verify_nmea2000_fork()`, a drift-guard on the *installed* library instead of a patch marker.
+- **Generalized deploy targets and a self-contained subproject environment:**
+  - Introduced named profiles in `ha/sailing-dash/.env` (`.env.template` in git, `.env` gitignored) — `HA_PROFILES` plus `<PROFILE>_TRANSPORT|SSH_HOST|CONTAINER|CONFIG_DIR|HA_URL|HA_TOKEN|GW_HOST|GW_DATA_PORT`, so several Pi5 boxes (stage and prod) can be described at once. The subproject no longer reads the root `.env`/`deploy.conf` (those stay the ydnu-02 manager's config), which removes the `HA_CONTAINER=homeassistant` leak into stage architecturally.
+  - Added `helpers/lib/env_profile.sh` + `helpers/env_profile.py` loaders and `helpers/lib/ha_target.sh` as the single HA access layer (`ha_mkdir`/`ha_cat`/`ha_cp_to_container`/`ha_restart`, `local-docker` and `ssh-docker` transports); removed `targets.conf` and the hardcoded `local-ha`/`homeassistant` names.
+  - `--target <profile>` added everywhere (`deploy.sh`, `helpers/deploy_sensors.sh`, `helpers/deploy_dashboard.sh`, `helpers/start_stage.py`, `helpers/stage_provisioner.py`, `helpers/map_nmea_sensors.py`); `--stage`/`--prod` remain aliases. `stage_provisioner.py` is transport-aware (docker exec/cp tunnelled over SSH).
+- **Deduplication and a cleaner subproject root:**
+  - `build.py` is invoked exactly once per run (was 6 times through the `run_stage.sh` → `start_stage.py` → `deploy.sh` → `deploy_sensors.sh`/`deploy_dashboard.sh` chain); the two `lovelace_resources` merge implementations collapsed into `helpers/merge_lovelace_resources.py`; `build_docker.sh` is now a thin wrapper over `run_stage.sh`.
+  - Moved all helper scripts into `ha/sailing-dash/helpers/` (`build.py`, `build_docker.sh`, `deploy_sensors.sh`, `deploy_dashboard.sh`, `stage_provisioner.py`, `start_stage.py`, `map_nmea_sensors.py`, `fetch_deps.py`, `env_profile.py`, `lib/`), leaving only the entry points in the subproject root.
+- **Prod from scratch: `--bootstrap`, a preflight gate and rollback (`deploy.sh`):**
+  - `--bootstrap` checks SSH/Docker/container and delivers HACS, the card bundles and the pinned integration from `build/deps/` — identically for stage and prod, so the two environments cannot drift.
+  - `--preflight` verifies container liveness, HACS delivery *and* activation, the integration, a config entry on the tcp-gw and the presence of raw `nmea2000` entities in the registry; on failure it stops and prints the exact list of manual actions instead of deploying a dashboard onto an empty registry.
+  - `--rollback` restores `configuration.yaml` and `.storage/lovelace.*` from the newest timestamped backup and rotates old ones.
+- **HACS: files automated, activation manual and *verified*:**
+  - HACS delivery stays in the pipeline (`deps.yaml` → `fetch_deps.py` → `deploy_hacs_integration()`) and now runs for `ssh-docker` profiles too; a delivery failure is a step error, not a silent warning.
+  - Added `helpers/stage_provisioner.py check-hacs --target <profile>`, which separates the two states that used to be conflated: DELIVERED (`custom_components/hacs/manifest.json`, domain `hacs`) vs ACTIVATED (a config entry for domain `hacs`, which only the GitHub device-flow can create). `deploy.sh --preflight` delegates to it.
+- **`install_wizard.sh` rebuilt as a state machine with two blocking gates:**
+  - GATE A — activate HACS in the UI, then `check-hacs` must pass; GATE B — the NMEA 2000 integration, the config entry on `GW_HOST:GW_DATA_PORT` (gateway type `text`) and bus traffic, then `deploy.sh --preflight` must pass. Each gate prints its checklist, waits for Enter, runs the check and loops on failure — it never "warns and carries on", and stage is no longer treated as advisory.
+  - 8 steps with `--list`/`--from`/`--only`/`--dry-run`/`--yes` (the gates block even with `--yes`); `helpers/start_stage.py --provision-only` brings the container up and provisions HA but deliberately stops before deploying anything.
+- **Fixes:**
+  - `Unknown mode 'None' during migration` (`custom_components/nmea2000/__init__.py:58`): the provisioned config entry is now written as `version: 2` with the legacy `mode`/`device_type` keys, plus a backfill for existing entries.
+  - `KeyError: 'radius'` crash-loop of the stage container: `provision_core_config()` declared `minor_version: 4` (so HA skipped its 1.4 migration) but wrote no `radius` key — now `radius: 100` (HA's `DEFAULT_RADIUS`) is included.
+  - macOS bash 3.2 incompatibility (`${VAR^^}`) and an `args.gw-host` typo in `start_stage.py`.
+- **Documentation:** `INSTALLATION.md` rewritten as "AUTO stage 1 → manual pause → AUTO stage 2" with a "Configuring targets" section (two Pi5 example), the wizard/gates description and a new "Examples" section (clean stage install with a full wipe, partial deploys, remote stage profile, end-to-end prod run); `HACS_SETUP.md`, `README.md`, `requirements-ha.txt`, the `nmea2000-setup` skill and `.agents/AGENTS.md` synchronized with the "forks by tag, no patches" model; the full audit and its status live in `ha/revision.md`.
+
 ## 2026-08-10
 
 - **Stage HA Docker Build Script & Dockerfile (`build_docker.sh`, `local-ha/Dockerfile`):**

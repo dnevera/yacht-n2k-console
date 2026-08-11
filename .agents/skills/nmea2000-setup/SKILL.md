@@ -23,22 +23,18 @@ yacht-n2k-console/
 │   └── gateway.py / gateway_settings.py
 ├── ydnu02/                       # YDNU-02 hardware controller (BLE + Service mode)
 ├── device_manager/               # ProxyControlClient, ServiceModeManager
-├── scripts/
-│   └── patch_ha_nmea2000_message.py  # Идемпотентный патч message.py (v2)
-├── patches/
-│   └── nmea2000_ioclient.py      # Пропатченный ioclient.py (EOF fix)
 ├── tests/
 │   ├── test_ha_gateway.py        # Unit тесты DataHub + registry (221+ тестов)
 │   ├── test_live_ha_integration.py  # Live тесты против реального HA (7 тестов)
 │   ├── test_service_mode.py      # Service mode тесты (TCP socket — sandbox-only)
 │   └── ...
-├── deploy.sh                     # Деплой на Pi + HA патчи (идемпотентный)
+├── deploy.sh                     # Деплой на Pi + drift-guard форка nmea2000
 ├── requirements.txt              # Зависимости + nmea2000 из нашего git форка
 └── pyproject.toml
 
 Смежный репозиторий:
 /path/to/yacht/nmea2000/   # форк tomer-w/nmea2000
-  ветка: fix/pgn-126996-hash-collision-per-source
+  ТЕГ: cpu-overload-fix (коммит 6c9df918d19a) — оба фикса внутри
   nmea2000/message.py  — исправлен primary_key (unique_number fix)
   nmea2000/ioclient.py — исправлен EOF spin-loop (PR уже merged в upstream)
 ```
@@ -159,13 +155,9 @@ primary_key = f"{self.id}_{source_id}"
 - SA=64 (YDNU-02, unique_number=402047): `ef195c7c99c762fdfda4e198aae87930`
 - SA=200 (TCP-GW, unique_number=902047): `c11f5c824c71fe7e186cba56bf0f8672`
 
-**Маркер идемпотентности:**
-- `"yacht-n2k-console-patch-v1"` — использовал `.name` (нестабильный, создавал дубли)
-- `"yacht-n2k-console-patch-v2"` — использует `.unique_number` (стабильный, текущий)
+**Как доставляется фикс:** никаких патчей и маркеров. Библиотека ставится из тега нашего форка `dnevera/nmea2000@cpu-overload-fix` (коммит `6c9df918d19a`), где `primary_key = f"{self.id}_{source_id}"` с `unique_number` уже внутри.
 
-**Upgrade v1→v2:** автоматически через `patch_ha_nmea2000_message.py` при следующем `--patch-ha`.
-
-**PR pending:** `dnevera/nmea2000` → `tomer-w/nmea2000`
+**PR pending:** `dnevera/nmea2000` → `tomer-w/nmea2000` (в upstream фикс не влит, поэтому форк — штатный постоянный источник, а не временный обход).
 
 ---
 
@@ -173,7 +165,7 @@ primary_key = f"{self.id}_{source_id}"
 
 **Симптом:** Несколько «Product Information (Yacht Devices - PC Gateway - ...)» в HA.
 
-**Причина:** До patch-v2 `device_instance` в `iso_name.name` менялся → другой MD5 → новая запись.
+**Причина:** До перехода на `unique_number` `device_instance` в `iso_name.name` менялся → другой MD5 → новая запись.
 Тест `next(d for d in devices if '902047' in str(d))` брал первый попавшийся (старый, 0 entities).
 
 **Диагностика:**
@@ -192,7 +184,7 @@ for d in nmea:
 
 **Фикс:** `./deploy.sh --clean-ha` → удаляет все nmea2000 devices → HA пересоздаёт с нуля.
 
-**После patch-v2:** дубли больше не создаются. Одноразовая очистка решает проблему навсегда.
+**После перехода на `unique_number`:** дубли больше не создаются. Одноразовая очистка решает проблему навсегда.
 
 ---
 
@@ -201,38 +193,37 @@ for d in nmea:
 ### Режимы
 
 ```bash
-./deploy.sh                   # полный деплой: gateway + web + patch HA
-./deploy.sh --proxy           # только gateway + patch HA (без web restart)
+./deploy.sh                   # полный деплой: gateway + web
+./deploy.sh --proxy           # только gateway (без web restart)
 ./deploy.sh --web             # только web (gateway и HA не трогается)
-./deploy.sh --patch-ha        # только патчи HA (без деплоя кода)
+./deploy.sh --check-ha        # drift-guard: проверить форк nmea2000 в контейнере HA
 ./deploy.sh --clean-ha        # удалить мусорные NMEA devices из HA registry
 ./deploy.sh --proxy --no-test # без post-deploy тестов
 ./deploy.sh --no-diff         # пропустить pre-deploy diff
 ```
 
-### patch_ha() — алгоритм (идемпотентный)
+### verify_nmea2000_fork() — drift-guard (замена патчей)
+
+Патчей больше нет: оба фикса внутри тега форка. Вместо наложения — проверка, что установлена именно наша библиотека:
 
 ```
-Patch 1 (ioclient EOF fix):
-  md5(local patches/nmea2000_ioclient.py) == md5(remote in container)?
-    YES → "already up to date — skipping"   [ha_changed остаётся false]
-    NO  → docker cp → applied ✓              [ha_changed=true]
+verify_nmea2000_fork gateway   # venv шлюза (--user site-packages)
+verify_nmea2000_fork ha        # копия внутри контейнера HA
 
-Patch 2 (message.py hash collision fix):
-  запустить scripts/patch_ha_nmea2000_message.py внутри контейнера
-  Сценарий A: PATCH_MARKER_V2 в файле  → "Already applied."             [ha_changed=false]
-  Сценарий B: PATCH_MARKER_V1 в файле  → upgrade .name→.unique_number    [ha_changed=true]
-  Сценарий C: оригинальный upstream     → fresh install                   [ha_changed=true]
-  Сценарий D: файл не найден            → ERROR (динамический discovery)
-
-HA restart: ТОЛЬКО если ha_changed=true
+Алгоритм:
+  найти путь пакета: python3 -c 'import nmea2000; ...'
+  grep маркеров:
+    ioclient.py → "Connection closed by remote host"   (Bug 1)
+    message.py  → primary_key = f"{self.id}_{source_id}" (Bug 2)
+  оба на месте → OK
+  чего-то нет  → предупреждение + точная команда переустановки
 ```
 
-### requirements.txt — nmea2000 из git форка
+### requirements.txt — nmea2000 из тега нашего форка
 
 ```
-# Устанавливается из нашего git-форка (не из PyPI!):
-git+https://github.com/dnevera/nmea2000.git@fix/pgn-126996-hash-collision-per-source#egg=nmea2000
+# Только форк, только по ТЕГУ (ветка — плавающий указатель):
+nmea2000 @ git+https://github.com/dnevera/nmea2000.git@cpu-overload-fix
 ```
 
 **После merge PR в tomer-w:** заменить на `nmea2000>=<новая версия>`.
@@ -821,9 +812,9 @@ Link (iOS) / App Link (Android) — если приложение установ
 
 1. **Никогда не трогать тесты** без явного подтверждения бага в тесте (из AGENTS.md)
 2. **Перед деплоем** — pre_deploy_diff показывается автоматически
-3. **После --patch-ha** — HA перезапускается только если что-то реально изменилось
+3. **После обновления образа HA** — прогнать `./deploy.sh --check-ha`: HACS мог поставить PyPI-релиз вместо форка
 4. **После --clean-ha** — обязательно запустить live тесты
-5. **При появлении дублей** в HA → deploy.sh --clean-ha (patch-v2 предотвращает новые дубли)
+5. **При появлении дублей** в HA → deploy.sh --clean-ha (фикс `unique_number` в теге форка предотвращает новые дубли)
 6. **test_service_mode.py** падает в sandbox (socket.bind) — это нормально, не баг кода
 7. **nmea2000 устанавливается из git форка** (requirements.txt) — не из PyPI upstream
 8. **systemd ExecStart** — ОБЯЗАТЕЛЬНО через `python3 -m ydnu02_tcp_gateway.ydnu02_tcp_gateway` (НЕ прямой путь к .py в пакете — Python не распознает package, импорты сломаются)

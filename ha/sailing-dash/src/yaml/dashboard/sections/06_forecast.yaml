@@ -5,8 +5,8 @@
     heading_style: title
     heading: Forecast
   - type: custom:windy-boat-card
-    lat_entity: sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude
-    lon_entity: sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude
+    lat_entity: sensor.boat_latitude_raw
+    lon_entity: sensor.boat_longitude_raw
     fallback_lat: 42.43
     fallback_lon: 18.6
     zoom: 8

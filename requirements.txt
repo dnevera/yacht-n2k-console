@@ -1,3 +1,4 @@
+
 # Requirements for Yacht N2K Console & TCP Gateway
 pytest>=9.0.0
 fastapi>=0.110.0
@@ -23,21 +24,19 @@ bcrypt>=4.0
 # "Why the dashboard deploy restarts HA") — not required for normal deploys.
 websockets>=12.0
 
-# nmea2000: PINNED to the exact PyPI release actually running in production.
+# nmea2000: installed from OUR OWN fork, pinned to a TAG. This is the single
+# delivery channel — there are no patch files any more.
 #
-# IMPORTANT: our fork's fix branch (fix/pgn-126996-hash-collision-per-source,
-# https://github.com/dnevera/nmea2000) is NOT installable here — it targets an
-# older/different nmea2000 codebase and is missing `NMEA2000Field`, which makes
-# `nmea2000/message.py` crash at import time (`NameError: name 'NMEA2000Field'
-# is not defined`) against this release line. Confirmed by reproducing the crash
-# on the production gateway (2026-08-09).
+# The tag dnevera/nmea2000@cpu-overload-fix (commit 6c9df918d19a) contains both
+# fixes we depend on:
+#   - ioclient.py: TextNmea2000Gateway readline() EOF raises ConnectionError
+#     instead of returning silently (used to spin the event loop at 100% CPU).
+#   - message.py:  primary_key includes the source unique_number, so PGN 126996
+#     no longer collides and every device gets its own HA entities.
 #
-# The PGN 126996 hash-collision fix is instead applied ONLY inside the Home
-# Assistant docker container via deploy.sh:patch_ha() (scripts/patch_ha_nmea2000_message.py),
-# where it matters for device/entity grouping in the HA registry.
-# The gateway's own copy of nmea2000 only needs the ioclient EOF fix, which
-# deploy.sh:patch_gateway_nmea2000() applies on top of this exact PyPI release.
-#
-# DO NOT switch this back to the git+ fork without first confirming it installs
-# and imports cleanly against the nmea2000 release actually in use.
-nmea2000==2026.5.2
+# A TAG, never a branch: a branch is a moving pointer and two "from scratch"
+# installs on different days would produce different code. The same tag is
+# declared in ha/sailing-dash/deps.yaml (the single source of truth) and is what
+# the ha-nmea2000 fork's manifest.json requires inside the HA container.
+# deploy.sh:verify_nmea2000_fork() checks the installed files for both markers.
+nmea2000 @ git+https://github.com/dnevera/nmea2000.git@cpu-overload-fix

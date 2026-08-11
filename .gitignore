@@ -64,3 +64,9 @@ ha/sailing-dash/local-ha/config/blueprints/
 ha/sailing-dash/local-ha/config/deps/
 ha/sailing-dash/local-ha/config/tts/
 ha/sailing-dash/local-ha/config/.cloud/
+ha/sailing-dash/local-ha/config/secrets.yaml
+
+# Third-party artifacts are never vendored: fetch_deps.py downloads them
+# from the tags pinned in ha/sailing-dash/deps.yaml into build/deps/.
+vendor/
+.cache/

@@ -60,12 +60,16 @@ Before deploying, `deploy.sh` automatically invokes `python3 build.py` to ensure
 
 ## Key Files
 
+Everything except `deploy.sh`, `run_stage.sh` and `install_wizard.sh` lives in `helpers/` — call
+those as `python3 helpers/<script>.py`.
+
+- `install_wizard.sh` — **guided install / re-install for any profile** (`--target <profile>`). Runs every automatable step in order and stops at two blocking gates: **GATE A** (HACS activated in the UI, verified by `helpers/stage_provisioner.py check-hacs`) and **GATE B** (NMEA 2000 config entry on the tcp-gw plus raw entities, verified by `deploy.sh --preflight`). A gate never continues on a warning and behaves identically on Stage and Prod. Flags: `--list`, `--from N`, `--only N`, `--reinstall`, `--dry-run`.
 - `build.py` — **automated build engine**. Compiles modular source code from `src/` into deployable target YAML/JS files in `build/`.
 - `build_docker.sh` — **HA Docker build script**. Compiles source modules, builds the custom Stage Home Assistant Docker image (`local-ha`), starts the container, and deploys build artifacts.
-- `start_stage.py` / `run_stage.sh` — **Stage environment orchestrator**. Launches local Docker container (`local-ha`), controls NMEA telemetry (`--demo` local simulator or `--live` TCP gateway), triggers `build.py` + `./deploy.sh --stage`, and watches `src/` for live auto-rebuilding.
+- `start_stage.py` / `run_stage.sh` — **Stage environment orchestrator**. Launches local Docker container (`local-ha`), controls NMEA telemetry (`--demo` local simulator or `--live` TCP gateway), triggers `build.py` + `./deploy.sh --stage`, and watches `src/` for live auto-rebuilding. `--provision-only` stops after provisioning (no deploy) — that is what `install_wizard.sh` uses so its gates are not bypassed.
 - `deploy.sh` — **unified entry point for all deploys**.
-  Supports target environments `--stage` (local Docker container) and `--prod` (remote Pi5 over SSH).
-  Sub-modes: `--install`/`--update` (all resources + sensors + dashboard), `--resources-only`, `--dashboard-only`, `--sensors-only`.
+  Supports any named profile via `--target <profile>` (`--stage` / `--prod` are aliases).
+  Sub-modes: `--install`/`--update` (all resources + sensors + dashboard), `--resources-only`, `--dashboard-only`, `--sensors-only`, plus `--bootstrap` (deliver HACS + integration + cards from `build/deps/`), `--preflight` (read-only readiness gate) and `--rollback`.
 - `build/dashboard-sailing.yaml` — compiled Lovelace "sections" view dashboard config generated from `src/yaml/dashboard/`.
 - `deploy_dashboard.sh` — converts `build/dashboard-sailing.yaml` into JSON and uploads it into the target HA container's `.storage/lovelace.dashboard_sailing` (`--stage` or `--prod`), backing up the previous version first, then **restarts Home Assistant**.
 - `build/sensors-sailing.yaml` — compiled `rest:`/`template:` sensor + `device_tracker:` config generated from `src/yaml/sensors/`.
@@ -108,6 +112,27 @@ When launched, `start_stage.py`:
 ./deploy.sh --stage --dashboard-only
 ./deploy.sh --prod --sensors-only
 ```
+
+## Canonical Entity Alias Layer & Auto-Discovery Engine
+
+To decouple the dashboard layout, automations, and custom JS cards from hardware-specific NMEA 2000 sensor entity IDs (which contain vessel-specific unique numbers, device instances, and MD5 primary key hashes), all dashboard components reference **canonical entity aliases**:
+
+- `sensor.boat_stw`: Speed Through Water (knots)
+- `sensor.boat_depth`: Water Depth (meters)
+- `sensor.boat_wind_speed`: Apparent/True Wind Speed (knots)
+- `sensor.boat_wind_angle`: Apparent/True Wind Angle (degrees)
+- `sensor.boat_cog`: Course Over Ground (degrees)
+- `sensor.boat_sog`: Speed Over Ground (knots)
+- `sensor.boat_latitude` / `sensor.boat_longitude`: Position (GPS formatted string)
+- `sensor.boat_latitude_raw` / `sensor.boat_longitude_raw`: Position (float numerical degrees)
+- `sensor.barometer_mmhg`: Atmospheric Pressure (mmHg)
+
+### Auto-Discovery Tool (`map_nmea_sensors.py`)
+During deployment (`./deploy.sh --stage` or `./deploy.sh --prod`), `map_nmea_sensors.py` executes before `build.py`:
+1. Inspects Home Assistant's entity registry (`.storage/core.entity_registry` or HA REST API).
+2. Discovers raw PGN entities created by `ha-nmea2000` custom integration.
+3. Generates/updates `src/yaml/sensors/derived_n2k.yaml` which defines template sensors mapping raw sensor values to canonical aliases.
+4. If specific N2K sensors are offline or absent, graceful fallback values are assigned.
 
 ## Editing & Debugging Workflow
 
@@ -414,7 +439,7 @@ entities:
       - map_y: parseFloat(y)
       - store_var: dir
   # 2) measured wind speed - visible dots + vars.speed for the arrows below
-  - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+  - entity: sensor.boat_wind_speed
     name: Measured
     mode: markers
     filters:
@@ -641,16 +666,30 @@ available as a daily max or in "current"), so it cannot drive this chart.
   `deploy_dashboard.sh` / the YAML merge in `deploy_sensors.sh`. Optionally
   `websockets` (also in `requirements.txt`) to verify the live
   `lovelace/config` (see "Why the dashboard deploy restarts HA" above).
-- Remote host: passwordless `sudo` for `docker exec`/`docker cp`/
-  `docker restart` against the `homeassistant` container (same requirement
-  as `deploy.sh:patch_ha()`).
-- HACS custom cards must already be installed on the target HA instance
-  (see `lovelace-resources.yaml`, not managed by these scripts):
-  `card-mod`, `compass-card`, `apexcharts-card`.
-- **Setting up a brand-new HA instance from scratch?** See
-  `requirements-ha.txt` for the full checklist (HACS itself, the custom
-  cards above, and which parts are already built into HA core) — the
-  "Setting this up from scratch" section above covers the deploy order.
+- Target host: for an `ssh-docker` target profile (declared in `.env`, see
+  `.env.template` and "Configuring targets" in INSTALLATION.md),
+  passwordless `sudo` for `docker exec`/`docker cp`/`docker restart` against
+  the Home Assistant container. A `local-docker` profile needs nothing but a
+  running Docker daemon.
+- Custom Lovelace cards (see `lovelace-resources.yaml`):
+  - **Stage** — nothing to do: `fetch_deps.py` downloads every card at the
+    version pinned in `deps.yaml` into `build/deps/cards/`, and
+    `stage_provisioner.py` deploys them into `/config/www/`.
+  - **Prod** — install them through the HACS UI, or let
+    `./deploy.sh --prod --bootstrap` deliver the same pinned bundles.
+- Environments: `ha/sailing-dash/.env` (from `.env.template`) is the only source
+  of truth for target profiles — transport, ssh host, container, HA url/token and
+  the YDNU-02 tcp-gw of each instance. Any number of named profiles may coexist
+  (several Pi5 boxes); `./deploy.sh --target <profile>`. The repo root `.env` /
+  `deploy.conf` belong to the ydnu-02 manager and are never read from here.
+- No external code is committed to this repo: no `vendor/` directory, no patch
+  files. The `nmea2000` library comes from our fork's tag
+  (`dnevera/nmea2000@cpu-overload-fix`), the integration from
+  `dnevera/ha-nmea2000@ydnu-02-usb-tcp-gw`.
+- **Setting up a brand-new HA instance from scratch?** [INSTALLATION.md](INSTALLATION.md)
+  is the single document for that: it splits the procedure into "auto stage 1 →
+  manual pause → auto stage 2" and lists the manual steps for Stage and Prod
+  separately. `requirements-ha.txt` describes what each artifact is and why.
 
 ## Chart time window — one place to configure it
 

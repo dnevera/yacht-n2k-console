@@ -10,7 +10,7 @@
     wind_direction_entity:
       entity: sensor.wind_direction_history
     windspeed_entities:
-    - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - entity: sensor.boat_wind_speed
       name: Speed
     current_direction:
       show_arrow: true
@@ -18,7 +18,7 @@
       top_right:
         label: Wind Speed
         unit: ' kn'
-        entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+        entity: sensor.boat_wind_speed
   - type: gauge
     name: Pressure (mmHg)
     entity: sensor.barometer_mmhg

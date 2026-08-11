@@ -12,8 +12,12 @@ from unittest.mock import patch, Mock
 # Add project root and ha/sailing-dash to path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SAILING_DASH_DIR = os.path.join(PROJECT_ROOT, "ha", "sailing-dash")
+# Everything that is not an entry point lives in ha/sailing-dash/helpers/.
+HELPERS_DIR = os.path.join(SAILING_DASH_DIR, "helpers")
 LOCAL_HA_DIR = os.path.join(SAILING_DASH_DIR, "local-ha")
 
+if HELPERS_DIR not in sys.path:
+    sys.path.insert(0, HELPERS_DIR)
 if SAILING_DASH_DIR not in sys.path:
     sys.path.insert(0, SAILING_DASH_DIR)
 if LOCAL_HA_DIR not in sys.path:
@@ -250,8 +254,8 @@ def test_stage_provisioner_card_bundle_resolution(tmp_path, monkeypatch):
 
 def test_stage_provisioner_hacs_integration_deploy(tmp_path, monkeypatch):
     """Test that deploy_hacs_integration() installs the real HACS integration
-    (domain 'hacs') into /config/custom_components/hacs/, using a mocked/fake
-    cached release so the test never depends on network access."""
+    (domain 'hacs') into /config/custom_components/hacs/, using a fake
+    build/deps/ artifact so the test never depends on network access."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
 
@@ -262,8 +266,9 @@ def test_stage_provisioner_hacs_integration_deploy(tmp_path, monkeypatch):
     )
     (fake_hacs_dir / "__init__.py").write_text("# fake hacs __init__")
 
-    monkeypatch.setattr(stage_provisioner, "HACS_CACHE_EXTRACTED_DIR", str(fake_hacs_dir))
-    monkeypatch.setattr(stage_provisioner.HAProvisioner, "download_hacs_release", lambda self: True)
+    monkeypatch.setattr(stage_provisioner, "HACS_INTEGRATION_DEPS_DIR", str(fake_hacs_dir))
+    monkeypatch.setattr(stage_provisioner.HAProvisioner, "fetch_dependency",
+                        staticmethod(lambda section, dest_dir: True))
 
     provisioner = HAProvisioner(config_dir=str(config_dir))
     assert provisioner.deploy_hacs_integration() is True
@@ -278,10 +283,15 @@ def test_stage_provisioner_hacs_integration_deploy(tmp_path, monkeypatch):
 
 
 def test_stage_provisioner_nmea2000_integration_deploy(tmp_path):
-    """Test that deploy_nmea2000_integration() copies the vendored custom_components/nmea2000
-    integration files (domain 'nmea2000') into /config/custom_components/nmea2000/."""
+    """Test that deploy_nmea2000_integration() copies the custom_components/nmea2000
+    integration downloaded from our fork's pinned tag into build/deps/ (never a
+    vendored copy) into /config/custom_components/nmea2000/."""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
+
+    if not os.path.isfile(os.path.join(
+            stage_provisioner.NMEA2000_INTEGRATION_DEPS_DIR, "manifest.json")):
+        pytest.skip("build/deps/ not populated — run `python3 fetch_deps.py` first")
 
     provisioner = HAProvisioner(config_dir=str(config_dir))
     assert provisioner.deploy_nmea2000_integration() is True

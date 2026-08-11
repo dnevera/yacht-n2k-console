@@ -91,13 +91,15 @@ Good comment example (from service mode):
 # Always pass port= explicitly or patch the class itself (dm.ProxyControlClient = _TestPCC).
 ```
 
-## Rule: nmea2000 устанавливается из нашего git форка, не из PyPI
-**`requirements.txt` подключает `git+https://github.com/dnevera/nmea2000.git@fix/pgn-126996-hash-collision-per-source`.**
-PyPI upstream `nmea2000==2026.5.2` содержит два критических бага:
+## Rule: nmea2000 ставится только из нашего форка по тегу — без PyPI и без патчей
+**`requirements.txt`: `nmea2000 @ git+https://github.com/dnevera/nmea2000.git@cpu-overload-fix`** (тег, коммит `6c9df918d19a`).
+PyPI upstream `nmea2000==2026.5.2` содержит два критических бага, оба исправлены внутри тега:
 1. EOF spin-loop в `ioclient.py` (100% CPU после рестарта gateway)
 2. Hash collision в `message.py` (все устройства → один device в HA)
 
-**Запрещено менять `requirements.txt` на PyPI-версию** без предварительного подтверждения что оба бага merged в upstream.
+Тот же тег действует во всех точках установки: корневой `requirements.txt` (наш venv/Docker), `manifest.json` форка интеграции (внутри контейнера HA) и `ha/sailing-dash/deps.yaml` (единственный источник правды).
+
+**Запрещено** менять `requirements.txt` на PyPI-версию без подтверждения, что оба бага merged в upstream, и запрещено пиниться на **ветку** вместо тега — ветка это плавающий указатель, две установки в разные дни дадут разный код.
 
 ## Rule: unique_number, НЕ iso_name.name для идентификации NMEA устройств
 
@@ -148,13 +150,11 @@ python ~/.junie/scripts/spec.py archive specs/active/NNN-slug.md                
 - В спеках, как и в коде, — **только плейсхолдеры** вместо реальных hostname/IP/имён пользователей
 - Ретро-спеки (`status: as-is`) описывают систему как есть; при изменении подсистемы обновляй её спеку в том же PR
 
-## Rule: HA Patch — идемпотентный, версионированный
+## Rule: никаких патчей — только drift-guard
 
-Патч `scripts/patch_ha_nmea2000_message.py` применяется в HA Docker контейнере через `deploy.sh --patch-ha`.
-Три состояния:
-- **v2 marker** → пропускает (уже актуальный)
-- **v1 marker** → автоматически апгрейдит `.name` → `.unique_number`
-- **без маркера** → fresh install
+Патч-механика удалена полностью (`patches/nmea2000_ioclient.py`, `scripts/patch_ha_nmea2000_message.py`, `scripts/apply_ha_patch.sh`, режим `deploy.sh --patch-ha`): оба фикса уже внутри тега форка.
+
+Вместо патчей — `deploy.sh --check-ha` (функция `verify_nmea2000_fork`): проверяет по содержимому файлов, что установленная библиотека — именно наш форк, а не PyPI-релиз (маркеры `Connection closed by remote host` в `ioclient.py` и `primary_key = f"{self.id}_{source_id}"` в `message.py`). Проверяется и venv шлюза, и копия внутри контейнера HA.
 
 **При появлении дублей устройств в HA:**
 ```bash

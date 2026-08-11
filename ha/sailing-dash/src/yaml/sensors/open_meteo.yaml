@@ -1,7 +1,7 @@
 # Open-Meteo REST platform sensors for wind and wave forecast
 rest:
   - resource_template: >-
-      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+      https://api.open-meteo.com/v1/forecast?latitude={{ states('sensor.boat_latitude_raw') | float(42.43) }}&longitude={{ states('sensor.boat_longitude_raw') | float(18.60) }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wind Forecast REST'
@@ -13,7 +13,7 @@ rest:
           - hourly
 
   - resource_template: >-
-      https://marine-api.open-meteo.com/v1/marine?latitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude') | float(42.43) }}&longitude={{ states('sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude') | float(18.60) }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+      https://marine-api.open-meteo.com/v1/marine?latitude={{ states('sensor.boat_latitude_raw') | float(42.43) }}&longitude={{ states('sensor.boat_longitude_raw') | float(18.60) }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wave Forecast REST'

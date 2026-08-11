@@ -9,7 +9,7 @@
     state_color: false
     columns: 3
     entities:
-    - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - entity: sensor.boat_wind_speed
       name: Measured now
       card_mod:
         style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
@@ -54,7 +54,7 @@
       - resample: 30m
       - map_y: parseFloat(y)
       - store_var: dir
-    - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - entity: sensor.boat_wind_speed
       name: Measured
       mode: markers
       filters:
@@ -93,7 +93,7 @@
         color: '#ff7043'
         line:
           width: 0
-    - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - entity: sensor.boat_wind_speed
       name: kt scale
       mode: markers
       showlegend: false
@@ -135,7 +135,7 @@
             side: top
           ticksuffix: ' kt'
           len: 0.9
-    - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+    - entity: sensor.boat_wind_speed
       name: Gusts (measured)
       mode: lines
       filters:
