@@ -152,7 +152,8 @@ class NMEAEmulatorServer:
 
             # 6. Heading (PGN 127250 = 0x1F112) -> 09F11240
             hdg_rad = math.radians(cog_deg - 3.0)
-            hdg_data = struct.pack("<BHHHb", sid, int(hdg_rad / 0.0001), 0x7FFF, 0x7FFF, 0)
+            var_rad = math.radians(2.5)
+            hdg_data = struct.pack("<BHHhb", sid, int(hdg_rad / 0.0001), 0x7FFF, int(var_rad / 0.0001), 0)
             self._broadcast(fmt_nmea_line("09F11240", hdg_data))
 
             # 7. Environmental / Pressure (PGN 130310 = 0x1FD0A) -> 09FD0A40

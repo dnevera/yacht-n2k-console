@@ -12,6 +12,30 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-11
 
+- **Restored: generic default fallbacks in NMEA mapping engine (`helpers/map_nmea_sensors.py`):**
+  - Reverted `DEFAULT_FALLBACKS` in `map_nmea_sensors.py` to generic NMEA entity IDs (`sensor.speed_water_referenced`, `sensor.water_depth`, `sensor.wind_speed`, `sensor.wind_angle`, `sensor.cog`, `sensor.sog`, `sensor.latitude`, `sensor.longitude`, `sensor.pressure`, `sensor.vessel_heading`, `sensor.magnetic_variation`).
+  - regenerated `src/yaml/sensors/derived_n2k.yaml` with generic default fallbacks, keeping the UI dashboard completely decoupled from specific hardware PGN primary key hashes.
+  - Documented the Virtual Sensors Architecture rule in `.agents/skills/nmea2000-setup/SKILL.md`.
+  - Updated regression tests in `tests/test_sailing_dash.py`. 29 passed.
+
+- **Updated: HDG compass card displays True Heading with cardinal direction + bottom-right magnetic details:**
+  - `02_position.yaml`: HDG `custom:compass-card` center value displays True Heading (`sensor.boat_heading`) with cardinal abbreviation (`state_abbreviation: { show: true }`, e.g. WNW, NE).
+  - Raw magnetic heading (`Mag: 283°`) and variation (`Var: +2.5°`) are displayed as secondary info in the bottom-right corner via `card_mod` styling.
+  - `derived_n2k.yaml` & `map_nmea_sensors.py`: `boat_magnetic_variation` availability is linked to heading sensor availability, defaulting variation to 0.0° when PGN variation field is missing/unavailable on the bus (so heading calculation doesn't drop when compass doesn't send variation).
+  - Updated regression test `test_position_section_has_hdg_compass_card_before_cog` in `tests/test_sailing_dash.py`. 29 passed.
+
+- **Fixed: magnetic compass entities (`boat_heading_magnetic`, `boat_magnetic_variation`, `boat_heading`) showed `unavailable`:**
+  - Root cause: `DEFAULT_FALLBACKS` in `map_nmea_sensors.py` used the wrong primary key hash (`a008...` from `wind_data` instead of `b70b...` from `vessel_heading` PGN 127250). `match_entities()` matched `direction_data` instead of `vessel_heading`, and `variation` matched `_source` instead of `_variation`.
+  - Updated `map_nmea_sensors.py`: corrected fallback PKs to `b70bbc9b5eef0afbfed7ae988ce2ddb4`, prioritized `vessel_heading` for heading, and required exact `_variation` entity suffix.
+  - Updated `local-ha/mock_nmea_emulator.py`: packed magnetic variation (+2.5°) in PGN 127250 frame instead of `0x7FFF` (unavailable).
+  - Regenerated `src/yaml/sensors/derived_n2k.yaml`, rebuilt artifacts, redeployed to `local-ha` stage, and added regression assertions in `tests/test_sailing_dash.py`. 29 passed.
+
+- **Added: NMEA magnetic compass heading (HDG) card in Position section (`02_position.yaml`):**
+  - Added HDG `custom:compass-card` right before the COG compass card in `src/yaml/dashboard/sections/02_position.yaml`.
+  - Added NMEA 2000 discovery & fallback support for heading (PGN 127250) and magnetic variation (PGN 127250 / 127258) in `helpers/map_nmea_sensors.py`.
+  - Generated template sensors in `src/yaml/sensors/derived_n2k.yaml`: `boat_heading_magnetic` (raw magnetic heading), `boat_magnetic_variation` (magnetic variation), and `boat_heading` (true heading with variation correction: `(hdg + var) % 360`).
+  - Added regression test `test_position_section_has_hdg_compass_card_before_cog` to `tests/test_sailing_dash.py`. 29 passed.
+
 - **Fixed: wind chart allowed vertical dragging of forecast data / created dual Y-axes on local-ha:**
   - Root cause: `boat_wind_speed` was defined with `unit_of_measurement: 'kn'`, while forecast sensors used `unit_of_measurement: 'kts'`. `plotly-graph-card` automatically creates a second Y-axis (`yaxis2`) when non-internal entities have different units of measurement, leaving `yaxis2` unlocked for panning (since layout only locks `yaxis`).
   - Standardized `unit_of_measurement: 'kts'` across all speed entities in `src/yaml/sensors/derived_n2k.yaml` (`boat_wind_speed`, `boat_stw`, `boat_sog`) and generator `helpers/map_nmea_sensors.py`. All traces now map to `yaxis` and stay synchronized on a single locked scale.

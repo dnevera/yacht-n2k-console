@@ -74,6 +74,30 @@ template:
     state: '{{ states(''sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog'') | float(0) | round(1) }}
 
       '
+  - name: Boat Heading Magnetic
+    unique_id: boat_heading_magnetic
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | is_number }}'
+    state: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | float(0) | round(0) }}
+
+      '
+  - name: Boat Magnetic Variation
+    unique_id: boat_magnetic_variation
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | is_number }}'
+    state: '{% set raw = states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_variation'') %} {{ raw | float(0) | round(1) if raw | is_number else 0.0 }}
+
+      '
+  - name: Boat Heading
+    unique_id: boat_heading
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | is_number }}'
+    state: '{% set hdg = states(''sensor.boat_heading_magnetic'') | float(0) %} {% set var = states(''sensor.boat_magnetic_variation'') | float(0) %} {{ ((hdg + var) % 360) | round(0) }}
+
+      '
   - name: Boat Latitude Raw
     unique_id: boat_latitude_raw
     availability: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude'') | is_number }}'

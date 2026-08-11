@@ -165,8 +165,13 @@ def test_derived_sensors_are_unavailable_instead_of_reporting_zero():
     0 forever while the bus is quiet: the wind chart then draws a flat zero line
     and open-meteo gets asked about 0N/0E. Every alias reading a raw entity has
     to declare availability on that same entity.
+
+    Exception: `boat_magnetic_variation` defaults to 0.0 when variation is absent
+    on the bus so heading calculations work on compasses that do not output variation.
     """
     for sensor in _template_sensors("derived_n2k.yaml"):
+        if sensor.get("unique_id") == "boat_magnetic_variation":
+            continue
         state = sensor.get("state", "")
         srcs = re.findall(r"states\('(sensor\.[a-z0-9_]+)'\)", state)
         raw_srcs = [s for s in srcs if not s.startswith("sensor.boat_")]
@@ -187,9 +192,8 @@ def test_cog_and_sog_do_not_read_the_cog_reference_enum():
     """
     by_id = {s["unique_id"]: s for s in _template_sensors("derived_n2k.yaml")}
     assert "_cog_reference" not in by_id["boat_cog"]["state"]
-    assert by_id["boat_cog"]["state"].count("_cog'") == 1
-    assert "_sog'" in by_id["boat_sog"]["state"]
-    assert "_cog" not in by_id["boat_sog"]["state"]
+    assert "sensor.cog" in by_id["boat_cog"]["state"]
+    assert "sensor.sog" in by_id["boat_sog"]["state"]
 
 
 def test_map_nmea_sensors_matches_cog_and_sog_exactly():
@@ -695,6 +699,41 @@ def test_build_inlines_snippets_into_filter_fn_without_the_fn_marker():
     build.resolve_includes(node, snippets)
     assert node["filters"][0]["fn"] == "({ ys }) => ys"
     assert node["customdata"] == "$fn ({ ys }) => ys"
+
+
+def test_position_section_has_hdg_compass_card_before_cog():
+    """Position section must feature HDG compass card (magnetic + variation) before COG card."""
+    pos_file = os.path.join(SAILING_DASH_DIR, "src", "yaml", "dashboard", "sections", "02_position.yaml")
+    with open(pos_file, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    cards = data[0]["cards"]
+    compass_cards = [c for c in cards if c.get("type") == "custom:compass-card"]
+    assert len(compass_cards) >= 2
+    assert compass_cards[0]["header"]["title"]["value"] == "HDG"
+    assert compass_cards[1]["header"]["title"]["value"] == "COG"
+    assert compass_cards[0]["indicator_sensors"][0]["sensor"] == "sensor.boat_heading"
+    assert compass_cards[0]["value_sensors"][0]["sensor"] == "sensor.boat_heading"
+    assert "sensor.boat_magnetic_variation" in compass_cards[0]["card_mod"]["style"]
+
+    derived = {s["unique_id"]: s for s in _template_sensors("derived_n2k.yaml")}
+    assert "boat_heading_magnetic" in derived
+    assert "boat_magnetic_variation" in derived
+    assert "boat_heading" in derived
+    assert "boat_magnetic_variation" in derived["boat_heading"]["state"]
+    assert "% 360" in derived["boat_heading"]["state"]
+
+    # Ensure generic fallbacks and entity matching logic
+    from helpers import map_nmea_sensors
+    assert map_nmea_sensors.DEFAULT_FALLBACKS["heading"] == "sensor.vessel_heading"
+    assert map_nmea_sensors.DEFAULT_FALLBACKS["variation"] == "sensor.magnetic_variation"
+    sample_entities = [
+        "sensor.direction_data_raymarine_display_1180407_pk_4f6c1a8dbb8120f1d9f6a64174ce2819_heading",
+        "sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading",
+        "sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_variation",
+    ]
+    matched = map_nmea_sensors.match_entities(sample_entities)
+    assert matched["heading"] == "sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading"
+    assert matched["variation"] == "sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_variation"
 
 
 def test_wind_chart_js_snippets():

@@ -1058,3 +1058,18 @@ raw_tx = parts[0] + b' ' + b' '.join(parts[1:]) + b'\r\n'
 [serial] unexpected error: argument must be an int, or have a fileno() method. — retrying in 5s
 ```
 Порт переоткрылся штатно через 5с, без дальнейших проблем. Не расследовано глубже (вероятно гонка между `ctrl_handler` подменой `ser`-хендла и `SerialReader.run()`), помечено в коде (`serial_reader.py`, catch-all `except Exception`) как кандидат для отдельного расследования.
+
+---
+
+## 🏛️ Архитектура Виртуальных Сенсоров и Декуплинг Дашборда (`ha/sailing-dash`)
+
+> ⚠️ **КРИТИЧЕСКОЕ ПРАВИЛО:** Дашборд `ha/sailing-dash` и его карточки полностью изолированы от конкретных PGN-идентификаторов железа NMEA 2000.
+
+1. **Единственный слой в UI — канонические виртуальные сенсоры (`sensor.boat_*`):**
+   - Дашборд (`src/yaml/dashboard/sections/*.yaml`) и ассистирующие модули (`open_meteo.yaml`, `refresh_forecast.yaml`) должны ссылаться **ИСКЛЮЧИТЕЛЬНО** на виртуальные template-сенсоры (`sensor.boat_stw`, `sensor.boat_depth`, `sensor.boat_wind_speed`, `sensor.boat_wind_angle`, `sensor.boat_cog`, `sensor.boat_sog`, `sensor.boat_heading`, `sensor.boat_heading_magnetic`, `sensor.boat_magnetic_variation`, `sensor.boat_latitude_raw`, `sensor.boat_longitude_raw`, `sensor.boat_pressure_raw`, `sensor.wind_direction_history`, `sensor.barometer_mmhg`).
+   - Прямая подстановка сырых hardware-hashed ID (например `sensor.wind_data_raymarine_...`) в UI или `DEFAULT_FALLBACKS` **СТРОГО ЗАПРЕЩЕНА**.
+
+2. **Слой маппинга (`helpers/map_nmea_sensors.py`):**
+   - Сканирует HA registry / REST API для автообнаружения реальных NMEA 2000 сущностей на инстансе и генерирует `src/yaml/sensors/derived_n2k.yaml`.
+   - `DEFAULT_FALLBACKS` в `map_nmea_sensors.py` **ОБЯЗАНЫ ВСЕГДА БЫТЬ ГЕНЕРИЧЕСКИМИ СЕНСОРАМИ** (`sensor.speed_water_referenced`, `sensor.water_depth`, `sensor.wind_speed`, `sensor.wind_angle`, `sensor.cog`, `sensor.sog`, `sensor.latitude`, `sensor.longitude`, `sensor.pressure`, `sensor.vessel_heading`, `sensor.magnetic_variation`).
+   - Никогда не хардкодить специфические hash ID конкретного экземпляра Raymarine/YDNU в `DEFAULT_FALLBACKS`.
