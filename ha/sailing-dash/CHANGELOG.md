@@ -12,6 +12,27 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-11
 
+- **Added: ApexCharts wind chart engine (`chart_engine: apexcharts`), Open-Meteo preview style:**
+  Third `sections.wind.chart_engine` option alongside `plotly`/`open_meteo_sdk`, built as a
+  standard Lovelace custom card (`custom:apexcharts-card`, already in `deps.yaml`) rather than
+  a hand-rolled SVG renderer. New isolated section file
+  `src/yaml/dashboard/sections/04_wind_apexcharts.yaml`: measured NMEA history
+  (`sensor.boat_wind_speed`, stops exactly at "Now") on the same time axis as the ECMWF forecast
+  speed (filled area) and gusts (dashed line) from `sensor.wind_forecast_flat`, with a shared/unified
+  tooltip and a "Now" marker line — matching `examples/open-meteo.png`. The top row of wind-direction
+  vector arrows (length scales with speed) is factored into a new reusable card,
+  `src/js/cards/wind-arrows-card.js` (`custom:wind-arrows-row-card`), so it can sit above ANY chart
+  engine without that engine needing to know about arrows. `helpers/build.py::build_dashboard()`
+  now picks exactly one of the three `04_wind*.yaml` variants based on `chart_engine` and, for
+  `custom:apexcharts-card`, injects `graph_span`/`span.offset` from `config.yaml`'s `time_window`
+  (same mechanism as `hours_to_show`/`time_offset` for Plotly). `helpers/configure.py`'s wizard now
+  asks for the wind chart engine (`plotly`/`apexcharts`/`open_meteo_sdk`). None of the existing
+  `04_wind.yaml` (Plotly), `04_wind_openmeteo.yaml` (SVG) or their JS snippets were modified.
+  Fixed a pre-existing bug along the way: the section-config lookup for `04_wind_openmeteo.yaml`/
+  `04_wind_apexcharts.yaml` used to strip only the leading `NN_` prefix, landing on the wrong config
+  key (`wind_openmeteo`/`wind_apexcharts` instead of `wind`) — all three wind variants now share the
+  `sections.wind` config key. Also reverted an accidental default flip in `config.yaml.template`
+  (`chart_engine: open_meteo_sdk` left over from local experimentation) back to `plotly`.
 - **Added: Universal history series filter module (`src/js/common/plotly_history_series.js`):**
   - Created a clean, reusable JS snippet with detailed Russian code comments explaining the filtering logic line-by-line.
   - Filters out non-finite values (`NaN`, `unknown`, `unavailable`) and timestamps past `Date.now()`.

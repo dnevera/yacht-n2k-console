@@ -950,3 +950,97 @@ def test_all_dashboard_and_automation_yaml_files_use_only_virtual_sensors():
             f"Direct physical/hardware sensor references {disallowed} found in {rel_path}! "
             f"All UI cards and automations must use canonical virtual sensors (sensor.boat_*)."
         )
+
+
+def test_open_meteo_sdk_chart_engine_switch(tmp_path):
+    """Test that setting chart_engine: open_meteo_sdk switches the wind section to openmeteo-wind-card."""
+    template_file = tmp_path / "config.yaml.template"
+    config_file = tmp_path / "config.yaml"
+
+    template_file.write_text(
+        "time_window:\n"
+        "  history_hours: 4\n"
+        "  forecast_days: 3\n"
+        "sections:\n"
+        "  wind:\n"
+        "    enabled: true\n"
+        "    chart_engine: open_meteo_sdk\n",
+        encoding="utf-8",
+    )
+
+    with patch.object(build, "BUILD_DIR", str(tmp_path)), patch.object(build, "DEFAULT_TEMPLATE_PATH", str(template_file)), patch.object(build, "DEFAULT_CONFIG_PATH", str(config_file)):
+        build.ensure_dirs()
+        build.build_cards()
+        build.build_sensors()
+        build.build_dashboard()
+
+        dash_str = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
+        assert "type: custom:openmeteo-wind-card" in dash_str
+        assert (tmp_path / "cards" / "openmeteo-wind-card.js").exists()
+
+
+def test_apexcharts_chart_engine_switch(tmp_path):
+    """Test that chart_engine: apexcharts switches the wind section to the ApexCharts card,
+    injects graph_span/span.offset from time_window, and keeps the reusable arrow row card."""
+    template_file = tmp_path / "config.yaml.template"
+    config_file = tmp_path / "config.yaml"
+
+    template_file.write_text(
+        "time_window:\n"
+        "  history_hours: 6\n"
+        "  forecast_days: 5\n"
+        "sections:\n"
+        "  wind:\n"
+        "    enabled: true\n"
+        "    chart_engine: apexcharts\n",
+        encoding="utf-8",
+    )
+
+    with patch.object(build, "BUILD_DIR", str(tmp_path)), patch.object(build, "DEFAULT_TEMPLATE_PATH", str(template_file)), patch.object(build, "DEFAULT_CONFIG_PATH", str(config_file)):
+        build.ensure_dirs()
+        build.build_cards()
+        build.build_sensors()
+        build.build_dashboard()
+
+        dash_str = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
+        assert "type: custom:apexcharts-card" in dash_str
+        assert "type: custom:wind-arrows-row-card" in dash_str
+        # The waves section still uses `custom:plotly-graph` and the windrose
+        # card in Conditions still reads `wind_direction_history` — only the
+        # wind section's own plotly card ("Wind speed" Y-axis title) must be
+        # gone, not the whole card type or that shared entity.
+        assert "title: Wind speed (kts)" not in dash_str
+        assert "type: custom:openmeteo-wind-card" not in dash_str
+        # history_hours=6, forecast_days=5 -> forecast_hours=120, total=126
+        assert "graph_span: 126h" in dash_str
+        assert "offset: -6h" in dash_str
+        assert (tmp_path / "cards" / "wind-arrows-card.js").exists()
+
+
+def test_default_plotly_engine_excludes_other_wind_variants(tmp_path):
+    """Test that the default (plotly) chart_engine keeps only 04_wind.yaml and does not
+    leak the ApexCharts or Open-Meteo SVG variants into the built dashboard."""
+    template_file = tmp_path / "config.yaml.template"
+    config_file = tmp_path / "config.yaml"
+
+    template_file.write_text(
+        "time_window:\n"
+        "  history_hours: 4\n"
+        "  forecast_days: 3\n"
+        "sections:\n"
+        "  wind:\n"
+        "    enabled: true\n",
+        encoding="utf-8",
+    )
+
+    with patch.object(build, "BUILD_DIR", str(tmp_path)), patch.object(build, "DEFAULT_TEMPLATE_PATH", str(template_file)), patch.object(build, "DEFAULT_CONFIG_PATH", str(config_file)):
+        build.ensure_dirs()
+        build.build_cards()
+        build.build_sensors()
+        build.build_dashboard()
+
+        dash_str = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
+        assert "type: custom:plotly-graph" in dash_str
+        assert "type: custom:apexcharts-card" not in dash_str
+        assert "type: custom:openmeteo-wind-card" not in dash_str
+        assert "type: custom:wind-arrows-row-card" not in dash_str

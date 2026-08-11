@@ -147,11 +147,15 @@ def ensure_dirs():
 
 def build_cards():
     """Copy JS custom cards to build/cards/."""
-    src_card = os.path.join(SRC_DIR, "js", "cards", "windy-boat-card.js")
-    dst_card = os.path.join(BUILD_DIR, "cards", "windy-boat-card.js")
-    if os.path.exists(src_card):
-        shutil.copyfile(src_card, dst_card)
-        print(f"Built {dst_card}")
+    cards_dir = os.path.join(SRC_DIR, "js", "cards")
+    dst_dir = os.path.join(BUILD_DIR, "cards")
+    if os.path.exists(cards_dir):
+        for fname in sorted(os.listdir(cards_dir)):
+            if fname.endswith(".js"):
+                src_card = os.path.join(cards_dir, fname)
+                dst_card = os.path.join(dst_dir, fname)
+                shutil.copyfile(src_card, dst_card)
+                print(f"Built {dst_card}")
 
 
 def build_sensors(config=None):
@@ -255,12 +259,32 @@ def build_dashboard(config=None):
     forecast_hours = forecast_days * 24
     total_hours = history_hours + forecast_hours
 
+    wind_cfg = sec_configs.get("wind", {})
+    wind_engine = str(wind_cfg.get("chart_engine", "plotly")).strip().lower()
+    # `04_wind*.yaml` are three alternative implementations of the same
+    # section (Plotly / hand-rolled SVG / ApexCharts) — exactly one is kept
+    # per build, selected by `sections.wind.chart_engine` in config.yaml.
+    wind_section_files = {
+        "plotly": "04_wind.yaml",
+        "open_meteo_sdk": "04_wind_openmeteo.yaml",
+        "openmeteo": "04_wind_openmeteo.yaml",
+        "apexcharts": "04_wind_apexcharts.yaml",
+    }
+    active_wind_file = wind_section_files.get(wind_engine, "04_wind.yaml")
+    all_wind_files = {"04_wind.yaml", "04_wind_openmeteo.yaml", "04_wind_apexcharts.yaml"}
+
     sections = []
     for fname in sorted(os.listdir(sections_dir)):
         if not fname.endswith(".yaml"):
             continue
 
+        if fname in all_wind_files and fname != active_wind_file:
+            continue
+
         sec_key = re.sub(r"^\d+_", "", fname[:-5])
+        if fname in all_wind_files:
+            # All three wind-section variants share the same config key.
+            sec_key = "wind"
         sec_cfg = sec_configs.get(sec_key, {})
 
         if sec_cfg.get("enabled", True) is False:
@@ -291,6 +315,9 @@ def build_dashboard(config=None):
                         if card.get("type") == "custom:plotly-graph":
                             card["hours_to_show"] = total_hours
                             card["time_offset"] = f"{forecast_hours}h"
+                        elif card.get("type") == "custom:apexcharts-card":
+                            card["graph_span"] = f"{total_hours}h"
+                            card.setdefault("span", {})["offset"] = f"-{history_hours}h"
                     filtered_cards.append(card)
                 item["cards"] = filtered_cards
 

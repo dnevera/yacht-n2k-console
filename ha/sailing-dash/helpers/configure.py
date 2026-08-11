@@ -48,6 +48,8 @@ def load_baseline(config_path, template_path):
                         target_sec = config["sections"].setdefault(sec_key, {})
                         if "enabled" in sec_val:
                             target_sec["enabled"] = sec_val["enabled"]
+                        if "chart_engine" in sec_val:
+                            target_sec["chart_engine"] = sec_val["chart_engine"]
                         if "cards" in sec_val and isinstance(sec_val["cards"], dict):
                             target_sec.setdefault("cards", {}).update(sec_val["cards"])
 
@@ -71,6 +73,27 @@ def prompt_bool(prompt_text, default_val):
             if line in ["n", "no", "false", "0", "н", "нет"]:
                 return False
             print("Please enter 'y' for yes or 'n' for no.")
+        except (KeyboardInterrupt, Exception):
+            print("\nAborted.")
+            sys.exit(1)
+
+
+def prompt_choice(prompt_text, options, default_val):
+    """Prompt the user to pick one of `options` (list of strings), returning the chosen value."""
+    options_str = "/".join(options)
+    while True:
+        try:
+            sys.stdout.write(f"{prompt_text} ({options_str}) [default: {default_val}]: ")
+            sys.stdout.flush()
+            line = sys.stdin.readline()
+            if not line:  # EOF
+                return default_val
+            line = line.strip().lower()
+            if not line:
+                return default_val
+            if line in options:
+                return line
+            print(f"Please enter one of: {options_str}")
         except (KeyboardInterrupt, Exception):
             print("\nAborted.")
             sys.exit(1)
@@ -128,6 +151,13 @@ def run_wizard(config, non_interactive=False):
         print(f"\nSection: [{sec_title}]")
         sec_enabled = prompt_bool(f"Enable section '{sec_title}'?", sec_enabled)
         sec_data["enabled"] = sec_enabled
+
+        if sec_enabled and sec_id == "wind":
+            sec_data["chart_engine"] = prompt_choice(
+                "  Chart engine for wind speed/gusts chart",
+                ["plotly", "apexcharts", "open_meteo_sdk"],
+                sec_data.get("chart_engine", "plotly"),
+            )
 
         if sec_enabled:
             cards = sec_data.get("cards", {})

@@ -1,41 +1,81 @@
 # Sailing Dashboard Build & Deployment Configuration
+#
+# Copy this file to `config.yaml` (in this same directory) and edit it to
+# customize your installation. `helpers/build.py` reads `config.yaml` and
+# falls back to the defaults below for any missing key, so this file is
+# always a safe, complete reference of every available option.
+# You can also run `./install_wizard.sh --config` for an interactive CLI
+# wizard that writes `config.yaml` for you instead of editing it by hand.
 
+# Controls the time span shown on the wind and wave charts (Plotly /
+# ApexCharts / Open-Meteo SDK — the same window is used by all chart
+# engines) and how far ahead the Open-Meteo REST forecast is requested.
 time_window:
+  # How many hours of measured history (left of "Now") to show on the wind
+  # and wave charts, read from Home Assistant's recorder. Default: 4.
   history_hours: 12
+  # How many days ahead (right of "Now") to request/show forecast data.
+  # Converted internally to forecast_hours = forecast_days * 24 and used
+  # both for the Open-Meteo REST query window and the chart's right edge.
+  # Default: 3 (= 72 hours).
   forecast_days: 5
 
+# Enable/disable whole dashboard sections and individual cards within them.
+# Each section has:
+#   enabled: true/false  - show/hide the entire section (heading + cards).
+#   cards:                - per-card visibility toggles, keyed by the card's
+#     <card_id>: true/false  `id` tag in src/yaml/dashboard/sections/*.yaml.
+#                             A card is dropped from the build when its
+#                             `enabled` (section) is false OR its own id is
+#                             set to false here. Missing keys default to
+#                             `true` (card/section shown) for backward
+#                             compatibility with older config.yaml files.
 sections:
+  # "Sensors" section: instant gauge tiles for boat speed/depth.
   sensors:
     enabled: true
     cards:
-      stw_gauge: true
-      depth_gauge: true
-      sog_gauge: true
+      stw_gauge: true    # Speed Through Water gauge (sensor.boat_stw)
+      depth_gauge: true  # Water depth gauge (sensor.boat_depth)
+      sog_gauge: true    # Speed Over Ground gauge (sensor.boat_sog)
+  # "Position" section: heading, course, and GPS position cards.
   position:
     enabled: true
     cards:
-      hdg_compass: true
-      cog_compass: true
-      map: false
-      latitude: true
-      longitude: true
+      hdg_compass: true  # HDG compass card (true heading + magnetic details)
+      cog_compass: true  # COG compass card (Course Over Ground)
+      map: false         # Map card showing the boat's live position
+      latitude: true     # Latitude value tile
+      longitude: true    # Longitude value tile
+  # "Conditions" section: wind rose and barometric pressure cards.
   conditions:
     enabled: true
     cards:
-      windrose: true
-      barometer_gauge: true
-      barometer_trend: true
+      windrose: true         # Wind rose card (direction history)
+      barometer_gauge: true  # Current barometric pressure gauge
+      barometer_trend: true  # Barometric pressure trend chart
+  # "Wind Direction & Speed" section.
   wind:
     enabled: true
+    # Which chart implementation to use for the wind speed/gusts chart:
+    #   plotly         - custom:plotly-graph, the default/original chart.
+    #   apexcharts     - custom:apexcharts-card, Open-Meteo preview style
+    #                    (shared tooltip, filled forecast area, reusable
+    #                    top row of wind-direction arrows).
+    #   open_meteo_sdk - hand-rolled SVG card (openmeteo-wind-card.js),
+    #                    experimental fallback, not the recommended option.
+    chart_engine: plotly
     cards:
-      glance: true
-      chart: true
+      glance: true  # Instant value tiles (measured now / forecast / gusts)
+      chart: true   # The time-series wind speed/gusts chart itself
+  # "Waves" section.
   waves:
     enabled: true
     cards:
-      glance: true
-      chart: true
+      glance: true  # Instant value tiles (wave height / period)
+      chart: true   # Wave height/period forecast chart (Plotly)
+  # "Forecast" section: embedded map-based forecast widgets.
   forecast:
     enabled: true
     cards:
-      windy_map: true
+      windy_map: true  # Windy.com embedded weather map widget

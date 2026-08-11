@@ -1,0 +1,127 @@
+- type: grid
+  cards:
+  - type: heading
+    heading_style: title
+    heading: Wind Direction & Speed
+    icon: mdi:weather-windy
+  - id: glance
+    type: glance
+    show_icon: false
+    state_color: false
+    columns: 3
+    entities:
+    - entity: sensor.boat_wind_speed
+      name: Measured now
+      card_mod:
+        style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n  line-height: 14px !important;\n  color: var(--secondary-text-color) !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight: 500 !important;\n  line-height: 30px !important;\n  color: #4fc3f7 !important;\n}\n"
+    - entity: sensor.wind_forecast_next_hour
+      name: Forecast next 1h
+      card_mod:
+        style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n  line-height: 14px !important;\n  color: var(--secondary-text-color) !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight: 500 !important;\n  line-height: 30px !important;\n  color: #b0bec5 !important;\n}\n"
+    - entity: sensor.wind_gust_next_hour
+      name: Gusts next 1h
+      card_mod:
+        style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n  line-height: 14px !important;\n  color: var(--secondary-text-color) !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight: 500 !important;\n  line-height: 30px !important;\n  color: #ff7043 !important;\n}\n"
+    card_mod:
+      style: "ha-card { padding: 10px 8px 6px !important; }\n.entities { padding: 0 !important; }\n.entity {\n  flex-direction: column-reverse !important;\n}\n"
+    grid_options:
+      columns: 36
+  # Top vector arrow row (Open-Meteo preview style): one arrow per forecast
+  # sample, length scales with wind speed. Reusable across chart engines —
+  # this card knows nothing about ApexCharts, it only reads the forecast
+  # sensor attributes.
+  - id: arrows
+    type: custom:wind-arrows-row-card
+    entity: sensor.wind_forecast_flat
+    max_points: 12
+    grid_options:
+      columns: 36
+  # Wind speed/gusts chart in the Open-Meteo style: measured NMEA history up
+  # to "Now" plotted on the same time axis as the ECMWF forecast, with a
+  # single shared (unified) tooltip and a vertical "Now" marker — mirrors
+  # examples/open-meteo.png. `graph_span`/`span.offset` are placeholders
+  # overwritten by build.py from config.yaml's time_window (history_hours /
+  # forecast_days), same as `hours_to_show`/`time_offset` on the Plotly card.
+  - id: chart
+    type: custom:apexcharts-card
+    graph_span: 76h
+    span:
+      start: hour
+      offset: "-4h"
+    header:
+      show: false
+    now:
+      show: true
+      label: Now
+      color: '#ffeb3b'
+    apex_config:
+      chart:
+        height: 260
+        toolbar:
+          show: false
+      dataLabels:
+        enabled: false
+      tooltip:
+        shared: true
+        x:
+          format: dd MMM HH:mm
+      legend:
+        show: true
+        position: bottom
+      yaxis:
+        min: 0
+        decimalsInFloat: 1
+        title:
+          text: Wind speed (kts)
+      stroke:
+        width:
+        - 2
+        - 2
+        - 1
+        curve: straight
+    series:
+    # Measured NMEA history — must stop exactly at "Now": recorder history
+    # never contains future samples, so no extra filtering is needed here
+    # (unlike the Plotly card, which resamples into buckets that can
+    # overshoot). `unknown`/`unavailable` states are turned into `null`
+    # (a gap) rather than being coerced to a misleading number.
+    - entity: sensor.boat_wind_speed
+      name: Measured
+      type: line
+      color: '#4fc3f7'
+      stroke_width: 2
+      unit: kts
+      data_generator: |
+        return history.map((h) => {
+          const v = parseFloat(h.state);
+          return [new Date(h.last_changed).getTime(), Number.isFinite(v) ? Math.round(v * 10) / 10 : null];
+        });
+    # Forecast wind speed (Open-Meteo ECMWF) — drawn as a filled area so it
+    # visually matches the reference screenshot's shaded forecast band.
+    - entity: sensor.wind_forecast_flat
+      name: Forecast
+      type: area
+      color: '#ff7043'
+      opacity: 0.15
+      stroke_width: 2
+      unit: kts
+      data_generator: |
+        const times = entity.attributes.forecast_time || [];
+        const speeds = entity.attributes.forecast_wind || [];
+        return times.map((t, i) => [new Date(t.endsWith('Z') ? t : t + 'Z').getTime(), Math.round((Number(speeds[i]) || 0) * 10) / 10]);
+    # Forecast gusts (Open-Meteo ECMWF) — thin dashed line, same as the
+    # Plotly card's "Gusts (forecast)" trace.
+    - entity: sensor.wind_forecast_flat
+      name: Gusts (forecast)
+      type: line
+      color: '#78909c'
+      stroke_width: 1
+      opacity: 0.9
+      unit: kts
+      data_generator: |
+        const times = entity.attributes.forecast_time || [];
+        const gusts = entity.attributes.forecast_gust || [];
+        return times.map((t, i) => [new Date(t.endsWith('Z') ? t : t + 'Z').getTime(), Math.round((Number(gusts[i]) || 0) * 10) / 10]);
+    grid_options:
+      columns: 36
+  column_span: 3
