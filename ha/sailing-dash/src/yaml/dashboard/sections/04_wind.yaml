@@ -62,7 +62,16 @@
       - store_var: dir
     - entity: sensor.boat_wind_speed
       name: Measured
-      mode: markers
+      # We do not care about every exact instantaneous NMEA sample here — a
+      # smoothed spline reads better next to the forecast line and matches
+      # how Open-Meteo's own preview draws its (already-interpolated)
+      # measured/forecast history side by side.
+      mode: lines
+      line:
+        shape: spline
+        smoothing: 0.6
+        width: 2
+        color: '#4fc3f7'
       extend_to_present: false
       filters:
       - map_y: parseFloat(y)
@@ -72,12 +81,6 @@
       - store_var: speed
       customdata: '$include:plotly_wind_customdata'
       hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Measured</extra>'
-      marker:
-        size: 6
-        symbol: circle
-        color: '#4fc3f7'
-        line:
-          width: 0
     - entity: sensor.wind_forecast_flat
       name: Forecast
       mode: markers
@@ -148,6 +151,8 @@
       - fn: '$include:plotly_history_series'
       hovertemplate: '%{y:.1f} kt<extra>Gusts (measured)</extra>'
       line:
+        shape: spline
+        smoothing: 0.6
         dash: dot
         width: 1
         color: '#b0bec5'

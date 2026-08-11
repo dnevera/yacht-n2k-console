@@ -77,7 +77,15 @@
           - 2
           - 2
           - 1
-          curve: straight
+          # Per-series curve: we don't care about every exact NMEA reading,
+          # so "Measured" is smoothed into a spline to read more like the
+          # (already-interpolated) forecast line next to it; forecast
+          # series stay straight since Open-Meteo's own hourly points are
+          # already a coarse sampling and shouldn't be smoothed further.
+          curve:
+          - smooth
+          - straight
+          - straight
       series:
       # Measured NMEA history — no `data_generator` here on purpose: that is
       # what makes `custom:apexcharts-card` fetch and plot the entity's own
@@ -91,6 +99,18 @@
         unit: kts
         extend_to: false
         float_precision: 1
+        curve: smooth
+        # `curve: smooth` only rounds the corners BETWEEN existing points —
+        # it does not remove noise. Raw NMEA history arrives densely (every
+        # few seconds) and jitters constantly, so at that density a spline
+        # through the noise looks indistinguishable from straight segments.
+        # Averaging into 30-minute buckets first is what actually smooths
+        # the visible line (fewer, calmer points for the spline to curve
+        # through), matching the 30m resample already used on the Plotly
+        # side of this chart.
+        group_by:
+          func: avg
+          duration: 30m
       # Forecast wind speed (Open-Meteo ECMWF) — drawn as a filled area so it
       # visually matches the reference screenshot's shaded forecast band.
       - entity: sensor.wind_forecast_flat
