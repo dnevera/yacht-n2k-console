@@ -12,6 +12,11 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-11
 
+- **Audited: full decoupling of UI cards from physical NMEA sensors & mapping layer verification:**
+  - Audited all 6 dashboard section YAMLs (`01` through `06`), automations, and JS cards: 0 direct usages of physical NMEA entities (100% canonical `sensor.boat_*` virtual sensors).
+  - Verified installation mapping engine (`helpers/map_nmea_sensors.py` and `deploy_sensors.sh`): binds target vessel's PGN entities to `sensor.boat_*` template sensors in `derived_n2k.yaml` dynamically during deploy.
+  - Added automated regression test `test_all_dashboard_and_automation_yaml_files_use_only_virtual_sensors` to `tests/test_sailing_dash.py`. All 30 Python tests and Node JS tests passed.
+
 - **Restored: generic default fallbacks in NMEA mapping engine (`helpers/map_nmea_sensors.py`):**
   - Reverted `DEFAULT_FALLBACKS` in `map_nmea_sensors.py` to generic NMEA entity IDs (`sensor.speed_water_referenced`, `sensor.water_depth`, `sensor.wind_speed`, `sensor.wind_angle`, `sensor.cog`, `sensor.sog`, `sensor.latitude`, `sensor.longitude`, `sensor.pressure`, `sensor.vessel_heading`, `sensor.magnetic_variation`).
   - regenerated `src/yaml/sensors/derived_n2k.yaml` with generic default fallbacks, keeping the UI dashboard completely decoupled from specific hardware PGN primary key hashes.
