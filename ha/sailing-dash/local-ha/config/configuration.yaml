@@ -29,7 +29,7 @@ template:
 - sensor:
   - name: Boat STW
     unique_id: boat_stw
-    unit_of_measurement: kn
+    unit_of_measurement: kts
     device_class: speed
     availability: '{{ states(''sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced'') | is_number }}'
     state: '{{ states(''sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced'') | float(0) | round(1) }}
@@ -44,7 +44,7 @@ template:
       '
   - name: Boat Wind Speed
     unique_id: boat_wind_speed
-    unit_of_measurement: kn
+    unit_of_measurement: kts
     device_class: wind_speed
     availability: '{{ states(''sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed'') | is_number }}'
     state: '{{ states(''sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed'') | float(0) | round(1) }}
@@ -68,7 +68,7 @@ template:
       '
   - name: Boat SOG
     unique_id: boat_sog
-    unit_of_measurement: kn
+    unit_of_measurement: kts
     device_class: speed
     availability: '{{ states(''sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog'') | is_number }}'
     state: '{{ states(''sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog'') | float(0) | round(1) }}

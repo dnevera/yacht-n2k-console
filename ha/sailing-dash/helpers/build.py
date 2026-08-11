@@ -26,6 +26,10 @@ FN_PREFIX = "$fn "
 # Prefix used by scalar placeholders in dashboard YAML to reference a shared
 # JS snippet from src/js/common/ instead of duplicating it inline.
 INCLUDE_PREFIX = "$include:"
+# YAML keys whose value is raw JS evaluated by the card itself — an included
+# snippet must NOT be wrapped into `$fn ...` there (plotly-graph's `filters`
+# steps are the only such place today).
+RAW_INCLUDE_KEYS = {"fn"}
 
 
 def strip_leading_line_comments(js_code):
@@ -68,30 +72,37 @@ def load_common_js_snippets():
     return snippets
 
 
-def resolve_includes(node, snippets):
+def resolve_includes(node, snippets, key_name=None):
     """Recursively replace `$include:<name>` scalar placeholders in-place.
 
     Walks dicts/lists produced by yaml.safe_load and substitutes any string
     value that equals `$include:<name>` with the shared JS snippet wrapped
     back into a `$fn ...` expression, so multiple sections can reuse the same
     JS code without duplicating it in every YAML file.
+
+    Exception: a plotly-graph ``filters: - fn:`` step already *is* a JS
+    function body — the card evaluates it directly and does NOT accept the
+    `$fn ` marker (which only tags *config values* that must be evaluated).
+    Snippets included under an ``fn`` key are therefore inlined verbatim.
     """
     if isinstance(node, dict):
         for key, value in node.items():
             if isinstance(value, str) and value.startswith(INCLUDE_PREFIX):
                 name = value[len(INCLUDE_PREFIX):]
                 if name in snippets:
-                    node[key] = FN_PREFIX + snippets[name]
+                    prefix = "" if key in RAW_INCLUDE_KEYS else FN_PREFIX
+                    node[key] = prefix + snippets[name]
             else:
-                resolve_includes(value, snippets)
+                resolve_includes(value, snippets, key)
     elif isinstance(node, list):
         for i, value in enumerate(node):
             if isinstance(value, str) and value.startswith(INCLUDE_PREFIX):
                 name = value[len(INCLUDE_PREFIX):]
                 if name in snippets:
-                    node[i] = FN_PREFIX + snippets[name]
+                    prefix = "" if key_name in RAW_INCLUDE_KEYS else FN_PREFIX
+                    node[i] = prefix + snippets[name]
             else:
-                resolve_includes(value, snippets)
+                resolve_includes(value, snippets, key_name)
 
 
 def ensure_dirs():

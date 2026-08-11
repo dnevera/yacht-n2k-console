@@ -1,5 +1,13 @@
 /**
  * Plotly Wind Vector Chart card configuration module.
+ *
+ * NOT part of the build: build.py compiles the dashboard from
+ * src/yaml/dashboard/sections/04_wind.yaml (+ the shared snippets in
+ * src/js/common/), and only copies windy-boat-card.js from this directory.
+ * This file is a stale snapshot kept for reference — it still contains the
+ * index-based direction lookup and the missing non-finite filter that made the
+ * chart render nonsense (see CHANGELOG 2026-08-11); do not copy code out of it
+ * without re-checking against the YAML section, which is the source of truth.
  */
 
 const PLOTLY_WIND_CARD_CONFIG = {

@@ -143,7 +143,7 @@ template:
   - sensor:
       - name: Boat STW
         unique_id: boat_stw
-        unit_of_measurement: 'kn'
+        unit_of_measurement: 'kts'
         device_class: speed
         availability: "{{{{ states('{stw_entity}') | is_number }}}}"
         state: >
@@ -162,7 +162,7 @@ template:
       # forecast 0°N/0°E) instead of simply having a gap.
       - name: Boat Wind Speed
         unique_id: boat_wind_speed
-        unit_of_measurement: 'kn'
+        unit_of_measurement: 'kts'
         device_class: wind_speed
         availability: "{{{{ states('{wind_speed_entity}') | is_number }}}}"
         state: >
@@ -186,7 +186,7 @@ template:
 
       - name: Boat SOG
         unique_id: boat_sog
-        unit_of_measurement: 'kn'
+        unit_of_measurement: 'kts'
         device_class: speed
         availability: "{{{{ states('{sog_entity}') | is_number }}}}"
         state: >

@@ -604,3 +604,107 @@ def test_stage_provisioner_nmea2000_config_entry(tmp_path):
     nmea_entries2 = [e for e in entries_raw2["data"]["entries"] if e.get("domain") == "nmea2000"]
     assert len(nmea_entries2) == 1
     assert nmea_entries2[0]["entry_id"] == entry["entry_id"]
+
+
+BUILT_DASHBOARD = os.path.join(SAILING_DASH_DIR, "build", "dashboard-sailing.yaml")
+JS_SNIPPET_TEST = os.path.join(PROJECT_ROOT, "tests", "js", "wind_chart_snippets.test.js")
+
+
+def _wind_chart_card():
+    """The `custom:plotly-graph` wind vector card from the built dashboard."""
+    with open(BUILT_DASHBOARD, encoding="utf-8") as f:
+        dashboard = yaml.safe_load(f)
+    for section in dashboard["views"][0]["sections"]:
+        for card in section.get("cards", []):
+            if card.get("type") != "custom:plotly-graph":
+                continue
+            if "Wind speed" in str(card.get("layout", {}).get("yaxis", {}).get("title", "")):
+                return card
+    raise AssertionError("wind vector chart not found in the built dashboard")
+
+
+def test_wind_chart_drops_non_numeric_samples_before_resampling():
+    """Recorder history is not purely numeric — NaN must never reach `resample`.
+
+    `unknown` (HA restart) and `unavailable` (a derived alias while the N2K bus
+    is quiet) become NaN under `map_y: parseFloat(y)`; a single NaN inside a
+    resample bucket propagates into the trace, the `$ex ys` colour scale and the
+    autoranged Y axis, which is what made the chart show nonsense.
+    """
+    card = _wind_chart_card()
+    checked = 0
+    for series in card["entities"]:
+        steps = series.get("filters", [])
+        keys = [list(step)[0] for step in steps]
+        if "map_y" not in keys:
+            continue  # forecast series: values come from attributes, not history
+        checked += 1
+        drop_at = next(
+            (i for i, step in enumerate(steps)
+             if list(step)[0] == "fn" and "Number.isFinite" in step["fn"]),
+            None,
+        )
+        assert drop_at is not None, f"{series.get('entity')}: no non-finite filter"
+        assert drop_at > keys.index("map_y")
+        if "resample" in keys:
+            assert drop_at < keys.index("resample"), (
+                f"{series.get('entity')}: NaN reaches resample"
+            )
+    assert checked >= 3
+
+
+def test_wind_chart_matches_direction_by_time_not_by_index():
+    """Speed and direction are separate, independently resampled entities.
+
+    Indexing the direction series positionally (`vars.dir.ys[i]`) mislabels every
+    point as soon as the two series differ in length — and a missing direction
+    must not silently become 0° (due North).
+    """
+    card = _wind_chart_card()
+    measured = next(s for s in card["entities"] if s.get("name") == "Measured")
+    customdata = measured["customdata"]
+    annotations = card["layout"]["annotations"]
+    for code in (customdata, annotations):
+        assert "vars.dir.ys[i]" not in code
+        assert "dirYs[i]" not in code
+        assert "dirs[i] || 0" not in code
+        assert "new Date" in code and "Math.abs" in code  # timestamp matching
+    assert "Number.isFinite" in annotations
+
+
+def test_wind_speed_sensors_share_exact_unit_of_measurement():
+    """All wind speed sensors must use `kts` so plotly-graph-card puts them on `y1`.
+
+    If `boat_wind_speed` uses `kn` while `wind_forecast_flat` uses `kts`,
+    plotly-graph-card automatically creates a second Y-axis (`yaxis2`) on the right.
+    Since layout only locks `yaxis` (`fixedrange: true`), `yaxis2` remains unlocked,
+    allowing the user to drag forecast data vertically relative to measured data.
+    """
+    derived = {s["unique_id"]: s for s in _template_sensors("derived_n2k.yaml")}
+    forecast = {s["unique_id"]: s for s in _template_sensors("forecast.yaml")}
+    assert derived["boat_wind_speed"]["unit_of_measurement"] == "kts"
+    assert forecast["wind_forecast_flat"]["unit_of_measurement"] == "kts"
+    assert derived["boat_stw"]["unit_of_measurement"] == "kts"
+    assert derived["boat_sog"]["unit_of_measurement"] == "kts"
+
+
+def test_build_inlines_snippets_into_filter_fn_without_the_fn_marker():
+    """`filters: - fn:` is raw JS — the `$fn ` marker would break the card."""
+    snippets = {"snippet": "({ ys }) => ys"}
+    node = {"filters": [{"fn": "$include:snippet"}], "customdata": "$include:snippet"}
+    build.resolve_includes(node, snippets)
+    assert node["filters"][0]["fn"] == "({ ys }) => ys"
+    assert node["customdata"] == "$fn ({ ys }) => ys"
+
+
+def test_wind_chart_js_snippets():
+    """Run the node regression suite for src/js/common/ wind snippets."""
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    result = subprocess.run(
+        ["node", JS_SNIPPET_TEST], capture_output=True, text=True, cwd=PROJECT_ROOT
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
