@@ -12,6 +12,17 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-11
 
+- **Refactored: extracted all inline JS strings in dashboard YAML sections into standalone JS modules (`src/js/common/`):**
+  - Replaced inline multi-line JavaScript strings in `04_wind.yaml` and `05_waves.yaml` with clean `$include:` references.
+  - Created 11 new shared JS snippet files in `src/js/common/`: `plotly_wind_gust_bucket.js`, `plotly_forecast_wind_series.js`, `plotly_forecast_wind_store.js`, `plotly_forecast_wind_customdata.js`, `plotly_forecast_gust_series.js`, `plotly_forecast_wave_series.js`, `plotly_forecast_wave_store.js`, `plotly_forecast_wave_customdata.js`, `plotly_forecast_wave_period_series.js`, `plotly_wave_annotations.js`, and `plotly_empty_series.js`.
+  - All JS logic across dashboard sections is now modular, cleanly formatted, and maintainable. All 32 Python tests and 10 Node JS snippet tests passed.
+
+- **Fixed: wind chart tooltip showed static measured data when hovering after "Now":**
+  - Added `extend_to_present: false` to all history-backed entity traces on the wind chart (`sensor.wind_direction_history`, `sensor.boat_wind_speed` for `Measured` and `Gusts (measured)`).
+  - Updated `src/js/common/plotly_drop_non_finite.js` to drop points with timestamps in the future (`> Date.now()`), preventing historical samples from spilling past "Now" into the forecast region.
+  - Updated `Gusts (measured)` filter in `04_wind.yaml` to cap bucket end times at `Date.now()`.
+  - Added unit test in `tests/js/wind_chart_snippets.test.js` and regression assertions in `tests/test_sailing_dash.py` ensuring history traces do not extend past "Now" and unified hover tooltips in the forecast region show only forecast data. 32 passed.
+
 - **Added: Central build configuration file (`config.yaml`), card tagging, and interactive setup wizard:**
   - Added `config.yaml` / `config.yaml.template` defining customizable chart time windows (`time_window.history_hours: 4`, `forecast_days: 3`) and section/card enablement toggles.
   - Tagged section cards in `src/yaml/dashboard/sections/*.yaml` with unique `id` keys (`stw_gauge`, `depth_gauge`, `sog_gauge`, `hdg_compass`, `cog_compass`, `map`, `latitude`, `longitude`, `windrose`, `barometer_gauge`, `barometer_trend`, `glance`, `chart`, `windy_map`).

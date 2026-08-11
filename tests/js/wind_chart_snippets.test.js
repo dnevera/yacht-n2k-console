@@ -30,6 +30,11 @@ let ok=true; const t=(name,c)=>{console.log((c?'PASS':'FAIL')+' '+name); if(!c) 
 const r=drop({xs:['a','b','c','d'],ys:[1,NaN,'unknown',4].map(v=>parseFloat(v))});
 t('drop keeps only finite',JSON.stringify(r)==JSON.stringify({xs:['a','d'],ys:[1,4]}));
 
+const pastTime = new Date(Date.now() - 60000).toISOString();
+const futureTime = new Date(Date.now() + 60000).toISOString();
+const rFuture = drop({xs:[pastTime, futureTime], ys:[10, 20]});
+t('drop filters out future timestamps (> Date.now())', JSON.stringify(rFuture) === JSON.stringify({xs:[pastTime], ys:[10]}));
+
 // 2. customdata: dir series shifted/shorter -> matched by time, not index
 const T=(m)=>new Date(Date.UTC(2026,0,1,0,m)).toISOString();
 const speed={xs:[T(0),T(30),T(60)]};

@@ -841,6 +841,13 @@ def test_config_yaml_parsing_and_filtering(tmp_path):
         assert plotly_card["hours_to_show"] == 126
         assert plotly_card["time_offset"] == "120h"
 
+        # Ensure all entity traces on wind chart have extend_to_present: false so measured data doesn't spill past Now into tooltip
+        wind_entities = plotly_card["entities"]
+        measured_entities = [e for e in wind_entities if e.get("entity") in ("sensor.wind_direction_history", "sensor.boat_wind_speed")]
+        assert len(measured_entities) >= 3
+        for me in measured_entities:
+            assert me.get("extend_to_present") is False, f"Entity {me.get('name', me.get('entity'))} missing extend_to_present: false!"
+
         # Ensure temporary 'id' tags are stripped
         dash_str = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
         assert "id: stw_gauge" not in dash_str
