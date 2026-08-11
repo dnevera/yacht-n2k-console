@@ -1004,7 +1004,7 @@ def test_apexcharts_chart_engine_switch(tmp_path):
 
         dash_str = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
         assert "type: custom:apexcharts-card" in dash_str
-        assert "type: custom:wind-arrows-row-card" in dash_str
+        assert "type: custom:wind-chart-with-arrows-card" in dash_str
         # The waves section still uses `custom:plotly-graph` and the windrose
         # card in Conditions still reads `wind_direction_history` — only the
         # wind section's own plotly card ("Wind speed" Y-axis title) must be
@@ -1014,7 +1014,47 @@ def test_apexcharts_chart_engine_switch(tmp_path):
         # history_hours=6, forecast_days=5 -> forecast_hours=120, total=126
         assert "graph_span: 126h" in dash_str
         assert "offset: -6h" in dash_str
-        assert (tmp_path / "cards" / "wind-arrows-card.js").exists()
+        assert (tmp_path / "cards" / "wind-chart-with-arrows-card.js").exists()
+
+        # The arrow overlay must share the exact same time window as the
+        # chart it floats above (build.py injects it from time_window),
+        # plus the default arrow spacing when not set in config.yaml.
+        assert "history_hours: 6" in dash_str
+        assert "forecast_hours: 120" in dash_str
+        assert "arrow_spacing_hours: 3" in dash_str
+
+        # Regression: the Measured series used to rely on a `history`
+        # variable the apexcharts-card data_generator never provides, which
+        # silently produced zero points (no NMEA history on the chart).
+        assert "return history.map" not in dash_str
+
+
+def test_apexcharts_arrow_spacing_hours_override(tmp_path):
+    """Test that sections.wind.arrow_spacing_hours from config.yaml.template is
+    propagated into the wind-chart-with-arrows-card overlay."""
+    template_file = tmp_path / "config.yaml.template"
+    config_file = tmp_path / "config.yaml"
+
+    template_file.write_text(
+        "time_window:\n"
+        "  history_hours: 4\n"
+        "  forecast_days: 3\n"
+        "sections:\n"
+        "  wind:\n"
+        "    enabled: true\n"
+        "    chart_engine: apexcharts\n"
+        "    arrow_spacing_hours: 6\n",
+        encoding="utf-8",
+    )
+
+    with patch.object(build, "BUILD_DIR", str(tmp_path)), patch.object(build, "DEFAULT_TEMPLATE_PATH", str(template_file)), patch.object(build, "DEFAULT_CONFIG_PATH", str(config_file)):
+        build.ensure_dirs()
+        build.build_cards()
+        build.build_sensors()
+        build.build_dashboard()
+
+        dash_str = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
+        assert "arrow_spacing_hours: 6" in dash_str
 
 
 def test_default_plotly_engine_excludes_other_wind_variants(tmp_path):
@@ -1043,4 +1083,4 @@ def test_default_plotly_engine_excludes_other_wind_variants(tmp_path):
         assert "type: custom:plotly-graph" in dash_str
         assert "type: custom:apexcharts-card" not in dash_str
         assert "type: custom:openmeteo-wind-card" not in dash_str
-        assert "type: custom:wind-arrows-row-card" not in dash_str
+        assert "type: custom:wind-chart-with-arrows-card" not in dash_str

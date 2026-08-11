@@ -32,7 +32,7 @@ INCLUDE_PREFIX = "$include:"
 # YAML keys whose value is raw JS evaluated by the card itself — an included
 # snippet must NOT be wrapped into `$fn ...` there (plotly-graph's `filters`
 # steps are the only such place today).
-RAW_INCLUDE_KEYS = {"fn"}
+RAW_INCLUDE_KEYS = {"fn", "custom"}
 
 
 def load_config(config_path=None, template_path=None):
@@ -318,6 +318,17 @@ def build_dashboard(config=None):
                         elif card.get("type") == "custom:apexcharts-card":
                             card["graph_span"] = f"{total_hours}h"
                             card.setdefault("span", {})["offset"] = f"-{history_hours}h"
+                        elif card.get("type") == "custom:wind-chart-with-arrows-card":
+                            # Keep the arrow/legend overlay's time axis in
+                            # lock-step with the nested chart's own axis
+                            # (same source of truth: config.yaml's time_window).
+                            card["history_hours"] = history_hours
+                            card["forecast_hours"] = forecast_hours
+                            card["arrow_spacing_hours"] = int(wind_cfg.get("arrow_spacing_hours", 3))
+                            nested = card.get("chart_config")
+                            if isinstance(nested, dict) and nested.get("type") == "custom:apexcharts-card":
+                                nested["graph_span"] = f"{total_hours}h"
+                                nested.setdefault("span", {})["offset"] = f"-{history_hours}h"
                     filtered_cards.append(card)
                 item["cards"] = filtered_cards
 

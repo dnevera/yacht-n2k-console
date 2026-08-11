@@ -64,7 +64,11 @@ sections:
     #                    top row of wind-direction arrows).
     #   open_meteo_sdk - hand-rolled SVG card (openmeteo-wind-card.js),
     #                    experimental fallback, not the recommended option.
-    chart_engine: plotly
+    chart_engine: apexcharts
+    # How many hours apart the wind-direction arrows drawn above the chart
+    # are spaced (only used by the `apexcharts` engine's arrow overlay).
+    # Lower = more arrows/denser; higher = fewer, easier to read. Default: 3.
+    arrow_spacing_hours: 3
     cards:
       glance: true  # Instant value tiles (measured now / forecast / gusts)
       chart: true   # The time-series wind speed/gusts chart itself

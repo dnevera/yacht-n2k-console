@@ -1,5 +1,10 @@
 /**
  * ApexCharts Wind History & Forecast card configuration module.
+ *
+ * Colours mirror `src/js/common/wind_chart_style.js` / `wind-arrows-card.js`
+ * (measured=#4fc3f7, forecast=#ff7043, gust forecast=#78909c) so this
+ * standalone config module stays visually consistent with the wind section
+ * actually used by build.py (`04_wind_apexcharts.yaml`).
  */
 
 const APEX_WIND_CARD_CONFIG = {
@@ -19,7 +24,7 @@ const APEX_WIND_CARD_CONFIG = {
       entity: 'sensor.boat_wind_speed',
       name: 'Measured (kts)',
       type: 'area',
-      color: '#00bcd4',
+      color: '#4fc3f7',
       stroke_width: 2,
       fill_raw: 'null',
       unit: 'kts',
@@ -29,7 +34,7 @@ const APEX_WIND_CARD_CONFIG = {
       entity: 'sensor.wind_forecast_flat',
       name: 'Forecast (kts)',
       type: 'line',
-      color: '#4fc3f7',
+      color: '#ff7043',
       stroke_width: 2,
       stroke_dash: 5,
       unit: 'kts',
@@ -40,7 +45,7 @@ const APEX_WIND_CARD_CONFIG = {
       entity: 'sensor.wind_forecast_flat',
       name: 'Gusts (kts)',
       type: 'line',
-      color: '#ff7043',
+      color: '#78909c',
       stroke_width: 1,
       stroke_dash: 4,
       unit: 'kts',

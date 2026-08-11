@@ -17,5 +17,5 @@ resources:
     type: module
   - url: /local/openmeteo-wind-card.js?v=1.0.0
     type: module
-  - url: /local/wind-arrows-card.js?v=1.0.0
+  - url: /local/wind-chart-with-arrows-card.js?v=1.0.0
     type: module

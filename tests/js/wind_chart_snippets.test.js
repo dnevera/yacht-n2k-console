@@ -53,4 +53,18 @@ t('dir 90 -> tail east (ax>0)',a.ax>0.01&&Math.abs(a.ay)<1e-9);
 const f=arrows[2];
 t('forecast dir 270 -> tail west (ax<0)',f.ax<-0.01);
 t('Now marker present',out.some(o=>o.text==='Now'));
+
+// 4. wind_chart_style.js: shared colour scale used by both the Plotly "kt
+// scale" colourbar and the ApexCharts wind-chart-with-arrows-card.js overlay
+// must agree on every sample, so the two chart engines never disagree on
+// what colour a given wind speed should be.
+const style = require(D + 'wind_chart_style.js');
+const cardSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'ha', 'sailing-dash', 'src', 'js', 'cards', 'wind-chart-with-arrows-card.js'), 'utf8');
+global.HTMLElement = class {};
+global.customElements = { define: () => {} };
+const cardWindSpeedColor = new Function(cardSrc + '\nreturn windSpeedColor;')();
+for (const v of [0, 4.9, 5, 9.9, 12, 19.9, 24, 29.9, 34, 39.9, 40, 55]) {
+  t(`windSpeedColor(${v}) matches between wind_chart_style.js and wind-chart-with-arrows-card.js`, style.windSpeedColor(v) === cardWindSpeedColor(v));
+}
+
 process.exit(ok?0:1);
