@@ -85,6 +85,39 @@ def test_build_pipeline_execution(tmp_path):
         assert dashboard_path.exists()
 
 
+def test_build_resources_content_hashed_cache_buster(tmp_path):
+    """Local `/local/*.js` resources must get a content-hash `?v=`, not a static one.
+
+    Regression for a real stale-browser-cache bug: our own card entries in
+    lovelace-resources.yaml carried a hand-written `?v=1.0.0` that never
+    changed when the JS file's content did, so the browser's ES-module
+    cache kept serving old bytes for an already-updated card. Third-party
+    HACS resources (no matching file under src/js/cards/) must be left
+    untouched — only cards we own and control the version scheme for.
+    """
+    import hashlib as _hashlib
+
+    with patch.object(build, "BUILD_DIR", str(tmp_path)):
+        build.ensure_dirs()
+        build.build_resources()
+
+        resources_yaml = yaml.safe_load(
+            (tmp_path / "lovelace-resources.yaml").read_text(encoding="utf-8")
+        )
+
+    items = {item["url"].split("?", 1)[0]: item["url"] for item in resources_yaml["resources"]}
+
+    card_path = os.path.join(SAILING_DASH_DIR, "src", "js", "cards", "wind-chart-with-arrows-card.js")
+    with open(card_path, "rb") as f:
+        expected_hash = _hashlib.sha256(f.read()).hexdigest()[:8]
+
+    assert items["/local/wind-chart-with-arrows-card.js"] == (
+        f"/local/wind-chart-with-arrows-card.js?v={expected_hash}"
+    )
+    # Third-party HACS resource without a matching local card file stays as-is.
+    assert items["/local/windrose-card.js"] == "/local/windrose-card.js?v=2.4.2"
+
+
 def _collect_unique_ids(sensors_yaml):
     """Collect 'sensor.<unique_id>'-style entity ids from a compiled sensors artifact."""
     entities = set()

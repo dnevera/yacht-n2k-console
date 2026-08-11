@@ -82,12 +82,13 @@ class WindChartWithArrowsCard extends HTMLElement {
         .wrap { position: relative; }
         .chart-slot { display: block; }
         /* Arrow row: floats INSIDE the chart's own top padding, not below
-           it — left offset leaves room for the legend strip. */
+           it — right offset leaves room for the colour legend, which now
+           sits on the RIGHT (same side as Plotly's own colourbar). */
         .arrows {
           position: absolute;
           top: 34px;
-          left: 46px;
-          right: 8px;
+          left: 8px;
+          right: 54px;
           height: 24px;
           pointer-events: none; /* hover/drag still reach the chart below */
         }
@@ -96,13 +97,15 @@ class WindChartWithArrowsCard extends HTMLElement {
           top: 0;
           transform: translateX(-50%);
         }
-        /* Colour legend: a vertical "kt" gradient bar right next to the
-           chart's own Y axis (left edge), like a compact colourbar. */
+        /* Colour legend: a vertical "kt" gradient bar on the RIGHT edge of
+           the chart, mirroring where Plotly's own colourbar sits (default
+           Plotly colourbar thickness is 30px - the bar below matches it
+           exactly so both chart engines render the same visual weight). */
         .legend {
           position: absolute;
           top: 30px;
-          left: 4px;
-          width: 34px;
+          right: 4px;
+          width: 46px;
           bottom: 40px;
           display: flex;
           flex-direction: column;
@@ -110,7 +113,7 @@ class WindChartWithArrowsCard extends HTMLElement {
           pointer-events: none;
         }
         .legend-bar {
-          width: 8px;
+          width: 30px;
           flex: 1;
           border-radius: 2px;
           background: linear-gradient(to top, ${WIND_SPEED_COLOR_STOPS.map(([max, color]) => `${color} ${(max / 40) * 100}%`).join(', ')}, ${WIND_SPEED_OVER_MAX_COLOR} 100%);

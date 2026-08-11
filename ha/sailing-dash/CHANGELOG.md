@@ -12,6 +12,11 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-11
 
+- **Fixed: local custom cards used a hand-written, never-bumped `?v=1.0.0` cache-buster, so browsers could keep serving stale JS after a card was updated/deployed:**
+  - Root cause (confirmed on `local-ha`, not assumed): the deployed `wind-chart-with-arrows-card.js` on disk was byte-for-byte identical to the repo's fixed version (verified via `md5sum` inside the container) — the "colour legend on the left" the user kept seeing was not a stale deploy, it was the browser's ES-module cache pinned to the exact `/local/wind-chart-with-arrows-card.js?v=1.0.0` URL, which never changes when only the file's *content* changes.
+  - `helpers/build.py::build_resources()` now rewrites the `?v=` query on every `/local/<name>.js` entry in `lovelace-resources.yaml` that matches one of our own cards (`src/js/cards/<name>.js`) to an 8-char sha256 hash of that file's current content, so the URL — and therefore the browser's cache key — automatically changes whenever the card's source changes. Third-party HACS resources (no matching local file, e.g. `windrose-card.js?v=2.4.2`) are left untouched.
+  - Added `test_build_resources_content_hashed_cache_buster` to `tests/test_sailing_dash.py`.
+
 - **Fixed: ApexCharts wind chart — arrows were still a separate plaque under the chart, tooltip/colours didn't match Plotly, `k` instead of `kts`, no colour legend by the Y axis:**
   - **Arrows genuinely ON the chart now.** Replaced the two sibling cards (`custom:apexcharts-card` + `custom:wind-arrows-row-card` stacked via a `margin-top: -232px` hack) with a single new wrapper card, `src/js/cards/wind-chart-with-arrows-card.js` (`custom:wind-chart-with-arrows-card`). It creates the nested `custom:apexcharts-card` via HA's own `loadCardHelpers().createCardElement()` and paints the arrow row + colour legend as an absolutely-positioned SVG layer in the exact same shadow DOM — pixel-locked to the chart regardless of its height, instead of a fragile cross-card negative margin.
   - **Colour legend moved next to the Y axis (left edge)**, as a vertical 0–40+ kt gradient strip, mirroring where Plotly's own colourbar sits relative to the chart.

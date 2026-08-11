@@ -61,7 +61,9 @@
         dataLabels:
           enabled: false
         tooltip:
-          custom: '$include:apex_wind_tooltip'
+          shared: true
+          x:
+            format: dd MMM HH:mm
         legend:
           show: true
           position: bottom

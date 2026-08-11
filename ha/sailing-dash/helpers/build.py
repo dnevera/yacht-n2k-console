@@ -6,6 +6,7 @@ Compiles modular YAML files and JS components from src/ into build/ artifacts,
 and generates build/local-preview/card-configs.js for offline testing.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -233,12 +234,47 @@ def build_automations():
 
 
 def build_resources():
-    """Build build/lovelace-resources.yaml from src/yaml/resources/lovelace-resources.yaml."""
+    """Build build/lovelace-resources.yaml from src/yaml/resources/lovelace-resources.yaml.
+
+    Every `/local/<name>.js?v=...` entry that corresponds to one of our own
+    custom cards (src/js/cards/<name>.js) gets its `?v=` cache-buster
+    replaced with a short sha256 hash of that file's *current* content.
+    This makes the browser's ES-module cache bust automatically whenever a
+    card's source changes, instead of relying on a developer remembering to
+    bump a hand-written version string (which is easy to forget and was the
+    root cause of a stale-card-in-browser bug: the file on disk/deployed
+    was already up to date, but the URL never changed so the browser kept
+    serving the old cached module bytes).
+    """
     src_res = os.path.join(SRC_DIR, "yaml", "resources", "lovelace-resources.yaml")
     dst_res = os.path.join(BUILD_DIR, "lovelace-resources.yaml")
-    if os.path.exists(src_res):
-        shutil.copyfile(src_res, dst_res)
-        print(f"Built {dst_res}")
+    if not os.path.exists(src_res):
+        return
+
+    cards_dir = os.path.join(SRC_DIR, "js", "cards")
+    with open(src_res, "r", encoding="utf-8") as f:
+        resources = yaml.safe_load(f) or {}
+
+    items = resources.get("resources") if isinstance(resources, dict) else None
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("url")
+            if not isinstance(url, str) or not url.startswith("/local/"):
+                continue
+            base = url.split("?", 1)[0]
+            card_name = base[len("/local/"):]
+            card_path = os.path.join(cards_dir, card_name)
+            if not os.path.isfile(card_path):
+                continue
+            with open(card_path, "rb") as cf:
+                digest = hashlib.sha256(cf.read()).hexdigest()[:8]
+            item["url"] = f"{base}?v={digest}"
+
+    with open(dst_res, "w", encoding="utf-8") as f:
+        yaml.safe_dump(resources, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    print(f"Built {dst_res}")
 
 
 def build_dashboard(config=None):
