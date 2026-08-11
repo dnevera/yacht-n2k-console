@@ -58,12 +58,69 @@ ha/sailing-dash/
 
 Before deploying, `deploy.sh` automatically invokes `python3 build.py` to ensure build artifacts in `build/` are completely up-to-date.
 
+## Customizing Dashboard & Time Windows (`config.yaml`)
+
+Custom build parameters and visibility toggles are managed in `ha/sailing-dash/config.yaml` (default template provided in `config.yaml.template`):
+
+```yaml
+time_window:
+  history_hours: 4   # Measured history time window drawn left of Now (hours)
+  forecast_days: 3   # Forecast window drawn right of Now (days) for REST queries and charts
+
+sections:
+  sensors:
+    enabled: true
+    cards:
+      stw_gauge: true
+      depth_gauge: true
+      sog_gauge: true
+  position:
+    enabled: true
+    cards:
+      hdg_compass: true
+      cog_compass: true
+      map: true
+      latitude: true
+      longitude: true
+  conditions:
+    enabled: true
+    cards:
+      windrose: true
+      barometer_gauge: true
+      barometer_trend: true
+  wind:
+    enabled: true
+    cards:
+      glance: true
+      chart: true
+  waves:
+    enabled: true
+    cards:
+      glance: true
+      chart: true
+  forecast:
+    enabled: true
+    cards:
+      windy_map: true
+```
+
+### Interactive Setup Wizard
+During setup or reconfiguration, run:
+```bash
+./install_wizard.sh --config
+# or directly via helper:
+python3 helpers/configure.py
+```
+This guides the installer through interactive prompts for history/forecast time windows and section/card visibility choices before `build.py` runs.
+
 ## Key Files
 
 Everything except `deploy.sh`, `run_stage.sh` and `install_wizard.sh` lives in `helpers/` — call
 those as `python3 helpers/<script>.py`.
 
-- `install_wizard.sh` — **guided install / re-install for any profile** (`--target <profile>`). Runs every automatable step in order and stops at two blocking gates: **GATE A** (HACS activated in the UI, verified by `helpers/stage_provisioner.py check-hacs`) and **GATE B** (NMEA 2000 config entry on the tcp-gw plus raw entities, verified by `deploy.sh --preflight`). A gate never continues on a warning and behaves identically on Stage and Prod. Flags: `--list`, `--from N`, `--only N`, `--reinstall`, `--dry-run`.
+- `install_wizard.sh` — **guided install / re-install for any profile** (`--target <profile>`). Runs every automatable step in order and stops at two blocking gates: **GATE A** (HACS activated in the UI, verified by `helpers/stage_provisioner.py check-hacs`) and **GATE B** (NMEA 2000 config entry on the tcp-gw plus raw entities, verified by `deploy.sh --preflight`). A gate never continues on a warning and behaves identically on Stage and Prod. Flags: `--config`, `--list`, `--from N`, `--only N`, `--reinstall`, `--dry-run`.
+- `config.yaml` / `config.yaml.template` — **central build configuration**. Controls chart time windows (`history_hours`, `forecast_days`) and section/card visibility toggles.
+- `helpers/configure.py` — **interactive configuration wizard**. CLI helper executed by `./install_wizard.sh --config` to prompt for time windows and section/card enablement choices.
 - `build.py` — **automated build engine**. Compiles modular source code from `src/` into deployable target YAML/JS files in `build/`.
 - `build_docker.sh` — **HA Docker build script**. Compiles source modules, builds the custom Stage Home Assistant Docker image (`local-ha`), starts the container, and deploys build artifacts.
 - `start_stage.py` / `run_stage.sh` — **Stage environment orchestrator**. Launches local Docker container (`local-ha`), controls NMEA telemetry (`--demo` local simulator or `--live` TCP gateway), triggers `build.py` + `./deploy.sh --stage`, and watches `src/` for live auto-rebuilding. `--provision-only` stops after provisioning (no deploy) — that is what `install_wizard.sh` uses so its gates are not bypassed.

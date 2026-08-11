@@ -3,7 +3,8 @@
   - type: heading
     heading_style: title
     heading: Conditions
-  - type: custom:windrose-card
+  - id: windrose
+    type: custom:windrose-card
     windspeed_bar_location: right
     data_period:
       period_back: -24h
@@ -19,7 +20,8 @@
         label: Wind Speed
         unit: ' kn'
         entity: sensor.boat_wind_speed
-  - type: gauge
+  - id: barometer_gauge
+    type: gauge
     name: Pressure (mmHg)
     entity: sensor.barometer_mmhg
     min: 720
@@ -32,7 +34,8 @@
     grid_options:
       rows: 3
       columns: 12
-  - type: tile
+  - id: barometer_trend
+    type: tile
     entity: sensor.barometer_mmhg
     features:
     - type: trend-graph

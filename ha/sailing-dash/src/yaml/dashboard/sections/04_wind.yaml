@@ -4,7 +4,8 @@
     heading_style: title
     heading: Wind Direction & Speed
     icon: mdi:weather-windy
-  - type: glance
+  - id: glance
+    type: glance
     show_icon: false
     state_color: false
     columns: 3
@@ -39,14 +40,10 @@
         }\n"
     grid_options:
       columns: 36
-  - type: custom:plotly-graph
-    hours_to_show: >-
-      $fn ({ hass }) => { const a = (hass.states['sensor.chart_time_window'] ||
-      { attributes: {} }).attributes; return Number(a.history_hours || 4) +
-      Number(a.forecast_hours || 24); }
-    time_offset: >-
-      $fn ({ hass }) => ((hass.states['sensor.chart_time_window'] ||
-      { attributes: {} }).attributes.forecast_hours || 24) + 'h'
+  - id: chart
+    type: custom:plotly-graph
+    hours_to_show: 76
+    time_offset: 72h
     entities:
     # `map_y` + drop-non-finite BEFORE `resample`: a recorder history contains
     # `unknown`/`unavailable` states (HA restart, or a derived alias going

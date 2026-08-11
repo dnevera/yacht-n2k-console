@@ -30,6 +30,7 @@ One command walks the whole thing for any profile and **stops** at each gate:
 ```bash
 cd ha/sailing-dash
 ./install_wizard.sh                          # profile "stage"
+./install_wizard.sh --config                 # interactively configure cards & chart time windows
 ./install_wizard.sh --target prod            # any profile from .env
 ./install_wizard.sh --target prod --reinstall
 ./install_wizard.sh --list                   # the 8 steps

@@ -5,7 +5,7 @@ automation: !include 'automations.yaml'
 script: !include 'scripts.yaml'
 scene: !include 'scenes.yaml'
 rest:
-- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(48))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
+- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(120))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
   scan_interval: 900
   sensor:
   - name: Wind Forecast REST
@@ -15,7 +15,7 @@ rest:
     unit_of_measurement: kts
     json_attributes:
     - hourly
-- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(48))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
+- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(120))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
   scan_interval: 900
   sensor:
   - name: Wave Forecast REST
@@ -158,8 +158,8 @@ template:
     unique_id: chart_time_window
     icon: mdi:chart-timeline-variant
     attributes:
-      history_hours: '{{ 4 }}'
-      forecast_hours: '{{ 72 }}'
+      history_hours: '{{ 12 }}'
+      forecast_hours: '{{ 120 }}'
     state: '{{ state_attr(''sensor.chart_time_window'', ''history_hours'') }}h back / {{ state_attr(''sensor.chart_time_window'', ''forecast_hours'') }}h ahead
 
       '

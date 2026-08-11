@@ -3,7 +3,8 @@
   - type: heading
     heading_style: title
     heading: Sensors
-  - type: gauge
+  - id: stw_gauge
+    type: gauge
     name: STW (kn)
     entity: sensor.boat_stw
     min: 0
@@ -13,7 +14,8 @@
       green: 0
       yellow: 8
       red: 10
-  - type: gauge
+  - id: depth_gauge
+    type: gauge
     name: Depth (m)
     entity: sensor.boat_depth
     min: 0
@@ -40,7 +42,8 @@
         \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
         \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
         \ | float(0) >= 4.5 else '#888888')) }};\n}"
-  - type: gauge
+  - id: sog_gauge
+    type: gauge
     name: SOG (kn)
     entity: sensor.boat_sog
     min: 0

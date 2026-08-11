@@ -21,6 +21,7 @@
 #   ./install_wizard.sh                          # profile "stage", asks before each step
 #   ./install_wizard.sh --target prod            # any profile from .env
 #   ./install_wizard.sh --target prod --reinstall# wipe/clean-install where allowed
+#   ./install_wizard.sh --config                 # interactively configure cards & time windows
 #   ./install_wizard.sh --from 5                 # resume from a step (see --list)
 #   ./install_wizard.sh --only 6                 # run exactly one step
 #   ./install_wizard.sh --list                   # print the step list and exit
@@ -40,6 +41,7 @@ source "${SCRIPT_DIR}/helpers/lib/env_profile.sh"
 
 PROFILE="stage"
 REINSTALL=0
+DO_CONFIG=0
 ASSUME_YES=0
 DRY_RUN=0
 FROM_STEP=1
@@ -55,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --stage)     PROFILE="stage" ;;
         --prod)      PROFILE="prod" ;;
         --reinstall|--clean-install) REINSTALL=1 ;;
+        --config)    DO_CONFIG=1 ;;
         --from)      FROM_STEP="${2:?--from needs a step number}"; shift ;;
         --from=*)    FROM_STEP="${arg#*=}" ;;
         --only)      ONLY_STEP="${2:?--only needs a step number}"; shift ;;
@@ -249,6 +252,12 @@ fi
 # ── Step 3: build + deps ─────────────────────────────────────────────────────
 if should_run 3; then
     begin_step 3
+    if [[ "${DO_CONFIG}" == "1" ]]; then
+        info "Running dashboard configuration wizard..."
+        CONF_ARGS=()
+        [[ "${ASSUME_YES}" == "1" ]] && CONF_ARGS+=("--non-interactive")
+        run python3 "${SCRIPT_DIR}/helpers/configure.py" "${CONF_ARGS[@]}" || die "configure.py failed"
+    fi
     run python3 "${SCRIPT_DIR}/helpers/build.py" || die "build.py failed"
     run python3 "${SCRIPT_DIR}/helpers/fetch_deps.py" || \
         die "fetch_deps.py failed — every artifact is pinned by tag in deps.yaml and needs GitHub reachable"

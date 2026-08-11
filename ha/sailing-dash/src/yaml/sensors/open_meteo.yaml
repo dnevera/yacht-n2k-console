@@ -15,7 +15,7 @@ rest:
       {%- if lat | abs < 0.01 and lon | abs < 0.01 -%}
       {%- set lat = 42.43 -%}{%- set lon = 18.60 -%}
       {%- endif -%}
-      https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+      https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(72))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wind Forecast REST'
@@ -32,7 +32,7 @@ rest:
       {%- if lat | abs < 0.01 and lon | abs < 0.01 -%}
       {%- set lat = 42.43 -%}{%- set lon = 18.60 -%}
       {%- endif -%}
-      https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(48))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+      https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(72))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wave Forecast REST'

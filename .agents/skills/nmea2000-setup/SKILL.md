@@ -1073,3 +1073,8 @@ raw_tx = parts[0] + b' ' + b' '.join(parts[1:]) + b'\r\n'
    - Сканирует HA registry / REST API для автообнаружения реальных NMEA 2000 сущностей на инстансе и генерирует `src/yaml/sensors/derived_n2k.yaml`.
    - `DEFAULT_FALLBACKS` в `map_nmea_sensors.py` **ОБЯЗАНЫ ВСЕГДА БЫТЬ ГЕНЕРИЧЕСКИМИ СЕНСОРАМИ** (`sensor.speed_water_referenced`, `sensor.water_depth`, `sensor.wind_speed`, `sensor.wind_angle`, `sensor.cog`, `sensor.sog`, `sensor.latitude`, `sensor.longitude`, `sensor.pressure`, `sensor.vessel_heading`, `sensor.magnetic_variation`).
    - Никогда не хардкодить специфические hash ID конкретного экземпляра Raymarine/YDNU в `DEFAULT_FALLBACKS`.
+
+3. **Конфигурация Сборки и Тайм-Фреймов (`ha/sailing-dash/config.yaml`):**
+   - Центрирует параметры инсталляции: временные окна графиков/REST прогноза (`history_hours` назад, `forecast_days` вперёд) и тумблеры видимости секций/карточек (`sections.<sec>.enabled`, `cards.<card_id>`).
+   - `helpers/build.py` считывает `config.yaml` (с фолбэком на `config.yaml.template`), фильтрует блоки YAML и подставляет атрибуты `history_hours` и `forecast_hours = forecast_days * 24` в `sensor.chart_time_window`.
+   - Интерактивная настройка при инсталляции запускается через `./install_wizard.sh --config` (вызывает `helpers/configure.py`).

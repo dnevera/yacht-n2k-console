@@ -2,7 +2,8 @@
   cards:
   - type: heading
     heading: Position
-  - type: custom:compass-card
+  - id: hdg_compass
+    type: custom:compass-card
     header:
       title:
         value: HDG
@@ -38,7 +39,8 @@
         \ %}{{ '+' if v > 0 else '' }}{{ v }}°\";\n  position: absolute;\n  bottom:\
         \ 8px;\n  right: 12px;\n  font-size: 11px;\n  color: var(--secondary-text-color);\n\
         \  pointer-events: none;\n}\n"
-  - type: custom:compass-card
+  - id: cog_compass
+    type: custom:compass-card
     header:
       title:
         value: COG
@@ -66,12 +68,14 @@
         color: '#ff7043'
     value_sensors:
     - sensor: sensor.boat_cog
-  - type: map
+  - id: map
+    type: map
     entities:
     - entity: device_tracker.nevera
     default_zoom: 14
     aspect_ratio: 16x9
-  - type: entity
+  - id: latitude
+    type: entity
     entity: sensor.boat_latitude
     name: Latitude
     card_mod:
@@ -80,7 +84,8 @@
         \  color: var(--grey-color) !important;\n}\n\n.value {\n  font-size: calc(14px\
         \ * 1.75) !important;\n}\n\n.measurement {\n  font-size: 14px !important;\n\
         \  color: var(--grey-color) !important;\n}"
-  - type: entity
+  - id: longitude
+    type: entity
     entity: sensor.boat_longitude
     name: Longitude
     card_mod:

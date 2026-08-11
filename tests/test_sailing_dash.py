@@ -749,6 +749,140 @@ def test_wind_chart_js_snippets():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_config_yaml_parsing_and_filtering(tmp_path):
+    """Test loading config.yaml, card/section filtering, and chart time window generation."""
+    config_file = tmp_path / "config.yaml"
+    template_file = tmp_path / "config.yaml.template"
+
+    # Write test template
+    template_file.write_text(
+        "time_window:\n"
+        "  history_hours: 4\n"
+        "  forecast_days: 3\n"
+        "sections:\n"
+        "  sensors:\n"
+        "    enabled: true\n"
+        "    cards:\n"
+        "      stw_gauge: true\n"
+        "      depth_gauge: true\n"
+        "      sog_gauge: true\n"
+        "  waves:\n"
+        "    enabled: true\n"
+        "    cards:\n"
+        "      glance: true\n"
+        "      chart: true\n",
+        encoding="utf-8",
+    )
+
+    # 1. Test baseline default load
+    cfg = build.load_config(str(config_file), str(template_file))
+    assert cfg["time_window"]["history_hours"] == 4
+    assert cfg["time_window"]["forecast_days"] == 3
+
+    # 2. Override with custom time window and card/section disabling
+    config_file.write_text(
+        "time_window:\n"
+        "  history_hours: 6\n"
+        "  forecast_days: 5\n"
+        "sections:\n"
+        "  sensors:\n"
+        "    cards:\n"
+        "      stw_gauge: false\n"
+        "  waves:\n"
+        "    enabled: false\n",
+        encoding="utf-8",
+    )
+
+    cfg = build.load_config(str(config_file), str(template_file))
+    assert cfg["time_window"]["history_hours"] == 6
+    assert cfg["time_window"]["forecast_days"] == 5
+    assert cfg["sections"]["sensors"]["cards"]["stw_gauge"] is False
+    assert cfg["sections"]["waves"]["enabled"] is False
+
+    # 3. Test build_sensors with customized config
+    with patch.object(build, "BUILD_DIR", str(tmp_path)):
+        build.ensure_dirs()
+        build.build_sensors(cfg)
+        sensors_yaml = yaml.safe_load((tmp_path / "sensors-sailing.yaml").read_text(encoding="utf-8"))
+        chart_tw = None
+        for item in sensors_yaml.get("template", []):
+            for s in item.get("sensor", []):
+                if s.get("unique_id") == "chart_time_window":
+                    chart_tw = s
+        assert chart_tw is not None
+        assert chart_tw["attributes"]["history_hours"] == "{{ 6 }}"
+        assert chart_tw["attributes"]["forecast_hours"] == "{{ 120 }}"
+
+        # Verify rest resource_template fallback int(120)
+        rest_items = sensors_yaml.get("rest", [])
+        assert len(rest_items) > 0
+        for r in rest_items:
+            assert "int(120)" in r.get("resource_template", "")
+
+    # 4. Test build_dashboard filtering with customized config
+    with patch.object(build, "BUILD_DIR", str(tmp_path)):
+        build.ensure_dirs()
+        build.build_dashboard(cfg)
+        dash_data = yaml.safe_load((tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8"))
+        sec_list = dash_data["views"][0]["sections"]
+        sec_headings = [s["cards"][0].get("heading") for s in sec_list if s.get("cards")]
+        assert "Waves" not in sec_headings
+        assert "Sensors" in sec_headings
+
+        sensors_sec = next(s for s in sec_list if s["cards"][0].get("heading") == "Sensors")
+        card_names = [c.get("name") for c in sensors_sec["cards"] if isinstance(c, dict)]
+        assert "STW (kn)" not in card_names
+        assert "Depth (m)" in card_names
+        assert "SOG (kn)" in card_names
+
+        # Verify plotly-graph cards have injected hours_to_show=126 and time_offset='120h'
+        wind_sec = next(s for s in sec_list if s["cards"][0].get("heading") == "Wind Direction & Speed")
+        plotly_card = next(c for c in wind_sec["cards"] if isinstance(c, dict) and c.get("type") == "custom:plotly-graph")
+        assert plotly_card["hours_to_show"] == 126
+        assert plotly_card["time_offset"] == "120h"
+
+        # Ensure temporary 'id' tags are stripped
+        dash_str = (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
+        assert "id: stw_gauge" not in dash_str
+        assert "id: depth_gauge" not in dash_str
+
+
+def test_configure_py_helper(tmp_path):
+    """Test helpers/configure.py in non-interactive CLI mode."""
+    import configure
+    config_file = tmp_path / "config.yaml"
+    template_file = tmp_path / "config.yaml.template"
+
+    template_file.write_text(
+        "time_window:\n"
+        "  history_hours: 4\n"
+        "  forecast_days: 3\n"
+        "sections:\n"
+        "  sensors:\n"
+        "    enabled: true\n"
+        "    cards:\n"
+        "      stw_gauge: true\n",
+        encoding="utf-8",
+    )
+
+    test_args = [
+        "configure.py",
+        "--config-file", str(config_file),
+        "--template-file", str(template_file),
+        "--non-interactive",
+        "--history-hours", "8",
+        "--forecast-days", "4",
+    ]
+    with patch.object(sys, "argv", test_args):
+        configure.main()
+
+    assert config_file.exists()
+    written_cfg = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    assert written_cfg["time_window"]["history_hours"] == 8
+    assert written_cfg["time_window"]["forecast_days"] == 4
+    assert written_cfg["sections"]["sensors"]["cards"]["stw_gauge"] is True
+
+
 def test_all_dashboard_and_automation_yaml_files_use_only_virtual_sensors():
     """Ensure NO dashboard section, automation, or forecast/open-meteo sensor file
     directly references hardware/physical NMEA sensors.

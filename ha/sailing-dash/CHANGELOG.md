@@ -12,6 +12,14 @@ replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
 ## 2026-08-11
 
+- **Added: Central build configuration file (`config.yaml`), card tagging, and interactive setup wizard:**
+  - Added `config.yaml` / `config.yaml.template` defining customizable chart time windows (`time_window.history_hours: 4`, `forecast_days: 3`) and section/card enablement toggles.
+  - Tagged section cards in `src/yaml/dashboard/sections/*.yaml` with unique `id` keys (`stw_gauge`, `depth_gauge`, `sog_gauge`, `hdg_compass`, `cog_compass`, `map`, `latitude`, `longitude`, `windrose`, `barometer_gauge`, `barometer_trend`, `glance`, `chart`, `windy_map`).
+  - Implemented `helpers/configure.py` (CLI wizard prompting for time windows and section/card enablement) and integrated `--config` flag into `./install_wizard.sh`.
+  - Updated `helpers/build.py`: parses `config.yaml`, filters disabled sections and cards (stripping temporary `id` keys from built dashboard YAML), and injects dynamic `history_hours` and `forecast_hours = forecast_days * 24` attributes into `sensor.chart_time_window`.
+  - Added regression test suite in `tests/test_sailing_dash.py` validating config loading, card/section filtering, parameter injection, and `configure.py` execution. 32 passed.
+  - Updated documentation in `README.md`, `INSTALLATION.md`, and `.agents/skills/nmea2000-setup/SKILL.md`.
+
 - **Audited: full decoupling of UI cards from physical NMEA sensors & mapping layer verification:**
   - Audited all 6 dashboard section YAMLs (`01` through `06`), automations, and JS cards: 0 direct usages of physical NMEA entities (100% canonical `sensor.boat_*` virtual sensors).
   - Verified installation mapping engine (`helpers/map_nmea_sensors.py` and `deploy_sensors.sh`): binds target vessel's PGN entities to `sensor.boat_*` template sensors in `derived_n2k.yaml` dynamically during deploy.

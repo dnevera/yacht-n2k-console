@@ -4,7 +4,8 @@
     icon: mdi:weather-windy-variant
     heading_style: title
     heading: Forecast
-  - type: custom:windy-boat-card
+  - id: windy_map
+    type: custom:windy-boat-card
     lat_entity: sensor.boat_latitude_raw
     lon_entity: sensor.boat_longitude_raw
     fallback_lat: 42.43

@@ -1,0 +1,41 @@
+# Sailing Dashboard Build & Deployment Configuration
+
+time_window:
+  history_hours: 12
+  forecast_days: 5
+
+sections:
+  sensors:
+    enabled: true
+    cards:
+      stw_gauge: true
+      depth_gauge: true
+      sog_gauge: true
+  position:
+    enabled: true
+    cards:
+      hdg_compass: true
+      cog_compass: true
+      map: false
+      latitude: true
+      longitude: true
+  conditions:
+    enabled: true
+    cards:
+      windrose: true
+      barometer_gauge: true
+      barometer_trend: true
+  wind:
+    enabled: true
+    cards:
+      glance: true
+      chart: true
+  waves:
+    enabled: true
+    cards:
+      glance: true
+      chart: true
+  forecast:
+    enabled: true
+    cards:
+      windy_map: true
