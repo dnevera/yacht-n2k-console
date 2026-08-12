@@ -81,6 +81,22 @@
       - store_var: speed
       customdata: '$include:plotly_wind_customdata'
       hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Measured</extra>'
+    - entity: sensor.boat_wind_speed
+      name: Gusts (measured)
+      mode: lines
+      extend_to_present: false
+      filters:
+      - map_y: parseFloat(y)
+      - fn: '$include:plotly_history_series'
+      - fn: '$include:plotly_wind_gust_bucket'
+      - fn: '$include:plotly_history_series'
+      hovertemplate: '%{y:.1f} kt<extra>Gusts (measured)</extra>'
+      line:
+        shape: spline
+        smoothing: 0.6
+        dash: dot
+        width: 1
+        color: '#b0bec5'
     - entity: sensor.wind_forecast_flat
       name: Forecast
       mode: markers
@@ -140,22 +156,6 @@
             side: top
           ticksuffix: ' kt'
           len: 0.9
-    - entity: sensor.boat_wind_speed
-      name: Gusts (measured)
-      mode: lines
-      extend_to_present: false
-      filters:
-      - map_y: parseFloat(y)
-      - fn: '$include:plotly_history_series'
-      - fn: '$include:plotly_wind_gust_bucket'
-      - fn: '$include:plotly_history_series'
-      hovertemplate: '%{y:.1f} kt<extra>Gusts (measured)</extra>'
-      line:
-        shape: spline
-        smoothing: 0.6
-        dash: dot
-        width: 1
-        color: '#b0bec5'
     - entity: sensor.wind_forecast_flat
       name: Gusts (forecast)
       mode: lines

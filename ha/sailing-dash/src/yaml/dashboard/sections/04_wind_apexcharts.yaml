@@ -73,19 +73,26 @@
           title:
             text: Wind speed (kts)
         stroke:
+          # 4 series now: Measured, Gusts (measured), Forecast, Gusts (forecast).
           width:
           - 2
+          - 1
           - 2
           - 1
           # Per-series curve: we don't care about every exact NMEA reading,
-          # so "Measured" is smoothed into a spline to read more like the
-          # (already-interpolated) forecast line next to it; forecast
-          # series stay straight since Open-Meteo's own hourly points are
-          # already a coarse sampling and shouldn't be smoothed further.
+          # so "Measured"/"Gusts (measured)" are smoothed into a spline to
+          # read more like the (already-interpolated) forecast lines next
+          # to them; forecast series stay straight since Open-Meteo's own
+          # hourly points are already a coarse sampling and shouldn't be
+          # smoothed further.
           curve:
+          - smooth
           - smooth
           - straight
           - straight
+      # Series order matters for the shared tooltip's row order: Measured
+      # first, then its gusts, then the Open-Meteo forecast pair — one
+      # unified box per hovered time, matching the Plotly engine below.
       series:
       # Measured NMEA history — no `data_generator` here on purpose: that is
       # what makes `custom:apexcharts-card` fetch and plot the entity's own
@@ -110,6 +117,22 @@
         # side of this chart.
         group_by:
           func: avg
+          duration: 30m
+      # Measured gusts — max NMEA wind speed per 30-minute bucket, the
+      # ApexCharts-native equivalent of Plotly's `plotly_wind_gust_bucket`.
+      # Was previously missing entirely from this engine, so the unified
+      # tooltip never showed a measured-gust value alongside Measured.
+      - entity: sensor.boat_wind_speed
+        name: Gusts (measured)
+        type: line
+        color: '#b0bec5'
+        stroke_width: 1
+        opacity: 0.9
+        unit: kts
+        extend_to: false
+        float_precision: 1
+        group_by:
+          func: max
           duration: 30m
       # Forecast wind speed (Open-Meteo ECMWF) — drawn as a filled area so it
       # visually matches the reference screenshot's shaded forecast band.
