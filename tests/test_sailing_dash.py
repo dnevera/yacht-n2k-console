@@ -1138,3 +1138,107 @@ def test_global_chart_options_from_user_config_are_applied(tmp_path):
     assert config["arrow_length_scale"] == 5
     # `cards` stays a per-key merge, so untouched toggles survive.
     assert config["sections"]["wind"]["cards"] == {"glance": False, "chart": True}
+
+
+def _glance_cards(dash_str):
+    """Return every `glance` value-tile card of the built dashboard."""
+    dash = yaml.safe_load(dash_str)
+    return [
+        card
+        for section in dash["views"][0]["sections"]
+        for card in section.get("cards", [])
+        if isinstance(card, dict) and card.get("type") == "glance"
+    ]
+
+
+def test_forecast_style_is_global_with_markers_as_default(tmp_path):
+    """`forecast_style` picks the look of the forecast series on every chart."""
+    assert build.resolve_forecast_style({})[0] == "markers"
+    # A typo must fall back instead of breaking the build.
+    assert build.resolve_forecast_style({"forecast_style": "nonsense"})[0] == "markers"
+
+    default_series = [
+        s
+        for card in _plotly_chart_cards(_build_with_chart_config(tmp_path))
+        for s in card.get("entities", [])
+        if s.get("name") in build.FORECAST_SERIES_NAMES
+    ]
+    assert default_series
+    assert all(s["mode"] == "markers" and s["marker"]["symbol"] == "diamond" for s in default_series)
+
+    for style, mode, shape_key, shape in (
+        ("circle", "markers", "symbol", "circle"),
+        ("line", "lines", "dash", "solid"),
+        ("dot", "lines", "dash", "dot"),
+    ):
+        series = [
+            s
+            for card in _plotly_chart_cards(_build_with_chart_config(tmp_path, f"forecast_style: {style}\n"))
+            for s in card.get("entities", [])
+            if s.get("name") in build.FORECAST_SERIES_NAMES
+        ]
+        # Both the wind and the wave forecast follow the very same style.
+        assert len(series) == 2, style
+        for s in series:
+            assert s["mode"] == mode
+            assert s["marker" if mode == "markers" else "line"][shape_key] == shape
+
+
+def test_series_colors_come_from_config_and_reach_tiles_too(tmp_path):
+    """The `colors` block recolours the traces AND their glance tiles."""
+    extra = (
+        "colors:\n"
+        "  measured: '#112233'\n"
+        "  measured_gusts: '#223344'\n"
+        "  forecast: '#334455'\n"
+        "  forecast_gusts: '#445566'\n"
+    )
+    dash_str = _build_with_chart_config(tmp_path, extra)
+
+    colored = {}
+    for card in _plotly_chart_cards(dash_str):
+        for series in card.get("entities", []):
+            name = series.get("name")
+            if name not in build.SERIES_COLOR_ROLES:
+                continue
+            spec = series.get("marker") or series.get("line") or {}
+            colored[name] = spec.get("color")
+    assert colored == {
+        "Measured": "#112233",
+        "Gusts (measured)": "#223344",
+        "Forecast": "#334455",
+        "Gusts (forecast)": "#445566",
+    }
+
+    # The value tiles are styled by card_mod strings; they must not drift away
+    # from the trace colour they belong to.
+    tile_colors = {
+        tile["name"]: tile["card_mod"]["style"]
+        for card in _glance_cards(dash_str)
+        for tile in card.get("entities", [])
+        if tile.get("name") in build.TILE_COLOR_ROLES
+    }
+    assert "color: #112233 !important" in tile_colors["Measured now"]
+    assert "color: #334455 !important" in tile_colors["Forecast next 1h"]
+    assert "color: #445566 !important" in tile_colors["Gusts next 1h"]
+
+
+def test_now_label_and_forecast_history_arrow_opacity_are_injected(tmp_path):
+    """Both opacity options are global, with their documented defaults."""
+    default_cards = [c for c in _plotly_chart_cards(_build_with_chart_config(tmp_path)) if "arrow_kind" in c]
+    assert default_cards
+    assert all(c["now_label_opacity"] == 0.55 for c in default_cards)
+    assert all(c["forecast_history_arrow_opacity"] == 0.4 for c in default_cards)
+
+    tuned = [
+        c
+        for c in _plotly_chart_cards(
+            _build_with_chart_config(
+                tmp_path, "now_label_opacity: 0.2\nforecast_history_arrow_opacity: 0\n"
+            )
+        )
+        if "arrow_kind" in c
+    ]
+    assert {c["arrow_kind"] for c in tuned} == {"wind", "wave"}
+    assert all(c["now_label_opacity"] == 0.2 for c in tuned)
+    assert all(c["forecast_history_arrow_opacity"] == 0 for c in tuned)

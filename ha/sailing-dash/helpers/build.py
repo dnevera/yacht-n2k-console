@@ -54,12 +54,17 @@ def load_config(config_path=None, template_path=None):
             if isinstance(override, dict):
                 for opt_key in (
                     "chart_style",
+                    "forecast_style",
                     "arrow_spacing_hours",
                     "arrow_length_scale",
                     "measured_arrows_on_line",
+                    "now_label_opacity",
+                    "forecast_history_arrow_opacity",
                 ):
                     if opt_key in override:
                         config[opt_key] = override[opt_key]
+                if "colors" in override and isinstance(override["colors"], dict):
+                    config.setdefault("colors", {}).update(override["colors"])
                 if "time_window" in override and isinstance(override["time_window"], dict):
                     config.setdefault("time_window", {}).update(override["time_window"])
                 if "sections" in override and isinstance(override["sections"], dict):
@@ -102,6 +107,47 @@ DEFAULT_ARROW_LENGTH_SCALE = 3
 # value line instead of the top row, so the direction of the measured wind is
 # unambiguous in the history zone of the chart.
 DEFAULT_MEASURED_ARROWS_ON_LINE = True
+# Opacity of the "Now" label drawn on top of the dashed now line: the fully
+# opaque white badge used to hide the traces running underneath it.
+DEFAULT_NOW_LABEL_OPACITY = 0.55
+# Opacity of the FORECAST direction arrows that fall left of "Now" (i.e. the
+# open-meteo history overlapping the measured zone) so they read as background
+# information next to the measured arrows. 0 hides them completely.
+DEFAULT_FORECAST_HISTORY_ARROW_OPACITY = 0.4
+
+# How the forecast value series is drawn. Global, applied to every chart so the
+# wind and the wave forecast can never drift apart visually.
+FORECAST_STYLES = {
+    "markers": {"mode": "markers", "symbol": "diamond"},
+    "circle": {"mode": "markers", "symbol": "circle"},
+    "line": {"mode": "lines", "dash": "solid"},
+    "dot": {"mode": "lines", "dash": "dot"},
+}
+DEFAULT_FORECAST_STYLE = "markers"
+
+# Colours of the chart series, overridable by the `colors` block of
+# config.yaml. The role of a series/tile is taken from its name, so a colour is
+# defined in exactly one place instead of being repeated per trace and per
+# `card_mod` style.
+DEFAULT_COLORS = {
+    "measured": "#4fc3f7",
+    "measured_gusts": "#b0bec5",
+    "forecast": "#ff7043",
+    "forecast_gusts": "#78909c",
+}
+SERIES_COLOR_ROLES = {
+    "Measured": "measured",
+    "Gusts (measured)": "measured_gusts",
+    "Forecast": "forecast",
+    "Gusts (forecast)": "forecast_gusts",
+}
+TILE_COLOR_ROLES = {
+    "Measured now": "measured",
+    "Forecast next 1h": "forecast",
+    "Gusts next 1h": "forecast_gusts",
+}
+# Series whose look is driven by `forecast_style`.
+FORECAST_SERIES_NAMES = {"Forecast", "Wave height (forecast)"}
 # Which flavour of arrows a section's chart draws (series, colour scale and
 # shaft length), passed to the shared annotation layer as `arrow_kind`.
 SECTION_ARROW_KINDS = {
@@ -117,6 +163,77 @@ def resolve_chart_style(config):
     if style not in CHART_STYLES:
         style = DEFAULT_CHART_STYLE
     return style, CHART_STYLES[style]
+
+
+def resolve_forecast_style(config):
+    """Return `(name, spec)` for the global `forecast_style` option."""
+    raw = config.get("forecast_style")
+    style = str(raw if raw is not None else DEFAULT_FORECAST_STYLE).strip().lower()
+    if style not in FORECAST_STYLES:
+        style = DEFAULT_FORECAST_STYLE
+    return style, FORECAST_STYLES[style]
+
+
+def resolve_colors(config):
+    """Return the series colour map, user overrides merged over the defaults."""
+    colors = dict(DEFAULT_COLORS)
+    override = config.get("colors")
+    if isinstance(override, dict):
+        for key, value in override.items():
+            if key in colors and isinstance(value, str) and value.strip():
+                colors[key] = value.strip()
+    return colors
+
+
+def style_chart_series(card, colors, forecast_style):
+    """Apply the configured colours and forecast look to a plotly card."""
+    for series in card.get("entities", []) or []:
+        if not isinstance(series, dict):
+            continue
+        name = series.get("name")
+        color = colors.get(SERIES_COLOR_ROLES.get(name, ""))
+        if name in FORECAST_SERIES_NAMES:
+            # The wave forecast keeps its own colour (it is the only value
+            # series of that chart); only its shape follows `forecast_style`.
+            previous = series.get("marker", {}).get("color") or series.get("line", {}).get("color")
+            color = color or previous
+            if forecast_style["mode"] == "markers":
+                series.pop("line", None)
+                series["mode"] = "markers"
+                marker = series.setdefault("marker", {})
+                marker["size"] = marker.get("size", 6)
+                marker["symbol"] = forecast_style["symbol"]
+                marker["color"] = color
+            else:
+                series.pop("marker", None)
+                series["mode"] = "lines"
+                line = series.setdefault("line", {})
+                line["width"] = line.get("width", 2)
+                line["dash"] = forecast_style["dash"]
+                line["color"] = color
+            continue
+        if not color:
+            continue
+        if isinstance(series.get("line"), dict):
+            series["line"]["color"] = color
+        if isinstance(series.get("marker"), dict) and "color" in series["marker"]:
+            series["marker"]["color"] = color
+
+
+def style_glance_tiles(card, colors):
+    """Recolour the value tiles so they match their chart series."""
+    for tile in card.get("entities", []) or []:
+        if not isinstance(tile, dict):
+            continue
+        role = TILE_COLOR_ROLES.get(tile.get("name"))
+        mod = tile.get("card_mod")
+        if not role or not isinstance(mod, dict) or not isinstance(mod.get("style"), str):
+            continue
+        mod["style"] = re.sub(
+            r"color: #[0-9a-fA-F]{6} !important",
+            f"color: {colors[role]} !important",
+            mod["style"],
+        )
 
 
 def strip_leading_line_comments(js_code):
@@ -356,6 +473,14 @@ def build_dashboard(config=None):
     measured_on_line = bool(
         config.get("measured_arrows_on_line", DEFAULT_MEASURED_ARROWS_ON_LINE)
     )
+    now_label_opacity = float(config.get("now_label_opacity", DEFAULT_NOW_LABEL_OPACITY))
+    forecast_history_arrow_opacity = float(
+        config.get(
+            "forecast_history_arrow_opacity", DEFAULT_FORECAST_HISTORY_ARROW_OPACITY
+        )
+    )
+    _forecast_style_name, forecast_style = resolve_forecast_style(config)
+    colors = resolve_colors(config)
 
     sections = []
     for fname in sorted(os.listdir(sections_dir)):
@@ -403,7 +528,14 @@ def build_dashboard(config=None):
                                 card["arrow_spacing_hours"] = arrow_spacing
                                 card["arrow_length_scale"] = arrow_length_scale
                                 card["measured_arrows_on_line"] = measured_on_line
+                                card["now_label_opacity"] = now_label_opacity
+                                card["forecast_history_arrow_opacity"] = (
+                                    forecast_history_arrow_opacity
+                                )
                                 card["arrow_kind"] = arrow_kind
+                            style_chart_series(card, colors, forecast_style)
+                        elif card.get("type") == "glance":
+                            style_glance_tiles(card, colors)
                     filtered_cards.append(card)
                 item["cards"] = filtered_cards
 

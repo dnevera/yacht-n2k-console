@@ -69,6 +69,15 @@ chart_style: open_meteo   # Style of ALL charts (wind + waves):
 arrow_spacing_hours: 3    # Hours between direction arrows (0 = every point)
 arrow_length_scale: 3     # Arrow length amplifier: shaft grows with wind speed / wave height
 measured_arrows_on_line: true  # Measured (NMEA) arrows anchored on the measured line
+forecast_style: markers   # How the forecast series is drawn: markers | circle | line | dot
+now_label_opacity: 0.55   # Opacity of the "Now" badge (0..1)
+forecast_history_arrow_opacity: 0.4  # Opacity of forecast arrows left of Now (0 = hide)
+
+colors:                   # One definition per role, applied to trace AND tile
+  measured: '#4fc3f7'
+  measured_gusts: '#b0bec5'
+  forecast: '#ff7043'
+  forecast_gusts: '#78909c'
 
 time_window:
   history_hours: 4   # Measured history time window drawn left of Now (hours)
@@ -146,6 +155,22 @@ visible growth.
 the measured wind is unambiguous in the history zone, while forecast arrows
 still follow `chart_style`. Set it to `false` to push measured arrows into the
 top row as well (only affects `chart_style: open_meteo`).
+
+`forecast_style` (default `markers`) selects how the forecast value series is
+drawn on every chart at once: `markers` (diamonds), `circle` (round markers),
+`line` (solid line) or `dot` (dotted line).
+
+`now_label_opacity` (default `0.55`) makes the "Now" badge translucent so the
+traces underneath stay visible; a time tick with the current time is drawn where
+the dashed "Now" line meets the X axis.
+
+`forecast_history_arrow_opacity` (default `0.4`) fades the forecast direction
+arrows that fall left of "Now" (the Open-Meteo history overlapping the measured
+zone) so they read as background next to the measured arrows; `0` hides them.
+
+The `colors` block defines each series colour once — `build.py` applies it both
+to the trace and to the matching value tile, so a chart line and its tile can
+never drift apart.
 
 ## Key Files
 

@@ -44,9 +44,14 @@ def load_baseline(config_path, template_path):
                 "arrow_spacing_hours",
                 "arrow_length_scale",
                 "measured_arrows_on_line",
+                "forecast_style",
+                "now_label_opacity",
+                "forecast_history_arrow_opacity",
             ):
                 if opt_key in override:
                     config[opt_key] = override[opt_key]
+            if "colors" in override and isinstance(override["colors"], dict):
+                config.setdefault("colors", {}).update(override["colors"])
             if "time_window" in override and isinstance(override["time_window"], dict):
                 config.setdefault("time_window", {}).update(override["time_window"])
             if "sections" in override and isinstance(override["sections"], dict):
@@ -128,6 +133,45 @@ def prompt_int(prompt_text, default_val, min_val=1):
             sys.exit(1)
 
 
+def prompt_float(prompt_text, default_val, min_val=0.0, max_val=1.0):
+    """Prompt for a fractional value (used by the opacity options)."""
+    while True:
+        try:
+            sys.stdout.write(f"{prompt_text} [default: {default_val}]: ")
+            sys.stdout.flush()
+            line = sys.stdin.readline()
+            if not line:  # EOF
+                return default_val
+            line = line.strip()
+            if not line:
+                return default_val
+            val = float(line)
+            if val < min_val or val > max_val:
+                print(f"Value must be between {min_val} and {max_val}.")
+                continue
+            return val
+        except ValueError:
+            print("Please enter a valid number.")
+        except (KeyboardInterrupt, Exception):
+            print("\nAborted.")
+            sys.exit(1)
+
+
+def prompt_text(prompt_text_label, default_val):
+    """Prompt for a free-form string (used by the colour options)."""
+    try:
+        sys.stdout.write(f"{prompt_text_label} [default: {default_val}]: ")
+        sys.stdout.flush()
+        line = sys.stdin.readline()
+        if not line:  # EOF
+            return default_val
+        line = line.strip()
+        return line or default_val
+    except (KeyboardInterrupt, Exception):
+        print("\nAborted.")
+        sys.exit(1)
+
+
 def run_wizard(config, non_interactive=False):
     if non_interactive or not sys.stdin.isatty():
         print("Non-interactive mode: using baseline configuration.")
@@ -163,6 +207,29 @@ def run_wizard(config, non_interactive=False):
         "Draw measured (NMEA) arrows on the measured value line",
         config.get("measured_arrows_on_line", True),
     )
+    config["forecast_style"] = prompt_choice(
+        "How the forecast series is drawn",
+        ["markers", "circle", "line", "dot"],
+        config.get("forecast_style", "markers"),
+    )
+    config["now_label_opacity"] = prompt_float(
+        "Opacity of the 'Now' label (0..1)",
+        config.get("now_label_opacity", 0.55),
+    )
+    config["forecast_history_arrow_opacity"] = prompt_float(
+        "Opacity of the forecast arrows left of Now (0..1, 0 = hide)",
+        config.get("forecast_history_arrow_opacity", 0.4),
+    )
+
+    print("\n--- Colours ---")
+    colors = config.setdefault("colors", {})
+    for key, label in (
+        ("measured", "Measured (NMEA) wind speed"),
+        ("measured_gusts", "Measured gusts"),
+        ("forecast", "Forecast wind speed"),
+        ("forecast_gusts", "Forecast gusts"),
+    ):
+        colors[key] = prompt_text(f"Colour of {label}", colors.get(key, ""))
 
     print("\n--- Time Windows ---")
     tw["history_hours"] = prompt_int("Measured history window on chart left of Now (hours)", hist, min_val=1)

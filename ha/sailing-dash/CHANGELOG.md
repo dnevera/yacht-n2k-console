@@ -10,6 +10,17 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-12 (6)
+
+- **Added: chart presentation options — translucent "Now", X-axis time tick, `forecast_style`, `colors`, faded forecast history arrows:**
+  - `now_label_opacity` (default `0.55`): the "Now" badge was a fully opaque white box hiding the traces running underneath it; it is now rendered as `rgba(...)` with a configurable opacity.
+  - A time tick with the current time is drawn where the dashed "Now" line meets the X axis (`xref: x`, `yref: paper`, `y: 0`), so the current moment is readable on the time scale itself, not only as a rotated label.
+  - `forecast_style` (default `markers`): global option selecting how the forecast value series is drawn on every chart — `markers` (diamonds, as before), `circle`, `line` (solid) or `dot` (dotted). Applied by `build.py` to the wind and the wave forecast alike, so the two can never drift apart; an unknown value falls back to the default instead of breaking the build.
+  - New `colors` block (`measured`, `measured_gusts`, `forecast`, `forecast_gusts`): each colour is defined once and injected by `build.py` into the trace AND into the matching `glance` value tile (`card_mod` style), removing the duplicated hex literals that used to live in both places. The wave forecast keeps its own series colour.
+  - `forecast_history_arrow_opacity` (default `0.4`): forecast direction arrows that fall left of "Now" (the Open-Meteo history overlapping the measured zone) are faded so they read as background next to the measured arrows; `0` hides them entirely. Implemented by fading the shared colour scale in `plotly_chart_annotations.js`, without a second palette.
+  - All five options are top-level `config.yaml` keys next to `chart_style`, documented in `config.yaml.template`/`README.md` and asked for by the `--config` wizard (`helpers/configure.py`, new `prompt_float`/`prompt_text` helpers).
+  - Tests: 43 Python tests (`forecast_style` for all four values plus fallback, `colors` reaching traces and tiles, both opacities injected with their defaults) and the JS suite extended with six assertions (translucent badge, configurable opacity, the X-axis time tick, faded/hidden/plain forecast history arrows).
+
 ## 2026-08-12 (5)
 
 - **Fixed: the open-meteo forecast had NO direction arrows in the history zone (left of "Now"):**

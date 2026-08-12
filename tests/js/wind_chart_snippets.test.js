@@ -134,4 +134,24 @@ t('wave: top_row + spacing applies the global chart style too', waveTopRow.lengt
 t('wave: Now marker present', ann({ vars: waveVars, getFromConfig: cfg({ arrow_kind: 'wave' }) })
   .some(o => o.text === 'Now'));
 
+// 6. the "Now" label / X-axis time tick and the faded forecast history arrows.
+const nowOf = (opts) => ann({ vars, getFromConfig: cfg(Object.assign({ arrow_layout: 'top_row' }, opts)) });
+const nowLabel = nowOf({}).find(o => o.text === 'Now');
+t('Now label is translucent by default', /^rgba\(255,255,255,0\.55\)$/.test(nowLabel.bgcolor));
+t('now_label_opacity is configurable',
+  nowOf({ now_label_opacity: 0.2 }).find(o => o.text === 'Now').bgcolor === 'rgba(255,255,255,0.2)');
+// The tick sits on the X axis (paper y = 0) right where the dashed Now line
+// crosses it and carries the current time.
+const tick = nowOf({}).find(o => o.yref === 'paper' && o.y === 0);
+t('time tick on the X axis under the Now line', !!tick && /^\d{1,2}:\d{2}/.test(tick.text));
+
+// The forecast arrows of the (fixed, past) fixture all fall left of "Now", so
+// they must be faded — and dropped entirely at opacity 0.
+const fadedForecast = nowOf({ forecast_history_arrow_opacity: 0.4 }).filter(a => a.showarrow).pop();
+t('forecast arrows left of Now are faded', /^rgba\(\d+,\d+,\d+,0\.4\)$/.test(fadedForecast.arrowcolor));
+t('opacity 0 hides the forecast history arrows completely',
+  nowOf({ forecast_history_arrow_opacity: 0 }).filter(a => a.showarrow).length === 2);
+t('opacity 1 keeps the plain scale colour',
+  /^#[0-9a-f]{6}$/i.test(nowOf({ forecast_history_arrow_opacity: 1 }).filter(a => a.showarrow).pop().arrowcolor));
+
 process.exit(ok?0:1);

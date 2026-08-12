@@ -35,6 +35,29 @@ arrow_length_scale: 2
 #           (`chart_style: open_meteo` only).
 # Ignored by `chart_style: plotly`, where every arrow is on its point anyway.
 measured_arrows_on_line: false
+# How the FORECAST value series is drawn on every chart (wind and waves):
+#   markers - diamond markers, one per forecast hour. Default.
+#   circle  - the same, with round markers.
+#   line    - a solid line connecting the forecast values.
+#   dot     - a dotted line connecting the forecast values.
+forecast_style: line
+# Opacity (0..1) of the "Now" badge drawn on the dashed now line. Lower values
+# let the traces running underneath it stay visible. Default: 0.55.
+now_label_opacity: 0.55
+# Opacity (0..1) of the FORECAST direction arrows that fall left of "Now" (the
+# Open-Meteo history overlapping the measured zone), so they read as background
+# next to the measured arrows. 0 = do not draw them at all, 1 = as bright as
+# the forecast arrows right of "Now". Default: 0.4.
+forecast_history_arrow_opacity: 0.4
+
+# Colours of the chart series and of the matching value tiles. Any CSS colour
+# accepted by Plotly works; each colour is defined here once and applied to
+# both the trace and its tile so they can never drift apart.
+colors:
+  measured: '#4fc3f7'        # Measured (NMEA) wind speed line and tile
+  measured_gusts: '#b0bec5'  # Measured gusts (10-minute peaks)
+  forecast: '#ff7043'        # Open-Meteo forecast wind speed
+  forecast_gusts: '#78909c'  # Open-Meteo forecast gusts
 
 # Controls the time span shown on the wind and wave charts (the same window is
 # used by both chart styles) and how far ahead the Open-Meteo REST forecast is

@@ -50,6 +50,13 @@
   // which line a direction belonged to. Measured arrows are therefore anchored
   // ON the measured value line, while forecast arrows keep the row layout.
   const measuredOnLine = readConfig('measured_arrows_on_line', true) !== false;
+  // `now_label_opacity` (global config.yaml option): the "Now" badge used to be
+  // a fully opaque white box hiding the traces running underneath it.
+  const nowLabelOpacity = Math.min(1, Math.max(0, Number(readConfig('now_label_opacity', 0.55))));
+  // `forecast_history_arrow_opacity`: forecast arrows that fall LEFT of "Now"
+  // (open-meteo history overlapping the measured zone) are drawn faded so they
+  // read as background next to the measured arrows. 0 hides them completely.
+  const forecastHistoryOpacity = Math.min(1, Math.max(0, Number(readConfig('forecast_history_arrow_opacity', 0.4))));
   const spacingMs = Math.max(0, Number(readConfig('arrow_spacing_hours', 0)) || 0) * 3600 * 1000;
   const TOP_ROW_Y = 0.93;
   const walk = (root) => {
@@ -71,6 +78,13 @@
   const windSpeedColor = (v) => colorFromStops(v, [[5,'#b0e2ff'],[10,'#61c4e0'],[15,'#4bbf7a'],[20,'#a8d048'],[25,'#f5e642'],[30,'#f2a93b'],[35,'#eb5c2a'],[40,'#d62828']]);
   const waveHeightColor = (v) => colorFromStops(v, [[0.3,'#b0e2ff'],[0.6,'#61c4e0'],[1,'#4bbf7a'],[1.5,'#a8d048'],[2,'#f5e642'],[3,'#f2a93b'],[4,'#eb5c2a'],[5,'#d62828']]);
   const wave = arrowKind === 'wave';
+  // Fade a colour of the shared scale without keeping a second palette around.
+  const fade = (color, opacity) => {
+    const m = /^#([0-9a-f]{6})$/i.exec(String(color));
+    if (!m || !(opacity >= 0) || opacity >= 1) return color;
+    const n = parseInt(m[1], 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + opacity + ')';
+  };
   const colorOf = wave ? waveHeightColor : windSpeedColor;
   // Shaft length amplifier (`arrow_length_scale`, global config.yaml option,
   // default 3): without it the growth was `10 + speed` px, i.e. a 5 kt and a
@@ -133,12 +147,18 @@
     const xs = (values && values.xs) || [];
     const ys = (values && values.ys) || [];
     const ds = dirs || [];
+    const now = Date.now();
     const out = [];
     for (let i = 0; i < xs.length; i++) {
       const y = Number(ys[i]);
       const d = Number(ds[i]);
       if (!Number.isFinite(y) || !Number.isFinite(d)) continue;
-      out.push(arrow(xs[i], y, d));
+      const a = arrow(xs[i], y, d);
+      if (new Date(a.x).getTime() <= now) {
+        if (!forecastHistoryOpacity) continue;
+        a.arrowcolor = fade(a.arrowcolor, forecastHistoryOpacity);
+      }
+      out.push(a);
     }
     return out;
   };
@@ -171,7 +191,23 @@
     ];
   return [
     ...arrows,
-    { xref: 'x', yref: 'paper', x: new Date(), y: 0.99, yanchor: 'top', xanchor: 'right', text: 'Now', textangle: -90, showarrow: false, xshift: -2, bgcolor: '#ffffff', borderpad: 4, font: { color: '#000000', size: 10 } },
+    { xref: 'x', yref: 'paper', x: new Date(), y: 0.99, yanchor: 'top', xanchor: 'right', text: 'Now', textangle: -90, showarrow: false, xshift: -2, bgcolor: fade('#ffffff', nowLabelOpacity), borderpad: 4, font: { color: '#000000', size: 10 } },
+    // Time tick where the dashed "Now" line meets the X axis, so the current
+    // moment is readable on the time scale itself and not only as a label.
+    {
+      xref: 'x',
+      yref: 'paper',
+      x: new Date(),
+      y: 0,
+      yanchor: 'top',
+      xanchor: 'center',
+      yshift: -2,
+      text: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      showarrow: false,
+      bgcolor: fade('#ffffff', nowLabelOpacity),
+      borderpad: 2,
+      font: { color: '#000000', size: 9 },
+    },
     { xref: 'paper', yref: 'paper', x: 0.01, y: 0.97, xanchor: 'left', yanchor: 'top', text: '▲ N &nbsp;&nbsp; ▼ S', showarrow: false, font: { color: '#90a4ae', size: 10 } },
   ];
 }
