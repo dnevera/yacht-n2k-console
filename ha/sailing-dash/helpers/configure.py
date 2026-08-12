@@ -26,6 +26,7 @@ CARD_NAMES = {
     "glance": "Glance Summary Card",
     "chart": "Plotly Graph Chart",
     "windy_map": "Windy Map Card",
+    "forecast_model": "Open-Meteo Forecast Model Selector",
 }
 
 
@@ -52,6 +53,8 @@ def load_baseline(config_path, template_path):
             ):
                 if opt_key in override:
                     config[opt_key] = override[opt_key]
+            if "forecast_models" in override and isinstance(override["forecast_models"], dict):
+                config.setdefault("forecast_models", {}).update(override["forecast_models"])
             if "colors" in override and isinstance(override["colors"], dict):
                 config.setdefault("colors", {}).update(override["colors"])
             if "time_window" in override and isinstance(override["time_window"], dict):
@@ -231,6 +234,20 @@ def run_wizard(config, non_interactive=False):
         "Opacity of the forecast arrows left of Now (0..1, 0 = hide)",
         config.get("forecast_history_arrow_opacity", 0.4),
     )
+
+    print("\n--- Open-Meteo Forecast Models ---")
+    print("The model can also be switched at any time from the dashboard itself;")
+    print("this only picks the value the selector starts with.")
+    models = config.setdefault("forecast_models", {})
+    for kind, label in (("wind", "wind"), ("wave", "wave")):
+        entry = models.setdefault(kind, {})
+        options = entry.get("options") or ["best_match"]
+        entry["options"] = options
+        entry["default"] = prompt_choice(
+            f"Default Open-Meteo {label} forecast model",
+            options,
+            entry.get("default", options[0]),
+        )
 
     print("\n--- Colours ---")
     colors = config.setdefault("colors", {})

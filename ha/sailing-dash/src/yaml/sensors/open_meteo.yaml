@@ -8,6 +8,15 @@
 # ends up asking open-meteo about 0°N/0°E — the Gulf of Guinea — and the wind
 # chart then draws a plausible-looking but completely wrong forecast. Hence the
 # explicit "no fix yet" check against the Kotor default below.
+#
+# MODEL SELECTION — the weather model is picked at runtime from the dashboard
+# via input_select.forecast_wind_model / forecast_wave_model (see
+# src/yaml/helpers/forecast_model.yaml). `resource_template` is re-rendered on
+# every poll, so switching the model in the UI takes effect as soon as the
+# refresh automation re-polls the sensor — no rebuild, no HA restart.
+# `best_match` (and any unknown/unavailable helper state) must emit NO `models=`
+# parameter at all: Open-Meteo then picks the best model per location itself,
+# whereas `models=best_match` is not a valid model id.
 rest:
   - resource_template: >-
       {%- set lat = states('sensor.boat_latitude_raw') | float(0) -%}
@@ -15,7 +24,13 @@ rest:
       {%- if lat | abs < 0.01 and lon | abs < 0.01 -%}
       {%- set lat = 42.43 -%}{%- set lon = 18.60 -%}
       {%- endif -%}
-      https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(72))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+      {%- set model = states('input_select.forecast_wind_model') -%}
+      {%- if model in ['best_match', 'unknown', 'unavailable', 'none', ''] -%}
+      {%- set models = '' -%}
+      {%- else -%}
+      {%- set models = '&models=' ~ model -%}
+      {%- endif -%}
+      https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}{{ models }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(72))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wind Forecast REST'
@@ -32,7 +47,13 @@ rest:
       {%- if lat | abs < 0.01 and lon | abs < 0.01 -%}
       {%- set lat = 42.43 -%}{%- set lon = 18.60 -%}
       {%- endif -%}
-      https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(72))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
+      {%- set model = states('input_select.forecast_wave_model') -%}
+      {%- if model in ['best_match', 'unknown', 'unavailable', 'none', ''] -%}
+      {%- set models = '' -%}
+      {%- else -%}
+      {%- set models = '&models=' ~ model -%}
+      {%- endif -%}
+      https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}{{ models }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr('sensor.chart_time_window', 'forecast_hours') | int(72))) / 24) | round(0, 'ceil') | int, 16 ] | min }}&timezone=UTC
     scan_interval: 900
     sensor:
       - name: 'Wave Forecast REST'

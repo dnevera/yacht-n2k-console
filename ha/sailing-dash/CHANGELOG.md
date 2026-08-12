@@ -10,6 +10,21 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-12 (9)
+
+- **Fixed: the forecast did not refresh when the model was switched — the compiled automations were never delivered.** `helpers/deploy_sensors.sh` declared `AUTOMATIONS_FILE` but never used it, so `build/automations-sailing.yaml` was compiled and silently dropped: on the stage target `/config/automations.yaml` was still an empty `[]`, i.e. `sailing_forecast_refresh` did not exist and nothing called `homeassistant.update_entity` — the new model only reached the API on the next `scan_interval` (15 min). Automations cannot be merged into `configuration.yaml` either (HA's default config already holds `automation: !include automations.yaml`, and a duplicate key stops HA from starting), so a new step merges them into `/config/automations.yaml` **per `id`** — crew-authored automations are kept, ours is replaced instead of appended twice — and triggers a restart even when `configuration.yaml` itself came out unchanged.
+- **Fixed: `refresh_forecast.yaml` could still wait 30 s after a model switch.** The delay branch tested `'input_select.' not in trigger.entity_id`, which is unreliable for a state trigger listing several `entity_id`s; it now tests `trigger.platform == 'homeassistant'`, so only the startup path delays.
+- **Changed: the model selector moved into the section heading row.** Instead of one `entities` card holding both helpers, each chart section now carries its own dropdown right after its heading (`[Wind Direction & Speed --- [Model]]`, likewise for *Waves*) as a `tile` with the native `select-options` feature — no card header, so it reads as a continuation of the title; heading and selector share the row at 24 grid columns each. The two selectors stay separate deliberately: waves come from the marine API, whose model ids differ from the forecast API's (`ecmwf_ifs025` is rejected there), so a single shared selection cannot cover both.
+
+## 2026-08-12 (8)
+
+- **Added: the Open-Meteo forecast model is now selectable live from the dashboard:**
+  - Neither URL in `src/yaml/sensors/open_meteo.yaml` carried a `models=` parameter at all, so the model could not be chosen (Open-Meteo silently used its own default mix). Both `resource_template`s now render `models=` from two new Home Assistant helpers, `input_select.forecast_wind_model` (forecast API) and `input_select.forecast_wave_model` (marine API) — a `resource_template` is re-rendered on **every** poll, so switching the model in the UI needs no rebuild and no HA restart.
+  - `best_match` is not a real model id: it (and a still `unknown`/`unavailable` helper) must emit **no** `models=` parameter at all, otherwise the API rejects the whole request. Verified against the live API — `meteofrance_wam` is likewise not a valid marine model (HTTP 400 "Cannot initialize MultiDomains") and is deliberately absent from the wave list.
+  - New `src/yaml/helpers/forecast_model.yaml` + `build.py::build_helpers()` compile `build/helpers-sailing.yaml`; the option lists and initial values come from the new `forecast_models` block of `config.yaml` (a default outside its own option list is corrected, or the helper would refuse to start). `helpers/deploy_sensors.sh` merges helper domains **per object id** (they are mappings, unlike the `rest:`/`template:` lists) and skips a domain entirely when the target keeps it in a separate `!include` file, so the crew's own helpers are never dropped.
+  - New `forecast_model` card in the *Wind* section right above the chart, toggleable like any other card; `refresh_forecast.yaml` now also triggers on both helpers and re-polls immediately — the 30 s settle delay is left for the startup path only.
+  - Documented in `config.yaml.template`/`README.md`, asked for by the `--config` wizard. Tests: 46 Python tests, incl. a new regression rendering both URLs through Jinja for `best_match`/`unknown`/`unavailable`/a real model, the injected option lists and the card/automation wiring.
+
 ## 2026-08-12 (7)
 
 - **Added: `line_smoothing` — global smoothing style of every chart line (`spline` / `smooth` / `none`):**

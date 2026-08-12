@@ -1,9 +1,26 @@
 - type: grid
   cards:
-  - type: heading
-    heading_style: title
-    heading: Waves
-    icon: mdi:wave
+#  - type: heading
+#    heading_style: title
+#    heading: Waves
+#    icon: mdi:wave
+#    grid_options:
+#      columns: 24
+  # Wave forecast model selector, in the heading row as its continuation.
+  # It is a SEPARATE helper from the wind one on purpose: waves come from the
+  # marine API, whose model ids do not match the forecast API's (`ecmwf_ifs025`
+  # is rejected there), so one shared selector could not cover both.
+  - id: forecast_model
+    type: tile
+    entity: input_select.forecast_wave_model
+    hide_state: true
+    vertical: false
+    name: Waves
+    features_position: inline
+    features:
+    - type: select-options
+    grid_options:
+      columns: 36
   - id: glance
     type: glance
     show_icon: false

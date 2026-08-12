@@ -1,9 +1,29 @@
 - type: grid
   cards:
-  - type: heading
-    heading_style: title
-    heading: Wind Direction & Speed
-    icon: mdi:weather-windy
+#  - type: heading
+#    heading_style: title
+#    heading: Wind Direction & Speed
+#    icon: mdi:weather-windy
+#    grid_options:
+#      columns: 24
+  # Open-Meteo model selector, sitting in the heading row as its continuation:
+  # [Wind Direction & Speed --- [model]]. Picking another model re-renders the
+  # REST `resource_template` (see src/yaml/sensors/open_meteo.yaml) and the
+  # refresh automation re-polls at once - no rebuild, no HA restart.
+  # A `tile` with the native `select-options` feature is used instead of an
+  # `entities` card: it is a plain dropdown with no card header, so it reads as
+  # part of the heading rather than as a separate card.
+  - id: forecast_model
+    type: tile
+    entity: input_select.forecast_wind_model
+    hide_state: true
+    vertical: false
+    name: Wind Direction & Speed
+    features_position: inline
+    features:
+    - type: select-options
+    grid_options:
+      columns: 36
   - id: glance
     type: glance
     show_icon: false

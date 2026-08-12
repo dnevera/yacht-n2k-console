@@ -65,6 +65,8 @@ def load_config(config_path=None, template_path=None):
                 ):
                     if opt_key in override:
                         config[opt_key] = override[opt_key]
+                if "forecast_models" in override and isinstance(override["forecast_models"], dict):
+                    config.setdefault("forecast_models", {}).update(override["forecast_models"])
                 if "colors" in override and isinstance(override["colors"], dict):
                     config.setdefault("colors", {}).update(override["colors"])
                 if "time_window" in override and isinstance(override["time_window"], dict):
@@ -144,6 +146,37 @@ MEASURED_SERIES_NAMES = {"Measured", "Gusts (measured)"}
 # Whether the charts allow zooming/panning along the time axis and show the
 # vertical +/-/reset button column on their right edge.
 DEFAULT_ZOOM_CONTROLS = True
+
+# Open-Meteo weather models offered by the dashboard's model selector.
+# `best_match` is not a real model id - it means "send no `models=` parameter at
+# all" and let Open-Meteo pick the best model for the boat's position. The wind
+# forecast comes from the standard forecast API and the waves from the separate
+# marine API, hence the two distinct model lists.
+DEFAULT_FORECAST_MODELS = {
+    "wind": [
+        "best_match",
+        "ecmwf_ifs025",
+        "gfs_seamless",
+        "icon_seamless",
+        "meteofrance_seamless",
+        "ukmo_seamless",
+    ],
+    # Verified against the live marine API: `meteofrance_wam` is NOT a valid id
+    # there (HTTP 400 "Cannot initialize MultiDomains"), so it must never be
+    # offered - a single bad option breaks the whole wave forecast.
+    "wave": [
+        "best_match",
+        "ecmwf_wam025",
+        "gwam",
+        "ewam",
+    ],
+}
+DEFAULT_FORECAST_MODEL = "best_match"
+# `input_select` object ids of the two model selectors, keyed by forecast kind.
+FORECAST_MODEL_SELECTORS = {
+    "wind": "forecast_wind_model",
+    "wave": "forecast_wave_model",
+}
 
 # Colours of the chart series, overridable by the `colors` block of
 # config.yaml. The role of a series/tile is taken from its name, so a colour is
@@ -232,6 +265,33 @@ def apply_zoom_controls(card, enabled):
     cfg["modeBarButtons"] = [["zoomIn2d", "zoomOut2d", "resetScale2d"]]
     layout["modebar"] = {"orientation": "v"}
     xaxis["fixedrange"] = False
+
+
+def resolve_forecast_models(config):
+    """Return `{kind: (options, initial)}` for the model selector helpers.
+
+    The lists live in config.yaml so an installation can hide models it never
+    wants to see; the selected default must always be part of the list, or the
+    `input_select` helper would refuse to start with it.
+    """
+    block = config.get("forecast_models")
+    block = block if isinstance(block, dict) else {}
+    resolved = {}
+    for kind, defaults in DEFAULT_FORECAST_MODELS.items():
+        raw = block.get(kind)
+        raw = raw if isinstance(raw, dict) else {}
+        options = raw.get("options")
+        if isinstance(options, list):
+            options = [str(o).strip() for o in options if str(o).strip()]
+        else:
+            options = []
+        if not options:
+            options = list(defaults)
+        default = str(raw.get("default", DEFAULT_FORECAST_MODEL)).strip()
+        if default not in options:
+            default = options[0]
+        resolved[kind] = (options, default)
+    return resolved
 
 
 def resolve_colors(config):
@@ -459,6 +519,48 @@ def build_sensors(config=None):
     print(f"Built {dst_path}")
 
 
+def build_helpers(config=None):
+    """Build build/helpers-sailing.yaml from every src/yaml/helpers/*.yaml.
+
+    Home Assistant input helpers are mappings (`input_select: {<id>: {...}}`),
+    not lists like `rest:`/`template:`, so they are merged per object id. The
+    forecast model selectors get their option lists and initial value injected
+    from config.yaml instead of hard-coding them in the source YAML.
+    """
+    if config is None:
+        config = load_config()
+
+    helpers_dir = os.path.join(SRC_DIR, "yaml", "helpers")
+    dst_path = os.path.join(BUILD_DIR, "helpers-sailing.yaml")
+    if not os.path.isdir(helpers_dir):
+        return
+
+    merged = {}
+    for fname in sorted(os.listdir(helpers_dir)):
+        if not fname.endswith(".yaml"):
+            continue
+        with open(os.path.join(helpers_dir, fname), "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            raise SystemExit(f"{fname}: expected a mapping at the top level")
+        for key, value in data.items():
+            if isinstance(value, dict):
+                merged.setdefault(key, {}).update(value)
+
+    selects = merged.get("input_select")
+    if isinstance(selects, dict):
+        for kind, (options, default) in resolve_forecast_models(config).items():
+            entry = selects.get(FORECAST_MODEL_SELECTORS[kind])
+            if isinstance(entry, dict):
+                entry["options"] = list(options)
+                entry["initial"] = default
+
+    with open(dst_path, "w", encoding="utf-8") as f:
+        f.write("# Generated by build.py — DO NOT EDIT MANUALLY\n")
+        yaml.dump(merged, f, sort_keys=False, allow_unicode=True, width=1000)
+    print(f"Built {dst_path}")
+
+
 def build_automations():
     """Build build/automations-sailing.yaml from src/yaml/automations/*.yaml."""
     auto_dir = os.path.join(SRC_DIR, "yaml", "automations")
@@ -638,6 +740,7 @@ def main():
     ensure_dirs()
     build_cards()
     build_sensors(config)
+    build_helpers(config)
     build_automations()
     build_resources()
     build_dashboard(config)

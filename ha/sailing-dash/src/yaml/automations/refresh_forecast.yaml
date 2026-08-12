@@ -3,16 +3,31 @@
   description: >-
     Re-polls the wind + wave open-meteo REST sensors once sensor.chart_time_window
     is available, so forecast_days matches the configured forecast_hours instead
-    of the startup fallback.
+    of the startup fallback, and whenever the forecast model is switched on the
+    dashboard (the REST resource_template renders `models=` from those helpers,
+    so the new model only reaches the API on the next poll).
   mode: single
   trigger:
     - platform: homeassistant
       event: start
     - platform: state
       entity_id: sensor.chart_time_window
+    - platform: state
+      entity_id:
+        - input_select.forecast_wind_model
+        - input_select.forecast_wave_model
   condition: []
   action:
-    - delay: '00:00:30'
+    # A model switch must feel instant, so only the startup path waits for
+    # sensor.chart_time_window to settle. The check is on trigger.platform, not
+    # on trigger.entity_id: a state trigger listing several entity_ids renders
+    # that field in a shape a substring test cannot be trusted with.
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ trigger.platform | default('') == 'homeassistant' }}"
+          sequence:
+            - delay: '00:00:30'
     - service: homeassistant.update_entity
       target:
         entity_id:

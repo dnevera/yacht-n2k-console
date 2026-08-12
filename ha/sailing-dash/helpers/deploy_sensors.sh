@@ -19,6 +19,7 @@ source "${HELPERS_DIR}/lib/ha_target.sh"
 
 SENSORS_FILE="${SCRIPT_DIR}/build/sensors-sailing.yaml"
 AUTOMATIONS_FILE="${SCRIPT_DIR}/build/automations-sailing.yaml"
+HELPERS_FILE="${SCRIPT_DIR}/build/helpers-sailing.yaml"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
 TARGET_ENV="stage"
@@ -83,8 +84,9 @@ fi
 
 
 # ── 2. Merge sensors-sailing.yaml into configuration.yaml (idempotent) ──────
-python3 - "${REMOTE_CFG}" "${SENSORS_FILE}" "${MERGED_CFG}" <<'PYEOF'
+python3 - "${REMOTE_CFG}" "${SENSORS_FILE}" "${MERGED_CFG}" "${HELPERS_FILE}" <<'PYEOF'
 import copy
+import os
 import sys
 import yaml
 
@@ -117,6 +119,7 @@ for tag in ("!include", "!secret", "!include_dir_list", "!include_dir_named", "!
 yaml.add_representer(_HaTag, _HaTag.to_yaml)
 
 remote_cfg_path, sensors_path, merged_cfg_path = sys.argv[1:4]
+helpers_path = sys.argv[4] if len(sys.argv) > 4 else None
 
 with open(remote_cfg_path) as f:
     remote_cfg = yaml.safe_load(f) or {}
@@ -161,6 +164,34 @@ def merge_section(remote_cfg, sailing_cfg, key):
 merge_section(remote_cfg, sailing_cfg, "rest")
 merge_section(remote_cfg, sailing_cfg, "template")
 
+def merge_helper_mapping(remote_cfg, helper_cfg, key):
+    """Merge an input helper domain (`input_select:` & co), keyed by object id.
+
+    Unlike `rest:`/`template:` these domains are mappings, not lists. A target
+    that keeps its helpers in a separate file (`input_select: !include ...`) is
+    left completely alone - overwriting the tag would drop the crew's own
+    helpers.
+    """
+    incoming = helper_cfg.get(key)
+    if not isinstance(incoming, dict):
+        return
+    existing = remote_cfg.get(key)
+    if existing is not None and not isinstance(existing, dict):
+        print(f"[{key}] Skipped: target keeps this domain in a separate file")
+        return
+    target = existing if isinstance(existing, dict) else {}
+    for obj_id, entry in incoming.items():
+        action = "Replaced" if obj_id in target else "Added"
+        target[obj_id] = entry
+        print(f"[{key}] {action} helper '{obj_id}'")
+    remote_cfg[key] = target
+
+if helpers_path and os.path.exists(helpers_path):
+    with open(helpers_path) as f:
+        helper_cfg = yaml.safe_load(f) or {}
+    for helper_key in sorted(helper_cfg):
+        merge_helper_mapping(remote_cfg, helper_cfg, helper_key)
+
 merged_text = yaml.dump(remote_cfg, sort_keys=False, allow_unicode=True, width=1000)
 with open(merged_cfg_path, "w") as f:
     f.write(merged_text)
@@ -178,9 +209,79 @@ if merged_text == original_text:
 
 PYEOF
 
+# ── 2b. Merge automations-sailing.yaml into the target's automations.yaml ────
+# Home Assistant's default configuration.yaml keeps automations in their own
+# `automation: !include automations.yaml` list, so they can NOT be merged into
+# configuration.yaml above: doing so would make HA refuse to start with a
+# duplicate `automation` key. Without this step the compiled automations were
+# built but never delivered, which is why switching the forecast model did not
+# re-poll the REST sensors (the forecast then only refreshed on scan_interval).
+AUTOMATIONS_REMOTE="/config/automations.yaml"
+if [[ -f "${AUTOMATIONS_FILE}" ]]; then
+    REMOTE_AUTO="${TMP_DIR}/automations.yaml"
+    MERGED_AUTO="${TMP_DIR}/automations.merged.yaml"
+    ha_cat "${AUTOMATIONS_REMOTE}" > "${REMOTE_AUTO}" 2>/dev/null || echo "[]" > "${REMOTE_AUTO}"
+
+    python3 - "${REMOTE_AUTO}" "${AUTOMATIONS_FILE}" "${MERGED_AUTO}" <<'PYEOF'
+import sys
+import yaml
+
+remote_path, ours_path, merged_path = sys.argv[1:4]
+
+with open(remote_path) as f:
+    remote = yaml.safe_load(f) or []
+if not isinstance(remote, list):
+    # A target that keeps automations in some other shape is left alone.
+    print("[automations] Skipped: target automations.yaml is not a list")
+    sys.exit(0)
+
+with open(ours_path) as f:
+    ours = yaml.safe_load(f) or []
+
+original = yaml.dump(remote, sort_keys=False, allow_unicode=True, width=1000)
+
+# Keyed by `id`, so a crew-authored automation is never touched and re-running
+# the deploy replaces our own entry instead of appending a duplicate.
+by_id = {a.get("id"): i for i, a in enumerate(remote) if isinstance(a, dict) and a.get("id")}
+for entry in ours:
+    auto_id = entry.get("id")
+    if auto_id in by_id:
+        remote[by_id[auto_id]] = entry
+        print(f"[automations] Replaced '{auto_id}'")
+    else:
+        by_id[auto_id] = len(remote)
+        remote.append(entry)
+        print(f"[automations] Added '{auto_id}'")
+
+merged = yaml.dump(remote, sort_keys=False, allow_unicode=True, width=1000)
+with open(merged_path, "w") as f:
+    f.write(merged)
+if merged == original:
+    open(merged_path + ".unchanged", "w").close()
+    print("[automations] already up to date")
+PYEOF
+
+    if [[ -f "${MERGED_AUTO}" && ! -f "${MERGED_AUTO}.unchanged" ]]; then
+        echo "Uploading merged automations.yaml ..."
+        ha_cp_to_container "${MERGED_AUTO}" "${AUTOMATIONS_REMOTE}"
+        if [[ -n "${SAILING_CHANGE_FLAG:-}" ]]; then
+            echo "automations" >> "${SAILING_CHANGE_FLAG}"
+        fi
+        AUTOMATIONS_CHANGED=1
+    fi
+fi
+
 # ── 3. Upload merged configuration (only when the merge changed something) ──
 if [[ -f "${MERGED_CFG}.unchanged" && "${HA_FORCE_DELIVERY:-0}" != "1" ]]; then
-    echo "= configuration.yaml unchanged — nothing uploaded, ${HA_CONTAINER} not restarted."
+    echo "= configuration.yaml unchanged — nothing uploaded."
+    # Freshly delivered automations still need HA to reload them, so only a
+    # deploy that changed nothing at all may skip the restart.
+    if [[ "${AUTOMATIONS_CHANGED:-0}" == "1" && "${SKIP_RESTART:-0}" != "1" ]]; then
+        echo "Restarting ${HA_CONTAINER} (automations changed) ..."
+        ha_restart
+    else
+        echo "${HA_CONTAINER} not restarted."
+    fi
     echo "Done. Sensors already up to date in container ${HA_CONTAINER}."
     exit 0
 fi

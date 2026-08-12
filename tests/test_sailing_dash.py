@@ -1297,3 +1297,150 @@ def test_zoom_controls_unlock_only_the_time_axis(tmp_path):
         assert "modeBarButtons" not in card["config"]
         assert "modebar" not in card["layout"]
         assert card["layout"]["xaxis"]["fixedrange"] is True
+
+
+def _render_open_meteo_urls(model):
+    """Render both open-meteo resource_templates with a given selector state."""
+    from jinja2 import Template
+
+    path = os.path.join(build.SRC_DIR, "yaml", "sensors", "open_meteo.yaml")
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    states = {
+        "sensor.boat_latitude_raw": "42.4345",
+        "sensor.boat_longitude_raw": "18.6032",
+        "input_select.forecast_wind_model": model,
+        "input_select.forecast_wave_model": model,
+    }
+
+    class _Utcnow:
+        hour = 10
+        minute = 0
+
+    return [
+        Template(entry["resource_template"]).render(
+            states=lambda e: states.get(e, "unknown"),
+            state_attr=lambda e, a: 120,
+            utcnow=lambda: _Utcnow(),
+        )
+        for entry in data["rest"]
+    ]
+
+
+def test_forecast_model_is_selectable_from_the_dashboard(tmp_path):
+    """The Open-Meteo model is switchable live, without a rebuild or restart.
+
+    `models=best_match` is NOT a valid model id — it must translate into no
+    `models=` parameter at all, otherwise the API rejects the whole request.
+    An unknown/unavailable helper (before the first HA start) must behave the
+    same way instead of poisoning the URL.
+    """
+    for model in ("best_match", "unavailable", "unknown"):
+        for url in _render_open_meteo_urls(model):
+            assert "models=" not in url, f"{model} must not send a models= parameter"
+    for url in _render_open_meteo_urls("ecmwf_ifs025"):
+        assert "&models=ecmwf_ifs025&" in url
+
+    # The selector helpers are built from config.yaml, not hard-coded in YAML.
+    template_file = tmp_path / "config.yaml.template"
+    template_file.write_text(
+        "forecast_models:\n"
+        "  wind:\n"
+        "    options: [gfs_seamless, ecmwf_ifs025]\n"
+        "    default: ecmwf_ifs025\n"
+        "  wave:\n"
+        "    default: not_a_model\n",
+        encoding="utf-8",
+    )
+    with patch.object(build, "BUILD_DIR", str(tmp_path)), patch.object(
+        build, "DEFAULT_TEMPLATE_PATH", str(template_file)
+    ), patch.object(build, "DEFAULT_CONFIG_PATH", str(tmp_path / "config.yaml")):
+        build.ensure_dirs()
+        build.build_helpers()
+    helpers = yaml.safe_load((tmp_path / "helpers-sailing.yaml").read_text(encoding="utf-8"))
+
+    wind = helpers["input_select"]["forecast_wind_model"]
+    assert wind["options"] == ["gfs_seamless", "ecmwf_ifs025"]
+    assert wind["initial"] == "ecmwf_ifs025"
+    wave = helpers["input_select"]["forecast_wave_model"]
+    # A default outside the option list would keep the helper from starting.
+    assert wave["initial"] in wave["options"]
+    # meteofrance_wam is rejected by the live marine API (HTTP 400).
+    assert "meteofrance_wam" not in wave["options"]
+
+    # Each selector sits in the heading row of its OWN section, right after the
+    # heading card, as a plain dropdown (a tile with the select-options feature)
+    # so it reads as a continuation of the title instead of a separate card.
+    sections = os.path.join(build.SRC_DIR, "yaml", "dashboard", "sections")
+    for fname, entity in (
+        ("04_wind.yaml", "input_select.forecast_wind_model"),
+        ("05_waves.yaml", "input_select.forecast_wave_model"),
+    ):
+        cards = yaml.safe_load(open(os.path.join(sections, fname), encoding="utf-8"))[0][
+            "cards"
+        ]
+        ids = [c.get("id") for c in cards]
+        assert ids.index("forecast_model") < ids.index("chart")
+        assert cards[0]["type"] == "heading"
+        assert cards[1].get("id") == "forecast_model", "selector must follow the heading"
+        selector = cards[1]
+        assert selector["entity"] == entity
+        assert [f["type"] for f in selector["features"]] == ["select-options"]
+        # Both share the heading row, so neither may claim the full width.
+        assert cards[0]["grid_options"]["columns"] == 24
+        assert selector["grid_options"]["columns"] == 24
+
+    automation = yaml.safe_load(
+        open(
+            os.path.join(build.SRC_DIR, "yaml", "automations", "refresh_forecast.yaml"),
+            encoding="utf-8",
+        )
+    )[0]
+    triggered = {
+        e
+        for trig in automation["trigger"]
+        for e in (
+            trig.get("entity_id", [])
+            if isinstance(trig.get("entity_id"), list)
+            else [trig.get("entity_id")]
+        )
+    }
+    assert {"input_select.forecast_wind_model", "input_select.forecast_wave_model"} <= triggered
+
+
+def test_compiled_automations_are_actually_delivered_to_the_target():
+    """The deploy must really upload build/automations-sailing.yaml.
+
+    Regression: `AUTOMATIONS_FILE` was declared in deploy_sensors.sh but never
+    used, so the automations were compiled and then silently dropped — the
+    target's automations.yaml stayed empty and switching the forecast model did
+    not re-poll the REST sensors (the forecast only refreshed on scan_interval).
+    They cannot be merged into configuration.yaml either: HA's default config
+    already holds `automation: !include automations.yaml`.
+    """
+    script = open(
+        os.path.join(SAILING_DASH_DIR, "helpers", "deploy_sensors.sh"), encoding="utf-8"
+    ).read()
+    assert "/config/automations.yaml" in script
+    # Delivery, not just a variable assignment.
+    assert re.search(r'ha_cp_to_container "\$\{MERGED_AUTO\}"', script)
+    # Merged per id so crew-authored automations survive and ours is replaced,
+    # never appended twice.
+    assert "[automations] Replaced" in script and "[automations] Added" in script
+    # Freshly delivered automations still need a restart even when
+    # configuration.yaml itself came out unchanged.
+    assert "AUTOMATIONS_CHANGED" in script
+
+    automation = yaml.safe_load(
+        open(
+            os.path.join(SAILING_DASH_DIR, "src", "yaml", "automations", "refresh_forecast.yaml"),
+            encoding="utf-8",
+        )
+    )[0]
+    # A model switch must not wait: only the startup path may delay, and the
+    # check is on trigger.platform (trigger.entity_id is unreliable when a state
+    # trigger lists several entities).
+    delay_branch = automation["action"][0]["choose"][0]
+    assert "trigger.platform" in delay_branch["conditions"][0]["value_template"]
+    assert delay_branch["sequence"][0]["delay"] == "00:00:30"

@@ -5,7 +5,7 @@ automation: !include 'automations.yaml'
 script: !include 'scripts.yaml'
 scene: !include 'scenes.yaml'
 rest:
-- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(120))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
+- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} {%- set model = states(''input_select.forecast_wind_model'') -%} {%- if model in [''best_match'', ''unknown'', ''unavailable'', ''none'', ''''] -%} {%- set models = '''' -%} {%- else -%} {%- set models = ''&models='' ~ model -%} {%- endif -%} https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}{{ models }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(120))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
   scan_interval: 900
   sensor:
   - name: Wind Forecast REST
@@ -15,7 +15,7 @@ rest:
     unit_of_measurement: kts
     json_attributes:
     - hourly
-- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(120))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
+- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} {%- set model = states(''input_select.forecast_wave_model'') -%} {%- if model in [''best_match'', ''unknown'', ''unavailable'', ''none'', ''''] -%} {%- set models = '''' -%} {%- else -%} {%- set models = ''&models='' ~ model -%} {%- endif -%} https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}{{ models }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(120))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
   scan_interval: 900
   sensor:
   - name: Wave Forecast REST
@@ -203,3 +203,24 @@ template:
     unit_of_measurement: s
     icon: mdi:waves-arrow-up
     state: "{% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_period') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+input_select:
+  forecast_wind_model:
+    name: Wind forecast model
+    icon: mdi:weather-windy
+    options:
+    - best_match
+    - ecmwf_ifs025
+    - gfs_seamless
+    - icon_seamless
+    - meteofrance_seamless
+    - ukmo_seamless
+    initial: best_match
+  forecast_wave_model:
+    name: Wave forecast model
+    icon: mdi:waves
+    options:
+    - best_match
+    - ecmwf_wam025
+    - gwam
+    - ewam
+    initial: best_match
