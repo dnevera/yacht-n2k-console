@@ -10,6 +10,14 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-12 (4)
+
+- **Added: `measured_arrows_on_line` — measured wind direction arrows are now anchored on the measured line (default `true`):**
+  - In the `open_meteo` style every arrow (measured and forecast alike) was pushed into the single row under the chart's top edge, so in the history zone left of "Now" there was no way to tell which line a direction arrow belonged to — the direction of the *measured* wind was effectively unreadable.
+  - `src/js/common/plotly_chart_annotations.js` now anchors the measured (recorder-history) arrows on their own data point (`yref: y`, matched to the direction entity by timestamp as before) while forecast arrows keep the `chart_style` layout. Colour scale and `arrow_length_scale` are unchanged and shared, so no styling is duplicated.
+  - New top-level `config.yaml` option next to `chart_style`/`arrow_spacing_hours`/`arrow_length_scale`, injected by `build.py` into every `custom:plotly-graph` card (wind and waves) and asked for by the `--config` wizard. `false` restores the all-in-one-row behaviour; `chart_style: plotly` is unaffected (every arrow is on its point anyway).
+  - Tests: `test_measured_arrows_on_line_is_global_with_default_true` plus four JS assertions (measured on line / forecast in the row / option disabled / `plotly` style unaffected). 40 Python tests and all JS assertions pass.
+
 ## 2026-08-12 (3)
 
 - **Added: `arrow_length_scale` — global amplifier of the direction arrow length (default `3`):**

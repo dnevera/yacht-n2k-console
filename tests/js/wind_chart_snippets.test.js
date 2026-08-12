@@ -61,10 +61,24 @@ const cfg = (opts) => (key) => opts[key];
 const onPoint = ann({ vars, getFromConfig: cfg({ arrow_layout: 'on_point' }) }).filter(a => a.showarrow);
 t('on_point: arrow anchored to the data value', onPoint[0].y === 5 && onPoint[0].yref === 'y');
 
-const topRow = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row' }) }).filter(a => a.showarrow);
+const topRow = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row', measured_arrows_on_line: false }) })
+  .filter(a => a.showarrow);
 t('top_row: all arrows share one paper-space row', topRow.length === 3
   && topRow.every(a => a.yref === 'paper' && a.y === topRow[0].y));
 t('top_row: colour still follows wind speed', topRow[1].arrowcolor !== topRow[2].arrowcolor);
+
+// measured_arrows_on_line (default true): in the top_row style the MEASURED
+// arrows stay anchored on the measured value line so the direction of the
+// measured wind is unambiguous, while forecast arrows keep the top row.
+const mixed = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row' }) }).filter(a => a.showarrow);
+t('measured arrows on the measured line by default in top_row',
+  mixed[0].yref === 'y' && mixed[0].y === 5 && mixed[1].yref === 'y' && mixed[1].y === 10);
+t('forecast arrows stay in the top row', mixed[2].yref === 'paper');
+t('measured_arrows_on_line: false pushes measured arrows into the row too',
+  topRow.every(a => a.yref === 'paper'));
+t('plotly style unaffected by measured_arrows_on_line',
+  ann({ vars, getFromConfig: cfg({ arrow_layout: 'on_point', measured_arrows_on_line: false }) })
+    .filter(a => a.showarrow).every(a => a.yref === 'y'));
 
 // Spacing thins the row out but keeps the first arrow of each window.
 const spaced = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row', arrow_spacing_hours: 1 }) })

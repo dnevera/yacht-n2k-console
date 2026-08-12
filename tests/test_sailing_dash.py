@@ -1091,6 +1091,21 @@ def test_arrow_length_scale_is_global_with_default_of_three(tmp_path):
     assert all(c["arrow_length_scale"] == 8 for c in scaled)
 
 
+def test_measured_arrows_on_line_is_global_with_default_true(tmp_path):
+    """Measured arrows are anchored on the measured line unless disabled."""
+    default_cards = [c for c in _plotly_chart_cards(_build_with_chart_config(tmp_path)) if "arrow_kind" in c]
+    assert default_cards
+    assert all(c["measured_arrows_on_line"] is True for c in default_cards)
+
+    disabled = [
+        c
+        for c in _plotly_chart_cards(_build_with_chart_config(tmp_path, "measured_arrows_on_line: false\n"))
+        if "arrow_kind" in c
+    ]
+    assert {c["arrow_kind"] for c in disabled} == {"wind", "wave"}
+    assert all(c["measured_arrows_on_line"] is False for c in disabled)
+
+
 def test_global_chart_options_from_user_config_are_applied(tmp_path):
     """Top-level chart options in config.yaml must override the template."""
     template_file = tmp_path / "config.yaml.template"

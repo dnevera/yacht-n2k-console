@@ -39,7 +39,12 @@ def load_baseline(config_path, template_path):
         with open(config_path, "r", encoding="utf-8") as f:
             override = yaml.safe_load(f) or {}
             # Deep merge override into baseline config
-            for opt_key in ("chart_style", "arrow_spacing_hours", "arrow_length_scale"):
+            for opt_key in (
+                "chart_style",
+                "arrow_spacing_hours",
+                "arrow_length_scale",
+                "measured_arrows_on_line",
+            ):
                 if opt_key in override:
                     config[opt_key] = override[opt_key]
             if "time_window" in override and isinstance(override["time_window"], dict):
@@ -153,6 +158,10 @@ def run_wizard(config, non_interactive=False):
         "Arrow length amplifier (shaft grows with wind speed / wave height)",
         config.get("arrow_length_scale", 3),
         min_val=1,
+    )
+    config["measured_arrows_on_line"] = prompt_bool(
+        "Draw measured (NMEA) arrows on the measured value line",
+        config.get("measured_arrows_on_line", True),
     )
 
     print("\n--- Time Windows ---")

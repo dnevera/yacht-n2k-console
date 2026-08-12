@@ -44,6 +44,12 @@
   const arrowLayout = String(readConfig('arrow_layout', 'on_point'));
   const arrowKind = String(readConfig('arrow_kind', 'wind'));
   const topRow = arrowLayout === 'top_row';
+  // `measured_arrows_on_line` (global config.yaml option, default true): in the
+  // `open_meteo` style every arrow used to be pushed into the single row under
+  // the chart's top edge, so in the measured zone it was impossible to tell
+  // which line a direction belonged to. Measured arrows are therefore anchored
+  // ON the measured value line, while forecast arrows keep the row layout.
+  const measuredOnLine = readConfig('measured_arrows_on_line', true) !== false;
   const spacingMs = Math.max(0, Number(readConfig('arrow_spacing_hours', 0)) || 0) * 3600 * 1000;
   const TOP_ROW_Y = 0.93;
   const walk = (root) => {
@@ -79,14 +85,15 @@
     const magnitude = Math.abs(Number(y)) * (wave ? WAVE_PX_PER_METRE : 1);
     return Math.min(ARROW_MAX_PX, ARROW_BASE_PX + magnitude * lengthScale);
   };
-  const arrow = (x, y, d) => {
+  const arrow = (x, y, d, measured) => {
     const rad = ((d + 180) * Math.PI) / 180;
     const len = lengthOf(y);
+    const onLine = !topRow || (measured && measuredOnLine);
     return {
       x,
-      y: topRow ? TOP_ROW_Y : y,
+      y: onLine ? y : TOP_ROW_Y,
       xref: 'x',
-      yref: topRow ? 'paper' : 'y',
+      yref: onLine ? 'y' : 'paper',
       ax: -len * Math.sin(rad), ay: len * Math.cos(rad),
       axref: 'pixel', ayref: 'pixel',
       showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5,
@@ -96,7 +103,7 @@
   };
   // Arrows for a series whose directions come from a separate series:
   // matched by timestamp within a tolerance, never by index.
-  const arrowsByTime = (values, dir, toleranceMs) => {
+  const arrowsByTime = (values, dir, toleranceMs, measured) => {
     const xs = (values && values.xs) || [];
     const ys = (values && values.ys) || [];
     const dirXs = ((dir && dir.xs) || []).map((t) => new Date(t).getTime());
@@ -115,7 +122,7 @@
       if (best < 0 || bestDelta > toleranceMs) continue;
       const d = Number(dirYs[best]);
       if (!Number.isFinite(d)) continue;
-      out.push(arrow(xs[i], y, d));
+      out.push(arrow(xs[i], y, d, measured));
     }
     return out;
   };
@@ -154,7 +161,7 @@
   const arrows = thin(wave
     ? arrowsByIndex(vars.waveHeight, vars.waveDir)
     : [
-      ...arrowsByTime(vars.speed, vars.dir, 15 * 60 * 1000),
+      ...arrowsByTime(vars.speed, vars.dir, 15 * 60 * 1000, true),
       ...arrowsByIndex(vars.forecastSpeed, vars.forecastDir),
     ]);
   return [

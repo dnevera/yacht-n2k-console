@@ -27,6 +27,14 @@ arrow_spacing_hours: 3
 # difference between light and strong wind is much more visible (the length is
 # capped so arrows never leave the chart). Default: 3.
 arrow_length_scale: 2
+# Where the arrows of the MEASURED (NMEA history) series are drawn:
+#   true  - anchored on the measured value line itself, so in the history zone
+#           it is always clear which line a direction belongs to. Forecast
+#           arrows still follow `chart_style`. Default.
+#   false - measured arrows join the forecast arrows in the top row
+#           (`chart_style: open_meteo` only).
+# Ignored by `chart_style: plotly`, where every arrow is on its point anyway.
+measured_arrows_on_line: false
 
 # Controls the time span shown on the wind and wave charts (the same window is
 # used by both chart styles) and how far ahead the Open-Meteo REST forecast is

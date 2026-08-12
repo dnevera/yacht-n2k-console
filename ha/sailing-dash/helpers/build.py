@@ -52,7 +52,12 @@ def load_config(config_path=None, template_path=None):
         with open(config_path, "r", encoding="utf-8") as f:
             override = yaml.safe_load(f) or {}
             if isinstance(override, dict):
-                for opt_key in ("chart_style", "arrow_spacing_hours", "arrow_length_scale"):
+                for opt_key in (
+                    "chart_style",
+                    "arrow_spacing_hours",
+                    "arrow_length_scale",
+                    "measured_arrows_on_line",
+                ):
                     if opt_key in override:
                         config[opt_key] = override[opt_key]
                 if "time_window" in override and isinstance(override["time_window"], dict):
@@ -93,6 +98,10 @@ DEFAULT_CHART_STYLE = "open_meteo"
 # speed in kt, wave height in m) multiplied by this factor. 1 = the old,
 # barely visible growth; higher = more pronounced.
 DEFAULT_ARROW_LENGTH_SCALE = 3
+# Whether the measured (recorder history) arrows are anchored on the measured
+# value line instead of the top row, so the direction of the measured wind is
+# unambiguous in the history zone of the chart.
+DEFAULT_MEASURED_ARROWS_ON_LINE = True
 # Which flavour of arrows a section's chart draws (series, colour scale and
 # shaft length), passed to the shared annotation layer as `arrow_kind`.
 SECTION_ARROW_KINDS = {
@@ -344,6 +353,9 @@ def build_dashboard(config=None):
     if arrow_length_scale.is_integer():
         # Keep the emitted YAML clean: `3` instead of `3.0`.
         arrow_length_scale = int(arrow_length_scale)
+    measured_on_line = bool(
+        config.get("measured_arrows_on_line", DEFAULT_MEASURED_ARROWS_ON_LINE)
+    )
 
     sections = []
     for fname in sorted(os.listdir(sections_dir)):
@@ -390,6 +402,7 @@ def build_dashboard(config=None):
                                 card["arrow_layout"] = arrow_layout
                                 card["arrow_spacing_hours"] = arrow_spacing
                                 card["arrow_length_scale"] = arrow_length_scale
+                                card["measured_arrows_on_line"] = measured_on_line
                                 card["arrow_kind"] = arrow_kind
                     filtered_cards.append(card)
                 item["cards"] = filtered_cards

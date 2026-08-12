@@ -68,6 +68,7 @@ chart_style: open_meteo   # Style of ALL charts (wind + waves):
                           #   plotly     = one arrow per data point, on the value line
 arrow_spacing_hours: 3    # Hours between direction arrows (0 = every point)
 arrow_length_scale: 3     # Arrow length amplifier: shaft grows with wind speed / wave height
+measured_arrows_on_line: true  # Measured (NMEA) arrows anchored on the measured line
 
 time_window:
   history_hours: 4   # Measured history time window drawn left of Now (hours)
@@ -139,6 +140,12 @@ at runtime:
 with the value (wind speed in knots, wave height in metres) multiplied by that
 factor, capped so arrows never leave the chart. `1` reproduces the old, barely
 visible growth.
+
+`measured_arrows_on_line` (default `true`) keeps the arrows of the measured
+(NMEA history) series anchored on the measured value line, so the direction of
+the measured wind is unambiguous in the history zone, while forecast arrows
+still follow `chart_style`. Set it to `false` to push measured arrows into the
+top row as well (only affects `chart_style: open_meteo`).
 
 ## Key Files
 
