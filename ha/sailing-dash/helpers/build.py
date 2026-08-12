@@ -52,6 +52,9 @@ def load_config(config_path=None, template_path=None):
         with open(config_path, "r", encoding="utf-8") as f:
             override = yaml.safe_load(f) or {}
             if isinstance(override, dict):
+                for opt_key in ("chart_style", "arrow_spacing_hours", "arrow_length_scale"):
+                    if opt_key in override:
+                        config[opt_key] = override[opt_key]
                 if "time_window" in override and isinstance(override["time_window"], dict):
                     config.setdefault("time_window", {}).update(override["time_window"])
                 if "sections" in override and isinstance(override["sections"], dict):
@@ -59,10 +62,10 @@ def load_config(config_path=None, template_path=None):
                     for sec_key, sec_val in override["sections"].items():
                         if isinstance(sec_val, dict):
                             target_sec = config["sections"].setdefault(sec_key, {})
-                            # Any scalar section option (enabled, chart_style,
-                            # arrow_spacing_hours, ...) overrides the template
-                            # as-is; `cards` is merged key-by-key so a partial
-                            # config.yaml keeps the template's other toggles.
+                            # Any scalar section option (enabled, ...)
+                            # overrides the template as-is; `cards` is merged
+                            # key-by-key so a partial config.yaml keeps the
+                            # template's other toggles.
                             for opt_key, opt_val in sec_val.items():
                                 if opt_key == "cards":
                                     continue
@@ -73,39 +76,38 @@ def load_config(config_path=None, template_path=None):
     return config
 
 
-# Wind chart styles. Both are rendered by the same `custom:plotly-graph` card —
-# the only difference is where the wind-direction arrow annotations are drawn,
-# which `src/js/common/plotly_wind_annotations.js` decides from the injected
+# Chart styles. Every chart is rendered by the same `custom:plotly-graph` card —
+# the only difference is where the direction arrow annotations are drawn, which
+# `src/js/common/plotly_chart_annotations.js` decides from the injected
 # `arrow_layout` option:
-#   plotly     -> on_point: an arrow sits on each data point of the speed line.
+#   plotly     -> on_point: an arrow sits on each data point of the value line.
 #   open_meteo -> top_row : arrows line up in one row under the chart's top
 #                 edge (open-meteo.com preview style), values stay as lines.
-WIND_CHART_STYLES = {
+# The option is global: it applies to the wind and the wave chart alike.
+CHART_STYLES = {
     "plotly": "on_point",
     "open_meteo": "top_row",
 }
-DEFAULT_WIND_CHART_STYLE = "open_meteo"
+DEFAULT_CHART_STYLE = "open_meteo"
+# Amplifier of the arrow shaft length: the shaft grows with the value (wind
+# speed in kt, wave height in m) multiplied by this factor. 1 = the old,
+# barely visible growth; higher = more pronounced.
+DEFAULT_ARROW_LENGTH_SCALE = 3
+# Which flavour of arrows a section's chart draws (series, colour scale and
+# shaft length), passed to the shared annotation layer as `arrow_kind`.
+SECTION_ARROW_KINDS = {
+    "wind": "wind",
+    "waves": "wave",
+}
 
 
-def resolve_wind_chart_style(wind_cfg):
-    """Return `(style, arrow_layout)` for the wind section config.
-
-    Accepts the legacy `chart_engine` key as an alias of `chart_style` so an
-    existing config.yaml keeps working; the retired `apexcharts` /
-    `open_meteo_sdk` engines map onto the closest surviving Plotly style
-    instead of failing the build.
-    """
-    raw = wind_cfg.get("chart_style", wind_cfg.get("chart_engine"))
-    style = str(raw if raw is not None else DEFAULT_WIND_CHART_STYLE).strip().lower()
-    legacy = {
-        "apexcharts": "open_meteo",
-        "open_meteo_sdk": "open_meteo",
-        "openmeteo": "open_meteo",
-    }
-    style = legacy.get(style, style)
-    if style not in WIND_CHART_STYLES:
-        style = DEFAULT_WIND_CHART_STYLE
-    return style, WIND_CHART_STYLES[style]
+def resolve_chart_style(config):
+    """Return `(style, arrow_layout)` for the global `chart_style` option."""
+    raw = config.get("chart_style")
+    style = str(raw if raw is not None else DEFAULT_CHART_STYLE).strip().lower()
+    if style not in CHART_STYLES:
+        style = DEFAULT_CHART_STYLE
+    return style, CHART_STYLES[style]
 
 
 def strip_leading_line_comments(js_code):
@@ -336,9 +338,12 @@ def build_dashboard(config=None):
     forecast_hours = forecast_days * 24
     total_hours = history_hours + forecast_hours
 
-    wind_cfg = sec_configs.get("wind", {})
-    wind_style, wind_arrow_layout = resolve_wind_chart_style(wind_cfg)
-    wind_arrow_spacing = int(wind_cfg.get("arrow_spacing_hours", 3))
+    _chart_style, arrow_layout = resolve_chart_style(config)
+    arrow_spacing = int(config.get("arrow_spacing_hours", 3))
+    arrow_length_scale = float(config.get("arrow_length_scale", DEFAULT_ARROW_LENGTH_SCALE))
+    if arrow_length_scale.is_integer():
+        # Keep the emitted YAML clean: `3` instead of `3.0`.
+        arrow_length_scale = int(arrow_length_scale)
 
     sections = []
     for fname in sorted(os.listdir(sections_dir)):
@@ -376,13 +381,16 @@ def build_dashboard(config=None):
                         if card.get("type") == "custom:plotly-graph":
                             card["hours_to_show"] = total_hours
                             card["time_offset"] = f"{forecast_hours}h"
-                            if sec_key == "wind":
-                                # Both wind chart styles are the same Plotly
-                                # card — only the wind-arrow annotation layer
-                                # differs, and it reads these two options at
+                            arrow_kind = SECTION_ARROW_KINDS.get(sec_key)
+                            if arrow_kind:
+                                # Both chart styles are the same Plotly card —
+                                # only the shared arrow annotation layer
+                                # differs, and it reads these options at
                                 # runtime via plotly-graph's getFromConfig().
-                                card["arrow_layout"] = wind_arrow_layout
-                                card["arrow_spacing_hours"] = wind_arrow_spacing
+                                card["arrow_layout"] = arrow_layout
+                                card["arrow_spacing_hours"] = arrow_spacing
+                                card["arrow_length_scale"] = arrow_length_scale
+                                card["arrow_kind"] = arrow_kind
                     filtered_cards.append(card)
                 item["cards"] = filtered_cards
 

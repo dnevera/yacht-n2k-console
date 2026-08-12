@@ -39,6 +39,9 @@ def load_baseline(config_path, template_path):
         with open(config_path, "r", encoding="utf-8") as f:
             override = yaml.safe_load(f) or {}
             # Deep merge override into baseline config
+            for opt_key in ("chart_style", "arrow_spacing_hours", "arrow_length_scale"):
+                if opt_key in override:
+                    config[opt_key] = override[opt_key]
             if "time_window" in override and isinstance(override["time_window"], dict):
                 config.setdefault("time_window", {}).update(override["time_window"])
             if "sections" in override and isinstance(override["sections"], dict):
@@ -48,13 +51,6 @@ def load_baseline(config_path, template_path):
                         target_sec = config["sections"].setdefault(sec_key, {})
                         if "enabled" in sec_val:
                             target_sec["enabled"] = sec_val["enabled"]
-                        if "chart_style" in sec_val:
-                            target_sec["chart_style"] = sec_val["chart_style"]
-                        elif "chart_engine" in sec_val:
-                            # Legacy key name, kept readable for old configs.
-                            target_sec["chart_style"] = sec_val["chart_engine"]
-                        if "arrow_spacing_hours" in sec_val:
-                            target_sec["arrow_spacing_hours"] = sec_val["arrow_spacing_hours"]
                         if "cards" in sec_val and isinstance(sec_val["cards"], dict):
                             target_sec.setdefault("cards", {}).update(sec_val["cards"])
 
@@ -141,7 +137,25 @@ def run_wizard(config, non_interactive=False):
     hist = tw.get("history_hours", 4)
     fc = tw.get("forecast_days", 3)
 
-    print("--- Time Windows ---")
+    print("--- Chart Style ---")
+    config["chart_style"] = prompt_choice(
+        "Chart style for the wind and wave charts"
+        " (open_meteo = arrow row on top of the chart)",
+        ["open_meteo", "plotly"],
+        config.get("chart_style", "open_meteo"),
+    )
+    config["arrow_spacing_hours"] = prompt_int(
+        "Spacing between direction arrows on the charts (hours)",
+        config.get("arrow_spacing_hours", 3),
+        min_val=1,
+    )
+    config["arrow_length_scale"] = prompt_int(
+        "Arrow length amplifier (shaft grows with wind speed / wave height)",
+        config.get("arrow_length_scale", 3),
+        min_val=1,
+    )
+
+    print("\n--- Time Windows ---")
     tw["history_hours"] = prompt_int("Measured history window on chart left of Now (hours)", hist, min_val=1)
     tw["forecast_days"] = prompt_int("Forecast window on REST query & chart right of Now (days)", fc, min_val=1)
 
@@ -156,19 +170,6 @@ def run_wizard(config, non_interactive=False):
         print(f"\nSection: [{sec_title}]")
         sec_enabled = prompt_bool(f"Enable section '{sec_title}'?", sec_enabled)
         sec_data["enabled"] = sec_enabled
-
-        if sec_enabled and sec_id == "wind":
-            sec_data.pop("chart_engine", None)
-            sec_data["chart_style"] = prompt_choice(
-                "  Wind chart style (open_meteo = arrow row on top of the chart)",
-                ["open_meteo", "plotly"],
-                sec_data.get("chart_style", "open_meteo"),
-            )
-            sec_data["arrow_spacing_hours"] = prompt_int(
-                "  Spacing between wind-direction arrows (hours)",
-                sec_data.get("arrow_spacing_hours", 3),
-                min_val=1,
-            )
 
         if sec_enabled:
             cards = sec_data.get("cards", {})

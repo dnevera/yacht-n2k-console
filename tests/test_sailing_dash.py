@@ -985,18 +985,21 @@ def test_all_dashboard_and_automation_yaml_files_use_only_virtual_sensors():
         )
 
 
-def _build_with_wind_config(tmp_path, extra_wind_yaml=""):
-    """Build the dashboard into tmp_path with a minimal wind-section config."""
+def _build_with_chart_config(tmp_path, extra_top_yaml=""):
+    """Build the dashboard into tmp_path with a minimal chart config."""
     template_file = tmp_path / "config.yaml.template"
     config_file = tmp_path / "config.yaml"
 
     template_file.write_text(
-        "time_window:\n"
+        extra_top_yaml
+        + "time_window:\n"
         "  history_hours: 6\n"
         "  forecast_days: 5\n"
         "sections:\n"
         "  wind:\n"
-        "    enabled: true\n" + extra_wind_yaml,
+        "    enabled: true\n"
+        "  waves:\n"
+        "    enabled: true\n",
         encoding="utf-8",
     )
 
@@ -1009,93 +1012,114 @@ def _build_with_wind_config(tmp_path, extra_wind_yaml=""):
     return (tmp_path / "dashboard-sailing.yaml").read_text(encoding="utf-8")
 
 
-def test_wind_chart_styles_share_the_single_plotly_engine(tmp_path):
-    """Both wind chart styles must render the same `custom:plotly-graph` card.
+def _plotly_chart_cards(dash_str):
+    """Return every `custom:plotly-graph` card of the built dashboard."""
+    dash = yaml.safe_load(dash_str)
+    return [
+        card
+        for section in dash["views"][0]["sections"]
+        for card in section.get("cards", [])
+        if isinstance(card, dict) and card.get("type") == "custom:plotly-graph"
+    ]
 
-    The retired ApexCharts / hand-rolled SVG implementations must not come
-    back: only the arrow annotation layout differs between styles, which is
-    injected as `arrow_layout` and read at runtime by
-    src/js/common/plotly_wind_annotations.js.
+
+def test_chart_style_is_global_and_applies_to_wind_and_waves(tmp_path):
+    """`chart_style` is a top-level option shared by every chart.
+
+    Both styles render the same `custom:plotly-graph` card: only the arrow
+    annotation layout differs, injected as `arrow_layout` and read at runtime
+    by the single shared src/js/common/plotly_chart_annotations.js layer. The
+    retired ApexCharts / hand-rolled SVG implementations must not come back.
     """
     for style, expected_layout in (("open_meteo", "top_row"), ("plotly", "on_point")):
-        dash_str = _build_with_wind_config(tmp_path, f"    chart_style: {style}\n")
+        dash_str = _build_with_chart_config(tmp_path, f"chart_style: {style}\n")
 
-        assert "type: custom:plotly-graph" in dash_str
-        assert f"arrow_layout: {expected_layout}" in dash_str
         assert "type: custom:apexcharts-card" not in dash_str
         assert "type: custom:openmeteo-wind-card" not in dash_str
-        assert "type: custom:wind-chart-with-arrows-card" not in dash_str
-        # Time window still comes from config.yaml: 6h history + 5d forecast.
-        assert "hours_to_show: 126" in dash_str
-        assert "time_offset: 120h" in dash_str
+
+        kinds = {}
+        for card in _plotly_chart_cards(dash_str):
+            if "arrow_kind" not in card:
+                continue
+            kinds[card["arrow_kind"]] = card
+            assert card["arrow_layout"] == expected_layout
+            # Time window still comes from config.yaml: 6h history + 5d forecast.
+            assert card["hours_to_show"] == 126
+            assert card["time_offset"] == "120h"
+
+        # The very same style reached the wind AND the wave chart.
+        assert set(kinds) == {"wind", "wave"}
 
 
-def test_wind_chart_style_defaults_to_open_meteo(tmp_path):
+def test_chart_style_defaults_to_open_meteo(tmp_path):
     """With no explicit style the arrows must form the top row (open_meteo)."""
-    dash_str = _build_with_wind_config(tmp_path)
-    assert "arrow_layout: top_row" in dash_str
-    assert "arrow_spacing_hours: 3" in dash_str
+    cards = _plotly_chart_cards(_build_with_chart_config(tmp_path))
+    arrow_cards = [c for c in cards if "arrow_kind" in c]
+    assert arrow_cards
+    for card in arrow_cards:
+        assert card["arrow_layout"] == "top_row"
+        assert card["arrow_spacing_hours"] == 3
 
 
-def test_legacy_chart_engine_key_still_understood(tmp_path):
-    """An existing config.yaml written with the old `chart_engine` key must build.
-
-    `apexcharts` / `open_meteo_sdk` no longer exist as engines, so they map
-    onto the surviving open_meteo style instead of breaking the build.
-    """
-    assert build.resolve_wind_chart_style({"chart_engine": "plotly"}) == ("plotly", "on_point")
-    assert build.resolve_wind_chart_style({"chart_engine": "apexcharts"}) == ("open_meteo", "top_row")
-    assert build.resolve_wind_chart_style({"chart_engine": "open_meteo_sdk"}) == ("open_meteo", "top_row")
-    assert build.resolve_wind_chart_style({}) == ("open_meteo", "top_row")
-    # An explicit `chart_style` wins over the legacy alias.
-    assert build.resolve_wind_chart_style(
-        {"chart_style": "plotly", "chart_engine": "apexcharts"}
-    ) == ("plotly", "on_point")
-
-    dash_str = _build_with_wind_config(tmp_path, "    chart_engine: apexcharts\n")
-    assert "arrow_layout: top_row" in dash_str
-    assert "type: custom:plotly-graph" in dash_str
+def test_unknown_chart_style_falls_back_to_the_default(tmp_path):
+    """A typo in config.yaml must not break the build."""
+    assert build.resolve_chart_style({"chart_style": "plotly"}) == ("plotly", "on_point")
+    assert build.resolve_chart_style({"chart_style": "nonsense"}) == ("open_meteo", "top_row")
+    assert build.resolve_chart_style({}) == ("open_meteo", "top_row")
 
 
-def test_wind_arrow_spacing_hours_override(tmp_path):
-    """`sections.wind.arrow_spacing_hours` must reach the wind chart card."""
-    dash_str = _build_with_wind_config(tmp_path, "    arrow_spacing_hours: 6\n")
-    assert "arrow_spacing_hours: 6" in dash_str
+def test_arrow_spacing_hours_is_global_and_reaches_every_chart(tmp_path):
+    """The top-level `arrow_spacing_hours` must reach wind and wave charts."""
+    cards = _plotly_chart_cards(_build_with_chart_config(tmp_path, "arrow_spacing_hours: 6\n"))
+    arrow_cards = [c for c in cards if "arrow_kind" in c]
+    assert {c["arrow_kind"] for c in arrow_cards} == {"wind", "wave"}
+    assert all(c["arrow_spacing_hours"] == 6 for c in arrow_cards)
 
 
-def test_section_scalar_options_from_user_config_are_applied(tmp_path):
-    """A scalar section option in config.yaml must override the template.
+def test_arrow_length_scale_is_global_with_default_of_three(tmp_path):
+    """The arrow length amplifier defaults to 3 and reaches every chart."""
+    default_cards = [c for c in _plotly_chart_cards(_build_with_chart_config(tmp_path)) if "arrow_kind" in c]
+    assert default_cards
+    assert all(c["arrow_length_scale"] == 3 for c in default_cards)
 
-    Regression: load_config() only merged `enabled` and `cards` from the
-    user's config.yaml, so `chart_style`/`arrow_spacing_hours` set there were
-    silently ignored and the template's values were used instead.
-    """
+    scaled = [
+        c
+        for c in _plotly_chart_cards(_build_with_chart_config(tmp_path, "arrow_length_scale: 8\n"))
+        if "arrow_kind" in c
+    ]
+    assert {c["arrow_kind"] for c in scaled} == {"wind", "wave"}
+    assert all(c["arrow_length_scale"] == 8 for c in scaled)
+
+
+def test_global_chart_options_from_user_config_are_applied(tmp_path):
+    """Top-level chart options in config.yaml must override the template."""
     template_file = tmp_path / "config.yaml.template"
     config_file = tmp_path / "config.yaml"
     template_file.write_text(
+        "chart_style: open_meteo\n"
+        "arrow_spacing_hours: 3\n"
         "sections:\n"
         "  wind:\n"
         "    enabled: true\n"
-        "    chart_style: open_meteo\n"
-        "    arrow_spacing_hours: 3\n"
         "    cards:\n"
         "      glance: true\n"
         "      chart: true\n",
         encoding="utf-8",
     )
     config_file.write_text(
+        "chart_style: plotly\n"
+        "arrow_spacing_hours: 6\n"
+        "arrow_length_scale: 5\n"
         "sections:\n"
         "  wind:\n"
-        "    chart_style: plotly\n"
-        "    arrow_spacing_hours: 6\n"
         "    cards:\n"
         "      glance: false\n",
         encoding="utf-8",
     )
 
     config = build.load_config(str(config_file), str(template_file))
-    wind = config["sections"]["wind"]
-    assert wind["chart_style"] == "plotly"
-    assert wind["arrow_spacing_hours"] == 6
+    assert config["chart_style"] == "plotly"
+    assert config["arrow_spacing_hours"] == 6
+    assert config["arrow_length_scale"] == 5
     # `cards` stays a per-key merge, so untouched toggles survive.
-    assert wind["cards"] == {"glance": False, "chart": True}
+    assert config["sections"]["wind"]["cards"] == {"glance": False, "chart": True}

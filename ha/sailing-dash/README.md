@@ -63,6 +63,12 @@ Before deploying, `deploy.sh` automatically invokes `python3 build.py` to ensure
 Custom build parameters and visibility toggles are managed in `ha/sailing-dash/config.yaml` (default template provided in `config.yaml.template`):
 
 ```yaml
+chart_style: open_meteo   # Style of ALL charts (wind + waves):
+                          #   open_meteo = direction arrows in one row on top of the chart
+                          #   plotly     = one arrow per data point, on the value line
+arrow_spacing_hours: 3    # Hours between direction arrows (0 = every point)
+arrow_length_scale: 3     # Arrow length amplifier: shaft grows with wind speed / wave height
+
 time_window:
   history_hours: 4   # Measured history time window drawn left of Now (hours)
   forecast_days: 3   # Forecast window drawn right of Now (days) for REST queries and charts
@@ -90,9 +96,6 @@ sections:
       barometer_trend: true
   wind:
     enabled: true
-    chart_style: open_meteo   # open_meteo = wind-direction arrows in one row on top of the chart
-                             # plotly     = one arrow per data point, on the speed line
-    arrow_spacing_hours: 3   # Hours between wind-direction arrows (0 = every point)
     cards:
       glance: true
       chart: true
@@ -114,23 +117,28 @@ During setup or reconfiguration, run:
 # or directly via helper:
 python3 helpers/configure.py
 ```
-This guides the installer through interactive prompts for history/forecast time windows, the wind chart style (`open_meteo` / `plotly`) with its arrow spacing, and section/card visibility choices before `build.py` runs.
+This guides the installer through interactive prompts for the global chart style (`open_meteo` / `plotly`) with its arrow spacing, history/forecast time windows, and section/card visibility choices before `build.py` runs.
 
-### Wind Chart Styles
+### Chart Styles (global)
 
-There is only **one** chart engine — `custom:plotly-graph`. `sections.wind.chart_style`
-selects how the wind-direction arrows are laid out over the very same chart (same
-series, same unified tooltip, same kt colour bar), and `build.py` injects that choice
-into the card as `arrow_layout`, which `src/js/common/plotly_wind_annotations.js` reads
+There is only **one** chart engine — `custom:plotly-graph`. The top-level
+`chart_style` option selects how the direction arrows are laid out over the very
+same chart (same series, same unified tooltip, same colour bar) and it applies to
+**every** chart — wind and waves alike. `build.py` injects that choice into each
+chart card as `arrow_layout` (plus `arrow_kind`, picking the wind/wave flavour),
+and the single shared `src/js/common/plotly_chart_annotations.js` layer reads them
 at runtime:
 
 | `chart_style` | `arrow_layout` | Arrows |
 | --- | --- | --- |
 | `open_meteo` (default) | `top_row` | One straight row just under the chart's top edge, open-meteo.com forecast-preview style |
-| `plotly` | `on_point` | Each arrow sits on its own data point, following the speed line |
+| `plotly` | `on_point` | Each arrow sits on its own data point, following the value line |
 
-The legacy key name `chart_engine` is still accepted as an alias (the removed
-`apexcharts` / `open_meteo_sdk` values map onto `open_meteo`).
+`arrow_spacing_hours` (default 3) thins the arrow row out on both charts, and
+`arrow_length_scale` (default 3) amplifies the arrow length: the shaft grows
+with the value (wind speed in knots, wave height in metres) multiplied by that
+factor, capped so arrows never leave the chart. `1` reproduces the old, barely
+visible growth.
 
 ## Key Files
 
@@ -138,7 +146,7 @@ Everything except `deploy.sh`, `run_stage.sh` and `install_wizard.sh` lives in `
 those as `python3 helpers/<script>.py`.
 
 - `install_wizard.sh` — **guided install / re-install for any profile** (`--target <profile>`). Runs every automatable step in order and stops at two blocking gates: **GATE A** (HACS activated in the UI, verified by `helpers/stage_provisioner.py check-hacs`) and **GATE B** (NMEA 2000 config entry on the tcp-gw plus raw entities, verified by `deploy.sh --preflight`). A gate never continues on a warning and behaves identically on Stage and Prod. Flags: `--config`, `--list`, `--from N`, `--only N`, `--reinstall`, `--dry-run`.
-- `config.yaml` / `config.yaml.template` — **central build configuration**. Controls chart time windows (`history_hours`, `forecast_days`), the wind chart style (`chart_style`, `arrow_spacing_hours`) and section/card visibility toggles.
+- `config.yaml` / `config.yaml.template` — **central build configuration**. Controls chart time windows (`history_hours`, `forecast_days`), the global chart style (`chart_style`, `arrow_spacing_hours`, `arrow_length_scale`) and section/card visibility toggles.
 - `helpers/configure.py` — **interactive configuration wizard**. CLI helper executed by `./install_wizard.sh --config` to prompt for time windows and section/card enablement choices.
 - `build.py` — **automated build engine**. Compiles modular source code from `src/` into deployable target YAML/JS files in `build/`.
 - `build_docker.sh` — **HA Docker build script**. Compiles source modules, builds the custom Stage Home Assistant Docker image (`local-ha`), starts the container, and deploys build artifacts.

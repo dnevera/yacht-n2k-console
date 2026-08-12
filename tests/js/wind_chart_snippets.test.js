@@ -22,7 +22,7 @@ const load=(n)=>{const lines=fs.readFileSync(D+n,'utf8').split('\n'); let i=0; w
   return eval('('+lines.slice(i).join('\n')+')');};
 const historySeries=load('plotly_history_series.js');
 const cd=load('plotly_wind_customdata.js');
-const ann=load('plotly_wind_annotations.js');
+const ann=load('plotly_chart_annotations.js');
 global.document={querySelectorAll:()=>[],};
 let ok=true; const t=(name,c)=>{console.log((c?'PASS':'FAIL')+' '+name); if(!c) ok=false;};
 
@@ -54,9 +54,9 @@ const f=arrows[2];
 t('forecast dir 270 -> tail west (ax<0)',f.ax<-0.01);
 t('Now marker present',out.some(o=>o.text==='Now'));
 
-// 4. arrow layout styles: the same annotation layer serves both wind chart
-// styles (config.yaml's sections.wind.chart_style), reading `arrow_layout` and
-// `arrow_spacing_hours` from the card config at runtime.
+// 4. arrow layout styles: one shared annotation layer serves BOTH charts and
+// both styles (config.yaml's global chart_style), reading `arrow_layout`,
+// `arrow_spacing_hours` and `arrow_kind` from the card config at runtime.
 const cfg = (opts) => (key) => opts[key];
 const onPoint = ann({ vars, getFromConfig: cfg({ arrow_layout: 'on_point' }) }).filter(a => a.showarrow);
 t('on_point: arrow anchored to the data value', onPoint[0].y === 5 && onPoint[0].yref === 'y');
@@ -71,7 +71,37 @@ const spaced = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row', arrow_s
   .filter(a => a.showarrow);
 t('arrow_spacing_hours: 1h keeps t=30 and t=120, drops t=60', spaced.length === 2
   && spaced[0].x === T(30) && spaced[1].x === T(120));
+// arrow_length_scale amplifies the shaft length, which is the pixel distance
+// between the anchor (x/y) and the tail (ax/ay).
+const shaft = (a) => Math.hypot(a.ax, a.ay);
+const scaled = (opts) => ann({ vars, getFromConfig: cfg(Object.assign({ arrow_layout: 'top_row' }, opts)) })
+  .filter(a => a.showarrow);
+const s1 = scaled({ arrow_length_scale: 1 });
+const s5 = scaled({ arrow_length_scale: 5 });
+t('arrow_length_scale amplifies the shaft length', shaft(s5[1]) > shaft(s1[1]) + 1);
+t('shaft still grows with the value at a given scale', shaft(s1[1]) > shaft(s1[0]));
+t('arrow_length_scale is capped so arrows stay inside the chart',
+  scaled({ arrow_length_scale: 1000 }).every(a => shaft(a) <= 60.001));
+t('arrow_length_scale defaults to 3',
+  Math.abs(shaft(scaled({})[1]) - shaft(scaled({ arrow_length_scale: 3 })[1])) < 0.001);
+
 t('missing getFromConfig falls back to on_point without throwing',
   ann({ vars }).filter(a => a.showarrow).length === 3);
+
+// 5. the wave flavour of the same layer: index-aligned wave height/direction,
+// its own colour scale, and the very same global layout/spacing options.
+const waveVars = { waveHeight: { xs: [T(0), T(60), T(120)], ys: [0.4, NaN, 3.2] }, waveDir: [90, 180, 270] };
+const waveOnPoint = ann({ vars: waveVars, getFromConfig: cfg({ arrow_kind: 'wave', arrow_layout: 'on_point' }) })
+  .filter(a => a.showarrow);
+t('wave: non-finite height dropped, arrow on its own value', waveOnPoint.length === 2
+  && waveOnPoint[0].y === 0.4 && waveOnPoint[0].yref === 'y');
+t('wave: colour follows wave height scale', waveOnPoint[0].arrowcolor !== waveOnPoint[1].arrowcolor);
+
+const waveTopRow = ann({ vars: waveVars, getFromConfig: cfg({ arrow_kind: 'wave', arrow_layout: 'top_row', arrow_spacing_hours: 3 }) })
+  .filter(a => a.showarrow);
+t('wave: top_row + spacing applies the global chart style too', waveTopRow.length === 1
+  && waveTopRow[0].yref === 'paper' && waveTopRow[0].x === T(0));
+t('wave: Now marker present', ann({ vars: waveVars, getFromConfig: cfg({ arrow_kind: 'wave' }) })
+  .some(o => o.text === 'Now'));
 
 process.exit(ok?0:1);

@@ -1,24 +1,31 @@
-// Wind vector arrows + the "Now" marker for the wind chart.
+// Vector arrows + the "Now" marker for every Plotly chart of the dashboard.
+//
+// One single annotation layer serves both the wind and the wave chart: they
+// only differ in which stored series carry the values/directions, in the
+// colour scale and in the shaft length, so everything else (the arrow
+// geometry, the layout styles, the thinning, the "Now" marker and the N/S
+// legend) lives here exactly once instead of being copy-pasted per chart.
+// `arrow_kind` (injected per section by build.py) selects the flavour.
 //
 // Arrows are a Plotly annotation layer (one shaft per data point): `x`/`y` is
-// the data point (arrow head), `ax`/`ay` is the tail in pixels, so the shaft
-// angle encodes the wind direction and its colour the wind speed.
+// the anchor, `ax`/`ay` is the tail in pixels, so the shaft angle encodes the
+// direction and its colour the magnitude.
 //
 // Two rules this layer has to respect, both of which used to be broken:
-//   1. Direction belongs to a DIFFERENT entity than speed. It must be matched
-//      by timestamp, not by array index: the two series are resampled from
-//      their own recorder histories, so one gap (HA restart, alias going
-//      `unavailable`) shifts every following index and points the arrows at
-//      unrelated moments in time.
+//   1. On the wind chart the direction belongs to a DIFFERENT entity than the
+//      speed. It must be matched by timestamp, not by array index: the two
+//      series are resampled from their own recorder histories, so one gap (HA
+//      restart, alias going `unavailable`) shifts every following index and
+//      points the arrows at unrelated moments in time.
 //   2. A missing value is not zero. `dirs[i] || 0` drew a due-North arrow for
-//      every point without a direction, and a non-finite speed (an `unknown`
+//      every point without a direction, and a non-finite value (an `unknown`
 //      state parsed by parseFloat) produced an arrow at NaN. Such points are
 //      skipped now.
 //
-// Two chart styles share this single layer (see `sections.wind.chart_style` in
-// config.yaml, injected by build.py as card-level options):
+// The global `chart_style` option (config.yaml) picks the arrow layout for all
+// charts at once, injected by build.py as a card-level option:
 //   * `plotly`     - arrow_layout `on_point`: every arrow sits ON its own data
-//                    point, i.e. the arrow head follows the speed line.
+//                    point, i.e. the arrow head follows the value line.
 //   * `open_meteo` - arrow_layout `top_row`: arrows line up in one straight row
 //                    just under the chart's top edge (paper coordinates), the
 //                    way open-meteo.com's own forecast preview draws them,
@@ -35,6 +42,7 @@
     }
   };
   const arrowLayout = String(readConfig('arrow_layout', 'on_point'));
+  const arrowKind = String(readConfig('arrow_kind', 'wind'));
   const topRow = arrowLayout === 'top_row';
   const spacingMs = Math.max(0, Number(readConfig('arrow_spacing_hours', 0)) || 0) * 3600 * 1000;
   const TOP_ROW_Y = 0.93;
@@ -50,14 +58,30 @@
     root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) walk(el.shadowRoot); });
   };
   try { walk(document); } catch (e) {}
-  const windSpeedColor = (v) => {
-    const stops = [[5,'#b0e2ff'],[10,'#61c4e0'],[15,'#4bbf7a'],[20,'#a8d048'],[25,'#f5e642'],[30,'#f2a93b'],[35,'#eb5c2a'],[40,'#d62828']];
+  const colorFromStops = (v, stops) => {
     for (const [max, color] of stops) if (v < max) return color;
     return '#8e1b8e';
   };
+  const windSpeedColor = (v) => colorFromStops(v, [[5,'#b0e2ff'],[10,'#61c4e0'],[15,'#4bbf7a'],[20,'#a8d048'],[25,'#f5e642'],[30,'#f2a93b'],[35,'#eb5c2a'],[40,'#d62828']]);
+  const waveHeightColor = (v) => colorFromStops(v, [[0.3,'#b0e2ff'],[0.6,'#61c4e0'],[1,'#4bbf7a'],[1.5,'#a8d048'],[2,'#f5e642'],[3,'#f2a93b'],[4,'#eb5c2a'],[5,'#d62828']]);
+  const wave = arrowKind === 'wave';
+  const colorOf = wave ? waveHeightColor : windSpeedColor;
+  // Shaft length amplifier (`arrow_length_scale`, global config.yaml option,
+  // default 3): without it the growth was `10 + speed` px, i.e. a 5 kt and a
+  // 15 kt arrow looked practically the same. The value part is multiplied by
+  // the amplifier; wave heights are metres (0..5) so they get their own
+  // per-metre factor to end up in a comparable pixel range as knots.
+  const lengthScale = Math.max(0, Number(readConfig('arrow_length_scale', 3)) || 0);
+  const ARROW_BASE_PX = 10;
+  const ARROW_MAX_PX = 60;
+  const WAVE_PX_PER_METRE = 4;
+  const lengthOf = (y) => {
+    const magnitude = Math.abs(Number(y)) * (wave ? WAVE_PX_PER_METRE : 1);
+    return Math.min(ARROW_MAX_PX, ARROW_BASE_PX + magnitude * lengthScale);
+  };
   const arrow = (x, y, d) => {
     const rad = ((d + 180) * Math.PI) / 180;
-    const len = 10 + y;
+    const len = lengthOf(y);
     return {
       x,
       y: topRow ? TOP_ROW_Y : y,
@@ -66,15 +90,15 @@
       ax: -len * Math.sin(rad), ay: len * Math.cos(rad),
       axref: 'pixel', ayref: 'pixel',
       showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5,
-      arrowcolor: windSpeedColor(y),
+      arrowcolor: colorOf(y),
       captureevents: false,
     };
   };
-  // Arrows for a speed series whose directions come from a separate series:
+  // Arrows for a series whose directions come from a separate series:
   // matched by timestamp within a tolerance, never by index.
-  const arrowsByTime = (speed, dir, toleranceMs) => {
-    const xs = (speed && speed.xs) || [];
-    const ys = (speed && speed.ys) || [];
+  const arrowsByTime = (values, dir, toleranceMs) => {
+    const xs = (values && values.xs) || [];
+    const ys = (values && values.ys) || [];
     const dirXs = ((dir && dir.xs) || []).map((t) => new Date(t).getTime());
     const dirYs = (dir && dir.ys) || [];
     const out = [];
@@ -95,12 +119,12 @@
     }
     return out;
   };
-  // Arrows for the forecast series: speed and direction come from the SAME
+  // Arrows for a forecast series: values and directions come from the SAME
   // open-meteo `hourly` payload, i.e. they are index-aligned by construction —
   // but a short/ragged array must still not produce a bogus 0° arrow.
-  const arrowsByIndex = (speed, dirs) => {
-    const xs = (speed && speed.xs) || [];
-    const ys = (speed && speed.ys) || [];
+  const arrowsByIndex = (values, dirs) => {
+    const xs = (values && values.xs) || [];
+    const ys = (values && values.ys) || [];
     const ds = dirs || [];
     const out = [];
     for (let i = 0; i < xs.length; i++) {
@@ -127,10 +151,12 @@
     }
     return out;
   };
-  const arrows = thin([
-    ...arrowsByTime(vars.speed, vars.dir, 15 * 60 * 1000),
-    ...arrowsByIndex(vars.forecastSpeed, vars.forecastDir),
-  ]);
+  const arrows = thin(wave
+    ? arrowsByIndex(vars.waveHeight, vars.waveDir)
+    : [
+      ...arrowsByTime(vars.speed, vars.dir, 15 * 60 * 1000),
+      ...arrowsByIndex(vars.forecastSpeed, vars.forecastDir),
+    ]);
   return [
     ...arrows,
     { xref: 'x', yref: 'paper', x: new Date(), y: 0.99, yanchor: 'top', xanchor: 'right', text: 'Now', textangle: -90, showarrow: false, xshift: -2, bgcolor: '#ffffff', borderpad: 4, font: { color: '#000000', size: 10 } },

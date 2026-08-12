@@ -93,7 +93,7 @@
         y: -0.3
       margin:
         b: 70
-      annotations: '$include:plotly_wave_annotations'
+      annotations: '$include:plotly_chart_annotations'
       shapes: "$include:plotly_touch_patch_shapes"
     grid_options:
       columns: 36

@@ -10,6 +10,21 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-12 (3)
+
+- **Added: `arrow_length_scale` — global amplifier of the direction arrow length (default `3`):**
+  - The shaft used to grow as `10 + speed` px, so a 5 kt and a 15 kt arrow looked practically identical (and wave arrows were a fixed 14 px, i.e. carried no magnitude at all). The length is now `10 + |value| * arrow_length_scale` px, capped at 60 px so arrows never leave the plot area; wave heights (metres) get their own per-metre factor to land in the same pixel range as knots.
+  - New top-level option in `config.yaml` / `config.yaml.template` next to `chart_style` and `arrow_spacing_hours`; injected by `build.py` into every `custom:plotly-graph` card as `arrow_length_scale` and read at runtime by the shared `src/js/common/plotly_chart_annotations.js` layer, so it applies to the wind and the wave chart alike. `helpers/configure.py` asks for it in the `--config` wizard.
+  - Tests: `test_arrow_length_scale_is_global_with_default_of_three` plus JS assertions for amplification, growth with the value, the 60 px cap and the default of 3.
+
+## 2026-08-12 (2)
+
+- **Changed: `chart_style` is now a GLOBAL option and applies to the wave chart too:**
+  - `chart_style` and `arrow_spacing_hours` moved from `sections.wind` to the top level of `config.yaml` / `config.yaml.template`: one style for every time-series chart instead of a wind-only setting. `build.py` injects `arrow_layout`, `arrow_spacing_hours` and a per-section `arrow_kind` (`wind`/`wave`, see `SECTION_ARROW_KINDS`) into each `custom:plotly-graph` card, so the wave chart honours the same style and arrow spacing as the wind chart.
+  - **No duplicated code:** `plotly_wind_annotations.js` and `plotly_wave_annotations.js` (two near-identical copies of the arrow geometry, thinning, "Now" marker and N/S legend) are replaced by one shared `src/js/common/plotly_chart_annotations.js`; both `04_wind.yaml` and `05_waves.yaml` include that single snippet, and the flavour-specific parts (series, colour scale, shaft length) are selected by `arrow_kind`.
+  - **No legacy left:** the old `chart_engine` key and its `apexcharts`/`open_meteo_sdk` aliases are gone (`resolve_wind_chart_style()` → `resolve_chart_style(config)`); an unknown style silently falls back to the default `open_meteo`. `helpers/configure.py` asks for the chart style and arrow spacing once, globally, instead of inside the wind section.
+  - Tests reworked accordingly (`test_chart_style_is_global_and_applies_to_wind_and_waves`, `test_chart_style_defaults_to_open_meteo`, `test_unknown_chart_style_falls_back_to_the_default`, `test_arrow_spacing_hours_is_global_and_reaches_every_chart`, `test_global_chart_options_from_user_config_are_applied`, plus wave-flavour cases in `tests/js/wind_chart_snippets.test.js`); README updated. 38 Python tests and 18 JS assertions pass.
+
 ## 2026-08-12
 
 - **Changed: one chart engine (Plotly) with two wind chart *styles* — `sections.wind.chart_engine` renamed to `chart_style`:**
