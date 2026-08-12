@@ -55,6 +55,8 @@ def load_config(config_path=None, template_path=None):
                 for opt_key in (
                     "chart_style",
                     "forecast_style",
+                    "line_smoothing",
+                    "zoom_controls",
                     "arrow_spacing_hours",
                     "arrow_length_scale",
                     "measured_arrows_on_line",
@@ -125,6 +127,24 @@ FORECAST_STYLES = {
 }
 DEFAULT_FORECAST_STYLE = "markers"
 
+# How the MEASURED (recorder history) lines are smoothed. Global, so the wind
+# and the wave charts can never drift apart, and defined here instead of being
+# hard-coded per trace in the section YAML.
+LINE_SMOOTHINGS = {
+    "spline": {"shape": "spline", "smoothing": 0.6},
+    "smooth": {"shape": "spline", "smoothing": 1.3},
+    "none": {"shape": "linear"},
+}
+DEFAULT_LINE_SMOOTHING = "spline"
+# Series drawn from recorder history. Kept for reference/tests: `line_smoothing`
+# applies to EVERY line series (measured, gusts and forecast alike) so the
+# whole chart is smoothed consistently.
+MEASURED_SERIES_NAMES = {"Measured", "Gusts (measured)"}
+
+# Whether the charts allow zooming/panning along the time axis and show the
+# vertical +/-/reset button column on their right edge.
+DEFAULT_ZOOM_CONTROLS = True
+
 # Colours of the chart series, overridable by the `colors` block of
 # config.yaml. The role of a series/tile is taken from its name, so a colour is
 # defined in exactly one place instead of being repeated per trace and per
@@ -174,6 +194,46 @@ def resolve_forecast_style(config):
     return style, FORECAST_STYLES[style]
 
 
+def resolve_line_smoothing(config):
+    """Return `(name, spec)` for the global `line_smoothing` option."""
+    raw = config.get("line_smoothing")
+    name = str(raw if raw is not None else DEFAULT_LINE_SMOOTHING).strip().lower()
+    if name not in LINE_SMOOTHINGS:
+        name = DEFAULT_LINE_SMOOTHING
+    return name, LINE_SMOOTHINGS[name]
+
+
+def apply_zoom_controls(card, enabled):
+    """Enable/disable time-axis zoom and the vertical zoom button column.
+
+    Only the X axis is unlocked - the Y axis stays fixed, so dragging can never
+    detach the traces from the value scale. `dragmode: pan` keeps one-finger
+    panning on a phone (pinch still zooms the time axis), the mouse wheel zooms
+    in a browser, and the vertical +/-/reset button column works on touch
+    devices where no wheel exists. Plotly's own double-click handling stays off
+    so the card's `on_dblclick` reset keeps working.
+    """
+    cfg = card.setdefault("config", {})
+    layout = card.setdefault("layout", {})
+    xaxis = layout.setdefault("xaxis", {})
+    if not enabled:
+        cfg["scrollZoom"] = False
+        cfg["displayModeBar"] = False
+        cfg["doubleClick"] = False
+        cfg.pop("modeBarButtons", None)
+        cfg.pop("displaylogo", None)
+        xaxis["fixedrange"] = True
+        layout.pop("modebar", None)
+        return
+    cfg["scrollZoom"] = True
+    cfg["displayModeBar"] = True
+    cfg["displaylogo"] = False
+    cfg["doubleClick"] = False
+    cfg["modeBarButtons"] = [["zoomIn2d", "zoomOut2d", "resetScale2d"]]
+    layout["modebar"] = {"orientation": "v"}
+    xaxis["fixedrange"] = False
+
+
 def resolve_colors(config):
     """Return the series colour map, user overrides merged over the defaults."""
     colors = dict(DEFAULT_COLORS)
@@ -185,7 +245,19 @@ def resolve_colors(config):
     return colors
 
 
-def style_chart_series(card, colors, forecast_style):
+def smooth_line(line, line_smoothing):
+    """Apply the global `line_smoothing` spec to a single trace's line dict.
+
+    Only lines can be smoothed, so a marker-only series is left alone; a stale
+    `smoothing` factor is dropped when smoothing is turned off entirely.
+    """
+    if line_smoothing is None:
+        return
+    line.pop("smoothing", None)
+    line.update(line_smoothing)
+
+
+def style_chart_series(card, colors, forecast_style, line_smoothing=None):
     """Apply the configured colours and forecast look to a plotly card."""
     for series in card.get("entities", []) or []:
         if not isinstance(series, dict):
@@ -211,7 +283,10 @@ def style_chart_series(card, colors, forecast_style):
                 line["width"] = line.get("width", 2)
                 line["dash"] = forecast_style["dash"]
                 line["color"] = color
+                smooth_line(line, line_smoothing)
             continue
+        if series.get("mode") == "lines" or isinstance(series.get("line"), dict):
+            smooth_line(series.setdefault("line", {}), line_smoothing)
         if not color:
             continue
         if isinstance(series.get("line"), dict):
@@ -480,6 +555,8 @@ def build_dashboard(config=None):
         )
     )
     _forecast_style_name, forecast_style = resolve_forecast_style(config)
+    _line_smoothing_name, line_smoothing = resolve_line_smoothing(config)
+    zoom_controls = bool(config.get("zoom_controls", DEFAULT_ZOOM_CONTROLS))
     colors = resolve_colors(config)
 
     sections = []
@@ -533,7 +610,8 @@ def build_dashboard(config=None):
                                     forecast_history_arrow_opacity
                                 )
                                 card["arrow_kind"] = arrow_kind
-                            style_chart_series(card, colors, forecast_style)
+                            style_chart_series(card, colors, forecast_style, line_smoothing)
+                            apply_zoom_controls(card, zoom_controls)
                         elif card.get("type") == "glance":
                             style_glance_tiles(card, colors)
                     filtered_cards.append(card)

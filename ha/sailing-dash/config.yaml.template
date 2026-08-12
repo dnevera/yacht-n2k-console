@@ -41,6 +41,18 @@ measured_arrows_on_line: false
 #   line    - a solid line connecting the forecast values.
 #   dot     - a dotted line connecting the forecast values.
 forecast_style: line
+# How the MEASURED (NMEA recorder history) lines are smoothed on every chart:
+#   spline - smoothed curve, reads well next to the forecast line. Default.
+#   smooth - the same spline with a stronger smoothing factor (fewer wiggles).
+#   none   - raw polyline through every sample, no smoothing at all.
+line_smoothing: smooth
+# Zoom/pan along the time (X) axis:
+#   true  - mouse wheel zooms in a browser, pinch zooms on a phone, one finger
+#           pans, and a vertical +/-/reset button column is shown on the right
+#           edge of the chart (needed on touch devices). Default.
+#   false - charts are static: no zoom, no buttons.
+# The Y axis always stays fixed, so the traces can never be dragged off scale.
+zoom_controls: true
 # Opacity (0..1) of the "Now" badge drawn on the dashed now line. Lower values
 # let the traces running underneath it stay visible. Default: 0.55.
 now_label_opacity: 0.55

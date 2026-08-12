@@ -45,6 +45,8 @@ def load_baseline(config_path, template_path):
                 "arrow_length_scale",
                 "measured_arrows_on_line",
                 "forecast_style",
+                "line_smoothing",
+                "zoom_controls",
                 "now_label_opacity",
                 "forecast_history_arrow_opacity",
             ):
@@ -211,6 +213,15 @@ def run_wizard(config, non_interactive=False):
         "How the forecast series is drawn",
         ["markers", "circle", "line", "dot"],
         config.get("forecast_style", "markers"),
+    )
+    config["line_smoothing"] = prompt_choice(
+        "How the measured (NMEA) lines are smoothed",
+        ["spline", "smooth", "none"],
+        config.get("line_smoothing", "spline"),
+    )
+    config["zoom_controls"] = prompt_bool(
+        "Allow zoom/pan along the time axis (with +/-/reset buttons)",
+        config.get("zoom_controls", True),
     )
     config["now_label_opacity"] = prompt_float(
         "Opacity of the 'Now' label (0..1)",

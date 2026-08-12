@@ -70,6 +70,8 @@ arrow_spacing_hours: 3    # Hours between direction arrows (0 = every point)
 arrow_length_scale: 3     # Arrow length amplifier: shaft grows with wind speed / wave height
 measured_arrows_on_line: true  # Measured (NMEA) arrows anchored on the measured line
 forecast_style: markers   # How the forecast series is drawn: markers | circle | line | dot
+line_smoothing: spline    # Smoothing of every line trace: spline | smooth | none
+zoom_controls: true       # Zoom/pan the time axis + vertical +/-/reset button column
 now_label_opacity: 0.55   # Opacity of the "Now" badge (0..1)
 forecast_history_arrow_opacity: 0.4  # Opacity of forecast arrows left of Now (0 = hide)
 
@@ -159,6 +161,19 @@ top row as well (only affects `chart_style: open_meteo`).
 `forecast_style` (default `markers`) selects how the forecast value series is
 drawn on every chart at once: `markers` (diamonds), `circle` (round markers),
 `line` (solid line) or `dot` (dotted line).
+
+`line_smoothing` (default `spline`) sets the shape of **every** line trace of
+both charts — measured, measured gusts, forecast and forecast gusts alike:
+`spline` (smoothed curve, `smoothing: 0.6`), `smooth` (stronger smoothing,
+`1.3`) or `none` (raw polyline, `shape: linear`). Marker-only forecast styles
+have nothing to smooth and are left untouched.
+
+`zoom_controls` (default `true`) unlocks the **time axis only**: the mouse wheel
+zooms in a browser, pinch zooms and one finger pans on a phone, and a vertical
+`+ / − / reset` button column is shown on the right edge of the chart (the only
+way to zoom on touch devices without a wheel). The Y axis always stays
+`fixedrange: true`, so traces can never be dragged off the value scale. Set it
+to `false` for completely static charts.
 
 `now_label_opacity` (default `0.55`) makes the "Now" badge translucent so the
 traces underneath stay visible; a time tick with the current time is drawn where

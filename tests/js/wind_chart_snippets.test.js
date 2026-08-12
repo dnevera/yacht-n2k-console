@@ -87,6 +87,23 @@ t('plotly style unaffected by measured_arrows_on_line',
   ann({ vars, getFromConfig: cfg({ arrow_layout: 'on_point', measured_arrows_on_line: false }) })
     .filter(a => a.showarrow).every(a => a.yref === 'y'));
 
+// The annotation anchor is the arrow HEAD and the tail is a pixel offset, so
+// without centring a northerly arrow stuck a whole shaft up while an easterly
+// one stayed flat: the row looked wavy / out of sync with the chart. Note the
+// opposite sign conventions: `ay` is positive DOWN, `yshift` is positive UP.
+const centre = (a) => a.yshift - a.ay / 2;
+t('arrows are centred on their anchor horizontally',
+  topRow.every(a => Math.abs(a.xshift + a.ax / 2) < 1e-9));
+t('measured arrows of every direction share one row line',
+  Math.abs(centre(topRow[0]) - centre(topRow[1])) < 1e-9);
+t('forecast arrows land exactly on the top row line', centre(topRow[2]) === 0);
+// Measured and forecast arrows sit in two separate lanes so the open-meteo
+// history arrows never overlap the measured ones in the shared history zone.
+t('measured arrows sit in a lower lane than the forecast ones',
+  centre(topRow[0]) < centre(topRow[2]) - 30 && centre(topRow[2]) === 0);
+t('arrows drawn ON the measured line get no lane offset',
+  Math.abs(mixed[0].yshift - mixed[0].ay / 2) < 1e-9);
+
 // Spacing thins the row out but keeps the first arrow of each window.
 const spaced = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row', arrow_spacing_hours: 1 }) })
   .filter(a => a.showarrow);

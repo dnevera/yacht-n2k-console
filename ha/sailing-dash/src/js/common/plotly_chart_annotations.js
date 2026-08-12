@@ -99,17 +99,33 @@
     const magnitude = Math.abs(Number(y)) * (wave ? WAVE_PX_PER_METRE : 1);
     return Math.min(ARROW_MAX_PX, ARROW_BASE_PX + magnitude * lengthScale);
   };
+  // Vertical gap (px) between the forecast arrow lane and the measured one, so
+  // the open-meteo history arrows never sit on top of the measured arrows in
+  // the overlapping history zone. Derived from the longest possible (centred)
+  // shaft, i.e. it follows `arrow_length_scale` automatically.
+  const LANE_GAP_PX = ARROW_MAX_PX / 2 + 8;
   const arrow = (x, y, d, measured) => {
     const rad = ((d + 180) * Math.PI) / 180;
     const len = lengthOf(y);
     const onLine = !topRow || (measured && measuredOnLine);
+    const ax = -len * Math.sin(rad);
+    const ay = len * Math.cos(rad);
+    // The annotation anchor is the arrow HEAD and the tail is a pixel offset,
+    // so a northerly arrow used to stick a whole shaft up while an easterly
+    // one stayed flat: the row looked wavy and out of sync with the chart.
+    // Shifting the anchor by half the offset centres the shaft on its point.
+    // Mind the axes: `ay` is a SCREEN offset (positive = down) while `yshift`
+    // moves the annotation UP for positive values, hence the opposite signs -
+    // using -ay/2 here doubled the spread instead of removing it.
     return {
       x,
       y: onLine ? y : TOP_ROW_Y,
       xref: 'x',
       yref: onLine ? 'y' : 'paper',
-      ax: -len * Math.sin(rad), ay: len * Math.cos(rad),
+      ax, ay,
       axref: 'pixel', ayref: 'pixel',
+      xshift: -ax / 2,
+      yshift: ay / 2 - (onLine || !measured ? 0 : LANE_GAP_PX),
       showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5,
       arrowcolor: colorOf(y),
       captureevents: false,

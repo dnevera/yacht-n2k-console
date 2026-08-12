@@ -10,6 +10,17 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-12 (7)
+
+- **Added: `line_smoothing` — global smoothing style of every chart line (`spline` / `smooth` / `none`):**
+  - The spline shape used to be hard-coded per trace in `04_wind.yaml` (`shape: spline`, `smoothing: 0.6`) and was applied to the measured traces only, so the forecast speed/gust lines were never smoothed. `build.py` now injects the resolved spec into **every** line trace of the wind and wave charts (`smooth_line()`), and the literals were removed from the section YAML. `none` emits `shape: linear` and drops the stale smoothing factor; marker-only forecast styles have nothing to smooth and are left alone.
+- **Added: `zoom_controls` — zoom/pan along the time axis with a vertical `+ / − / reset` column (default `true`):**
+  - The charts were fully static (`scrollZoom: false`, `displayModeBar: false`, X axis locked). `apply_zoom_controls()` now unlocks the X axis only (`xaxis.fixedrange: false`, Y stays fixed so traces cannot be dragged off scale), enables `scrollZoom` for the mouse wheel and shows `modeBarButtons: [[zoomIn2d, zoomOut2d, resetScale2d]]` with `modebar.orientation: v` — the only way to zoom on a phone without a wheel; pinch/one-finger pan keep working via `dragmode: pan`, and the card's own `on_dblclick` reset is left in charge of double clicks/taps.
+- **Fixed: direction arrows drifted up and down the Y axis instead of forming one clean row:**
+  - The annotation anchor is the arrow HEAD and the tail is a pixel offset (`ax`/`ay`), so a northerly arrow stuck a whole shaft above the row while an easterly one stayed flat — the taller the `arrow_length_scale`, the worse the desync looked. The anchor is now shifted by half the offset so the shaft is CENTRED on its point. Mind the sign conventions: `ay` is positive **down** while `yshift` is positive **up** — the first attempt used `-ay/2` and doubled the spread instead of removing it.
+  - Measured and forecast arrows are additionally split into two lanes (`LANE_GAP_PX`, derived from the maximum shaft length, i.e. it follows `arrow_length_scale`), so the Open-Meteo history arrows never overlap the measured ones in the shared history zone.
+  - Both options are top-level `config.yaml` keys, documented in `config.yaml.template`/`README.md` and asked for by the `--config` wizard. Tests: 45 Python tests (`line_smoothing` for all three values including the forecast traces, `zoom_controls` on/off with the Y axis staying locked) and 41 JS assertions (horizontal centring, one row line per lane, lane separation, no lane offset for on-line arrows).
+
 ## 2026-08-12 (6)
 
 - **Added: chart presentation options — translucent "Now", X-axis time tick, `forecast_style`, `colors`, faded forecast history arrows:**

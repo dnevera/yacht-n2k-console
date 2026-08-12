@@ -1242,3 +1242,58 @@ def test_now_label_and_forecast_history_arrow_opacity_are_injected(tmp_path):
     assert {c["arrow_kind"] for c in tuned} == {"wind", "wave"}
     assert all(c["now_label_opacity"] == 0.2 for c in tuned)
     assert all(c["forecast_history_arrow_opacity"] == 0 for c in tuned)
+
+def test_line_smoothing_is_global_with_spline_as_default(tmp_path):
+    """`line_smoothing` drives the shape of every LINE trace of every chart."""
+    assert build.resolve_line_smoothing({})[0] == "spline"
+    assert build.resolve_line_smoothing({"line_smoothing": "nonsense"})[0] == "spline"
+
+    def measured_lines(extra="", names=None):
+        # `line` style keeps the forecast series a line too, so smoothing must
+        # reach the measured AND the forecast/gust traces alike.
+        return [
+            series["line"]
+            for card in _plotly_chart_cards(_build_with_chart_config(tmp_path, "forecast_style: line\n" + extra))
+            for series in card.get("entities", [])
+            if series.get("mode") == "lines" and (names is None or series.get("name") in names)
+        ]
+
+    default = measured_lines()
+    assert len(default) >= 5, "every line trace of both charts must be smoothed"
+    forecast = measured_lines(names={"Forecast", "Gusts (forecast)"})
+    assert forecast and all(l["shape"] == "spline" for l in forecast)
+    assert default and all(l["shape"] == "spline" and l["smoothing"] == 0.6 for l in default)
+
+    smooth = measured_lines("line_smoothing: smooth\n")
+    assert all(l["shape"] == "spline" and l["smoothing"] == 1.3 for l in smooth)
+
+    # `none` must leave a raw polyline behind, with no stale smoothing factor.
+    plain = measured_lines("line_smoothing: none\n")
+    assert plain and all(l["shape"] == "linear" and "smoothing" not in l for l in plain)
+
+
+def test_zoom_controls_unlock_only_the_time_axis(tmp_path):
+    """Zoom is on by default: X axis free, Y locked, +/-/reset column on right."""
+    cards = [c for c in _plotly_chart_cards(_build_with_chart_config(tmp_path)) if "arrow_kind" in c]
+    assert {c["arrow_kind"] for c in cards} == {"wind", "wave"}
+    for card in cards:
+        assert card["config"]["scrollZoom"] is True
+        assert card["config"]["displayModeBar"] is True
+        assert card["config"]["modeBarButtons"] == [["zoomIn2d", "zoomOut2d", "resetScale2d"]]
+        assert card["layout"]["modebar"] == {"orientation": "v"}
+        assert card["layout"]["xaxis"]["fixedrange"] is False
+        # The value axis must stay locked so traces cannot be dragged off scale.
+        assert card["layout"]["yaxis"]["fixedrange"] is True
+
+    off = [
+        c
+        for c in _plotly_chart_cards(_build_with_chart_config(tmp_path, "zoom_controls: false\n"))
+        if "arrow_kind" in c
+    ]
+    assert off
+    for card in off:
+        assert card["config"]["scrollZoom"] is False
+        assert card["config"]["displayModeBar"] is False
+        assert "modeBarButtons" not in card["config"]
+        assert "modebar" not in card["layout"]
+        assert card["layout"]["xaxis"]["fixedrange"] is True

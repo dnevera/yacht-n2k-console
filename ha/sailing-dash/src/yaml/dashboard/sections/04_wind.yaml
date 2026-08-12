@@ -62,14 +62,11 @@
       - store_var: dir
     - entity: sensor.boat_wind_speed
       name: Measured
-      # We do not care about every exact instantaneous NMEA sample here — a
-      # smoothed spline reads better next to the forecast line and matches
-      # how Open-Meteo's own preview draws its (already-interpolated)
-      # measured/forecast history side by side.
+      # We do not care about every exact instantaneous NMEA sample here — the
+      # line shape is set globally by `line_smoothing` in config.yaml and
+      # injected by build.py, so it can never drift between the charts.
       mode: lines
       line:
-        shape: spline
-        smoothing: 0.6
         width: 2
         color: '#4fc3f7'
       extend_to_present: false
@@ -92,8 +89,6 @@
       - fn: '$include:plotly_history_series'
       hovertemplate: '%{y:.1f} kt<extra>Gusts (measured)</extra>'
       line:
-        shape: spline
-        smoothing: 0.6
         dash: dot
         width: 1
         color: '#b0bec5'
