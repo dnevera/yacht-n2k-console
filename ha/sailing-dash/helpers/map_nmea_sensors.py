@@ -18,6 +18,10 @@ DEFAULT_FALLBACKS = {
     "depth": "sensor.water_depth",
     "wind_speed": "sensor.wind_speed",
     "wind_angle": "sensor.wind_angle",
+    # PGN 130306 also carries the reference of the wind measurement (Apparent /
+    # True boat referenced / True north referenced). Without it there is no way
+    # to know how the angle has to be corrected to a geographic direction.
+    "wind_reference": "sensor.wind_reference",
     "cog": "sensor.cog",
     "sog": "sensor.sog",
     "latitude": "sensor.latitude",
@@ -96,6 +100,15 @@ def match_entities(entity_list):
     wind_angle = find_match(["wind_angle"])
     if wind_angle: discovered["wind_angle"] = wind_angle
 
+    # Exact suffix on purpose: a loose match on "reference" would happily return
+    # `..._cog_reference` from PGN 129026 instead of the wind reference.
+    wind_reference = None
+    for eid in entity_list:
+        if isinstance(eid, str) and eid.endswith("_reference") and "wind" in eid:
+            wind_reference = eid
+            break
+    if wind_reference: discovered["wind_reference"] = wind_reference
+
     # PGN 129026 publishes both `..._cog` (degrees) and `..._cog_reference`
     # (True/Magnetic enum). A loose match picked the *_reference enum, so Boat
     # COG showed the reference instead of the course — require an exact suffix.
@@ -153,6 +166,7 @@ def generate_derived_yaml(mappings, out_path):
     depth_entity = mappings.get("depth", DEFAULT_FALLBACKS["depth"])
     wind_speed_entity = mappings.get("wind_speed", DEFAULT_FALLBACKS["wind_speed"])
     wind_angle_entity = mappings.get("wind_angle", DEFAULT_FALLBACKS["wind_angle"])
+    wind_reference_entity = mappings.get("wind_reference", DEFAULT_FALLBACKS["wind_reference"])
     cog_entity = mappings.get("cog", DEFAULT_FALLBACKS["cog"])
     sog_entity = mappings.get("sog", DEFAULT_FALLBACKS["sog"])
     lat_entity = mappings.get("latitude", DEFAULT_FALLBACKS["latitude"])
@@ -260,16 +274,81 @@ template:
         state: >
           {{{{ states('{pressure_entity}') | float(0) }}}}
 
-      # Plain recorder history for the wind vector chart. Reads the raw entity
-      # directly (as the working version did) so it does not inherit an extra
-      # template hop, and it goes unavailable instead of reporting 0° = North.
+      # True wind, i.e. the geographic direction the wind blows FROM and the
+      # wind speed over ground — the very quantities open-meteo forecasts.
+      # PGN 130306 reports the angle relative to the BOW (0° = wind straight
+      # onto the bow), so charting it raw against the forecast rotates the
+      # measured arrows by the boat's heading; heading south it looks exactly
+      # like a swapped N/S. The `reference` field of the PGN says how much
+      # correction is due:
+      #   * True (north referenced)  - already geographic, take it as is.
+      #   * True (boat referenced)   - speed is true, only add the heading.
+      #   * Apparent (default guess) - full vector conversion, because a moving
+      #     boat also shifts the apparent DIRECTION, not just the speed.
+      # Vector form (bearings are "from", so the flow vector is negated):
+      #   flow = -AWS * (sin θ, cos θ) + SOG * (sin COG, cos COG),  θ = HDG + AWA
+      #   TWD  = atan2(-u, -v),  TWS = |flow|
+      - name: Boat True Wind Direction
+        unique_id: boat_true_wind_direction
+        unit_of_measurement: '°'
+        icon: mdi:compass-rose
+        availability: >-
+          {{{{ states('{wind_angle_entity}') | is_number
+               and states('{wind_speed_entity}') | is_number }}}}
+        state: >
+          {{% set awa = states('{wind_angle_entity}') | float(0) %}}
+          {{% set aws = states('{wind_speed_entity}') | float(0) %}}
+          {{% set ref = states('{wind_reference_entity}') | lower %}}
+          {{% set hdg = states('sensor.boat_heading') | float(0) %}}
+          {{% set cog = states('sensor.boat_cog') | float(hdg) %}}
+          {{% set sog = states('sensor.boat_sog') | float(0) %}}
+          {{% set rad = pi / 180 %}}
+          {{% if 'north' in ref %}}
+            {{{{ (awa % 360) | round(0) }}}}
+          {{% elif 'true' in ref %}}
+            {{{{ ((awa + hdg) % 360) | round(0) }}}}
+          {{% else %}}
+            {{% set th = (awa + hdg) * rad %}}
+            {{% set u = sog * sin(cog * rad) - aws * sin(th) %}}
+            {{% set v = sog * cos(cog * rad) - aws * cos(th) %}}
+            {{{{ ((atan2(-u, -v) / rad) % 360) | round(0) }}}}
+          {{% endif %}}
+
+      - name: Boat True Wind Speed
+        unique_id: boat_true_wind_speed
+        unit_of_measurement: 'kts'
+        device_class: wind_speed
+        availability: >-
+          {{{{ states('{wind_speed_entity}') | is_number
+               and states('{wind_angle_entity}') | is_number }}}}
+        state: >
+          {{% set awa = states('{wind_angle_entity}') | float(0) %}}
+          {{% set aws = states('{wind_speed_entity}') | float(0) %}}
+          {{% set ref = states('{wind_reference_entity}') | lower %}}
+          {{% set hdg = states('sensor.boat_heading') | float(0) %}}
+          {{% set cog = states('sensor.boat_cog') | float(hdg) %}}
+          {{% set sog = states('sensor.boat_sog') | float(0) %}}
+          {{% set rad = pi / 180 %}}
+          {{% if 'true' in ref or 'north' in ref %}}
+            {{{{ aws | round(1) }}}}
+          {{% else %}}
+            {{% set th = (awa + hdg) * rad %}}
+            {{% set u = sog * sin(cog * rad) - aws * sin(th) %}}
+            {{% set v = sog * cos(cog * rad) - aws * cos(th) %}}
+            {{{{ sqrt(u * u + v * v) | round(1) }}}}
+          {{% endif %}}
+
+      # Recorder history of the direction series drawn on the wind chart. It
+      # tracks the TRUE wind direction so the measured arrows share one frame of
+      # reference with the open-meteo forecast arrows; it goes unavailable
+      # instead of reporting 0° = North when the bus is silent.
       - name: Wind Direction History
         unique_id: wind_direction_history
         unit_of_measurement: '°'
         icon: mdi:compass-rose
         availability: "{{{{ states('{wind_angle_entity}') | is_number }}}}"
         state: >
-          {{{{ states('{wind_angle_entity}') | float(0) | round(0) }}}}
+          {{{{ states('sensor.boat_true_wind_direction') | float(0) | round(0) }}}}
 
       - name: Barometer mmHg
         unique_id: barometer_mmhg

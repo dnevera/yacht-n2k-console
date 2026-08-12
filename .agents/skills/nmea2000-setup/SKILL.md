@@ -1074,7 +1074,13 @@ raw_tx = parts[0] + b' ' + b' '.join(parts[1:]) + b'\r\n'
    - `DEFAULT_FALLBACKS` в `map_nmea_sensors.py` **ОБЯЗАНЫ ВСЕГДА БЫТЬ ГЕНЕРИЧЕСКИМИ СЕНСОРАМИ** (`sensor.speed_water_referenced`, `sensor.water_depth`, `sensor.wind_speed`, `sensor.wind_angle`, `sensor.cog`, `sensor.sog`, `sensor.latitude`, `sensor.longitude`, `sensor.pressure`, `sensor.vessel_heading`, `sensor.magnetic_variation`).
    - Никогда не хардкодить специфические hash ID конкретного экземпляра Raymarine/YDNU в `DEFAULT_FALLBACKS`.
 
-3. **Конфигурация Сборки и Тайм-Фреймов (`ha/sailing-dash/config.yaml`):**
+3. **Системы отсчёта: ветер с шины ≠ ветер из прогноза (частая причина «данные не совпадают»):**
+   - PGN 130306 отдаёт `wind_angle` **относительно НОСА** (0° = ветер точно в нос), а open-meteo `wind_direction_10m` — **географическое** направление, ОТКУДА дует. Рисовать сырой угол против прогноза = развернуть все измеренные стрелки на курс лодки (при курсе на юг выглядит как перепутанные N/S).
+   - Поэтому на графики и в тултипы идёт `sensor.boat_true_wind_direction` (и `sensor.boat_true_wind_speed`), генерируемые `map_nmea_sensors.py`. Поправка выбирается по полю `reference` того же PGN (автообнаружение: точный суффикс `_reference` + «wind», иначе матчится `..._cog_reference` из PGN 129026):
+     `true north referenced` — как есть; `true boat referenced` — `+ heading`; `apparent` (и дефолт, если поля нет) — полный векторный пересчёт `flow = -AWS·(sin θ, cos θ) + SOG·(sin COG, cos COG)`, `θ = HDG + AWA`, потому что ход лодки смещает и **направление**, а не только скорость.
+   - `sensor.boat_wind_angle` (относительно носа) остаётся только для роз ветров/плашек «угол к носу» — сопоставлять его с прогнозом нельзя.
+
+4. **Конфигурация Сборки и Тайм-Фреймов (`ha/sailing-dash/config.yaml`):**
    - Центрирует параметры инсталляции: временные окна графиков/REST прогноза (`history_hours` назад, `forecast_days` вперёд) и тумблеры видимости секций/карточек (`sections.<sec>.enabled`, `cards.<card_id>`).
    - `helpers/build.py` считывает `config.yaml` (с фолбэком на `config.yaml.template`), фильтрует блоки YAML и подставляет атрибуты `history_hours` и `forecast_hours = forecast_days * 24` в `sensor.chart_time_window`.
    - Интерактивная настройка при инсталляции запускается через `./install_wizard.sh --config` (вызывает `helpers/configure.py`).

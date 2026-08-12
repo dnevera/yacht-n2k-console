@@ -206,7 +206,11 @@ def test_derived_sensors_are_unavailable_instead_of_reporting_zero():
         if sensor.get("unique_id") == "boat_magnetic_variation":
             continue
         state = sensor.get("state", "")
-        srcs = re.findall(r"states\('(sensor\.[a-z0-9_]+)'\)", state)
+        # Only sources read with a numeric default can silently become 0.
+        # A textual field (e.g. the wind reference enum of PGN 130306, whose
+        # absence legitimately means "assume apparent") is not a source of
+        # that bug and must not force the whole alias unavailable.
+        srcs = re.findall(r"states\('(sensor\.[a-z0-9_]+)'\)\s*\|\s*float\(", state)
         raw_srcs = [s for s in srcs if not s.startswith("sensor.boat_")]
         if not raw_srcs or "float(0)" not in state:
             continue
@@ -869,7 +873,16 @@ def test_config_yaml_parsing_and_filtering(tmp_path):
         assert "SOG (kn)" in card_names
 
         # Verify plotly-graph cards have injected hours_to_show=126 and time_offset='120h'
-        wind_sec = next(s for s in sec_list if s["cards"][0].get("heading") == "Wind Direction & Speed")
+        # Located by its chart, not by a heading card: a section may carry its
+        # title on the model selector instead of a separate heading card.
+        wind_sec = next(
+            s
+            for s in sec_list
+            if any(
+                isinstance(c, dict) and c.get("entity") == "input_select.forecast_wind_model"
+                for c in s["cards"]
+            )
+        )
         plotly_card = next(c for c in wind_sec["cards"] if isinstance(c, dict) and c.get("type") == "custom:plotly-graph")
         assert plotly_card["hours_to_show"] == 126
         assert plotly_card["time_offset"] == "120h"
@@ -1300,10 +1313,15 @@ def test_zoom_controls_unlock_only_the_time_axis(tmp_path):
 
 
 def _render_open_meteo_urls(model):
-    """Render both open-meteo resource_templates with a given selector state."""
+    """Render both open-meteo resource_templates with a given selector state.
+
+    The BUILT artifact is rendered on purpose: the source template carries a
+    `MODEL_IDS_*` placeholder that build.py replaces with the title -> id table,
+    so only the built file is what Home Assistant ever evaluates.
+    """
     from jinja2 import Template
 
-    path = os.path.join(build.SRC_DIR, "yaml", "sensors", "open_meteo.yaml")
+    path = os.path.join(SAILING_DASH_DIR, "build", "sensors-sailing.yaml")
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
@@ -1336,11 +1354,14 @@ def test_forecast_model_is_selectable_from_the_dashboard(tmp_path):
     An unknown/unavailable helper (before the first HA start) must behave the
     same way instead of poisoning the URL.
     """
-    for model in ("best_match", "unavailable", "unknown"):
+    for model in ("Best match (auto)", "unavailable", "unknown"):
         for url in _render_open_meteo_urls(model):
             assert "models=" not in url, f"{model} must not send a models= parameter"
-    for url in _render_open_meteo_urls("ecmwf_ifs025"):
-        assert "&models=ecmwf_ifs025&" in url
+    # The selector stores a human readable title, the URL needs the API id.
+    assert any(
+        "&models=ecmwf_ifs025&" in url
+        for url in _render_open_meteo_urls("ECMWF IFS 0.25°")
+    )
 
     # The selector helpers are built from config.yaml, not hard-coded in YAML.
     template_file = tmp_path / "config.yaml.template"
@@ -1361,13 +1382,14 @@ def test_forecast_model_is_selectable_from_the_dashboard(tmp_path):
     helpers = yaml.safe_load((tmp_path / "helpers-sailing.yaml").read_text(encoding="utf-8"))
 
     wind = helpers["input_select"]["forecast_wind_model"]
-    assert wind["options"] == ["gfs_seamless", "ecmwf_ifs025"]
-    assert wind["initial"] == "ecmwf_ifs025"
+    assert wind["options"] == ["NOAA GFS", "ECMWF IFS 0.25°"]
+    assert wind["initial"] == "ECMWF IFS 0.25°"
     wave = helpers["input_select"]["forecast_wave_model"]
     # A default outside the option list would keep the helper from starting.
     assert wave["initial"] in wave["options"]
     # meteofrance_wam is rejected by the live marine API (HTTP 400).
     assert "meteofrance_wam" not in wave["options"]
+    assert build.forecast_model_title("meteofrance_wam") not in wave["options"]
 
     # Each selector sits in the heading row of its OWN section, right after the
     # heading card, as a plain dropdown (a tile with the select-options feature)
@@ -1382,14 +1404,18 @@ def test_forecast_model_is_selectable_from_the_dashboard(tmp_path):
         ]
         ids = [c.get("id") for c in cards]
         assert ids.index("forecast_model") < ids.index("chart")
-        assert cards[0]["type"] == "heading"
-        assert cards[1].get("id") == "forecast_model", "selector must follow the heading"
-        selector = cards[1]
+        # The selector opens the section (right after a heading card, or in its
+        # place when the section carries its title on the selector itself).
+        heading = next((c for c in cards if c.get("type") == "heading"), None)
+        assert ids.index("forecast_model") == (1 if heading else 0)
+        selector = next(c for c in cards if c.get("id") == "forecast_model")
         assert selector["entity"] == entity
         assert [f["type"] for f in selector["features"]] == ["select-options"]
-        # Both share the heading row, so neither may claim the full width.
-        assert cards[0]["grid_options"]["columns"] == 24
-        assert selector["grid_options"]["columns"] == 24
+        # A heading and the selector share one row, so neither may claim the
+        # full 48-column width.
+        if heading:
+            assert heading["grid_options"]["columns"] <= 24
+            assert selector["grid_options"]["columns"] <= 24
 
     automation = yaml.safe_load(
         open(
@@ -1444,3 +1470,189 @@ def test_compiled_automations_are_actually_delivered_to_the_target():
     delay_branch = automation["action"][0]["choose"][0]
     assert "trigger.platform" in delay_branch["conditions"][0]["value_template"]
     assert delay_branch["sequence"][0]["delay"] == "00:00:30"
+
+
+def _render_wind_template(unique_id, states):
+    """Render one generated template sensor the way Home Assistant would.
+
+    HA exposes sin/cos/atan2/sqrt/pi to Jinja, so the true-wind trigonometry can
+    be verified here without a running Home Assistant.
+    """
+    import math
+    import jinja2
+
+    doc = yaml.safe_load(
+        open(
+            os.path.join(SAILING_DASH_DIR, "src", "yaml", "sensors", "derived_n2k.yaml"),
+            encoding="utf-8",
+        )
+    )
+    sensors = {s["unique_id"]: s for s in doc["template"][0]["sensor"]}
+    env = jinja2.Environment()
+    env.globals.update(
+        sin=math.sin, cos=math.cos, atan2=math.atan2, sqrt=math.sqrt, pi=math.pi,
+        states=lambda e: str(states.get(e, "unknown")),
+    )
+    return float(env.from_string(sensors[unique_id]["state"]).render().strip())
+
+
+def test_measured_wind_direction_is_converted_to_true_north_reference():
+    """Measured direction must share the forecast's frame of reference.
+
+    PGN 130306 reports the wind angle relative to the BOW, while open-meteo
+    reports the geographic direction the wind blows FROM. Charting the raw angle
+    rotated every measured arrow by the boat's heading — heading south that
+    looks exactly like a swapped N/S.
+    """
+    import re
+
+    src = open(os.path.join(HELPERS_DIR, "map_nmea_sensors.py"), encoding="utf-8").read()
+    # The reference field must be discovered, and never confused with the
+    # `..._cog_reference` enum of PGN 129026.
+    assert "wind_reference" in map_nmea_sensors_defaults()
+    assert 'eid.endswith("_reference") and "wind" in eid' in src
+
+    text = open(
+        os.path.join(SAILING_DASH_DIR, "src", "yaml", "sensors", "derived_n2k.yaml"),
+        encoding="utf-8",
+    ).read()
+    angle = re.search(r"sensor\.\S+_wind_angle", text).group(0)
+    speed = re.search(r"sensor\.\S+_wind_speed", text).group(0)
+    ref = re.search(r"sensor\.wind\w+_reference'", text).group(0).rstrip("'")
+
+    def state(reference, hdg, sog, awa, aws):
+        return {
+            ref: reference,
+            "sensor.boat_heading": hdg,
+            "sensor.boat_cog": hdg,
+            "sensor.boat_sog": sog,
+            angle: awa,
+            speed: aws,
+        }
+
+    twd = lambda **kw: _render_wind_template("boat_true_wind_direction", state(**kw))
+    tws = lambda **kw: _render_wind_template("boat_true_wind_speed", state(**kw))
+
+    # Heading south, wind straight onto the bow: the wind comes FROM the south.
+    # The raw angle would have said 0° = North, i.e. the reported N/S swap.
+    assert twd(reference="Apparent", hdg=180, sog=0, awa=0, aws=10) == 180
+    assert twd(reference="Apparent", hdg=0, sog=0, awa=90, aws=10) == 90
+    # Motoring 5 kt into 10 kt of apparent head wind is 5 kt of true wind.
+    assert tws(reference="Apparent", hdg=0, sog=5, awa=0, aws=10) == 5.0
+    # A true, boat referenced measurement only needs the heading added.
+    assert twd(reference="True (boat referenced)", hdg=270, sog=6, awa=90, aws=12) == 0
+    assert tws(reference="True (boat referenced)", hdg=270, sog=6, awa=90, aws=12) == 12.0
+    # A north referenced measurement is already geographic.
+    assert twd(reference="True (north referenced)", hdg=270, sog=6, awa=33, aws=12) == 33
+    # An unknown reference falls back to apparent (a masthead unit's default).
+    assert twd(reference="unknown", hdg=45, sog=0, awa=0, aws=8) == 45
+
+    # The chart's direction series must follow the true direction, not the raw
+    # bow-relative angle.
+    history = next(
+        s
+        for s in yaml.safe_load(text)["template"][0]["sensor"]
+        if s["unique_id"] == "wind_direction_history"
+    )
+    assert "sensor.boat_true_wind_direction" in history["state"]
+
+
+def map_nmea_sensors_defaults():
+    import map_nmea_sensors
+
+    return map_nmea_sensors.DEFAULT_FALLBACKS
+
+
+def test_forecast_model_selector_shows_titles_and_urls_use_ids():
+    """The dropdown must read like a model name, the URL must carry the id.
+
+    The selector used to list the raw API ids (`ecmwf_ifs025`). Since the helper
+    stores whatever the dropdown shows, the REST templates now map the title back
+    to the id with the same table that produced the options - one source of truth.
+    """
+    import jinja2
+
+    helpers = yaml.safe_load(
+        open(os.path.join(SAILING_DASH_DIR, "build", "helpers-sailing.yaml"), encoding="utf-8")
+    )["input_select"]
+    wind_options = helpers["forecast_wind_model"]["options"]
+    assert "ECMWF IFS 0.25°" in wind_options
+    assert not any("_" in o for o in wind_options), "no raw API ids in the dropdown"
+    assert helpers["forecast_wind_model"]["initial"] in wind_options
+
+    # The id mapping injected into the URL covers exactly the offered options.
+    id_map = build.forecast_model_id_map(build.DEFAULT_FORECAST_MODELS["wind"])
+    for title in wind_options:
+        assert f"'{title}'" in id_map
+
+
+def test_missing_gusts_do_not_break_the_forecast_sensor():
+    """A model without gusts must yield a dash, not `unavailable`.
+
+    `hourly['windgusts_10m']` raised inside the template for models that do not
+    publish gusts, which took the WHOLE flattened sensor (speed and direction
+    included) down with it.
+    """
+    sensors = [
+        s
+        for item in yaml.safe_load(
+            open(os.path.join(SAILING_DASH_DIR, "build", "sensors-sailing.yaml"), encoding="utf-8")
+        )["template"]
+        for s in item.get("sensor", [])
+    ]
+    flat = next(s for s in sensors if s["unique_id"] == "wind_forecast_flat")
+    for attr in ("forecast_wind", "forecast_gust", "forecast_dir"):
+        assert ".get(" in flat["attributes"][attr], f"{attr} must not index blindly"
+
+    # The sensor is numeric (it has a unit and feeds the chart), so it must
+    # report the special `unknown` state: HA rejects a non-numeric state on such
+    # a sensor ("expected a number") and logs an error on every poll. The dash is
+    # drawn by the glance tile instead.
+    gust = next(s for s in sensors if s["unique_id"] == "wind_gust_next_hour")
+    assert "'unknown'" in gust["state"] and "—" not in gust["state"]
+
+    dash = yaml.safe_load(
+        open(os.path.join(SAILING_DASH_DIR, "build", "dashboard-sailing.yaml"), encoding="utf-8")
+    )
+    tiles = [
+        t
+        for sec in dash["views"][0]["sections"]
+        for c in sec["cards"]
+        if isinstance(c, dict) and c.get("type") == "glance"
+        for t in c.get("entities", [])
+    ]
+    tile = next(t for t in tiles if t.get("entity") == "sensor.wind_gust_next_hour")
+    style = tile["card_mod"]["style"]
+    assert 'content: "—"' in style, "the tile must render a dash for a model without gusts"
+    assert "font-size: 0 !important" in style, "the Unknown text itself must be hidden"
+
+
+def test_measured_series_are_averaged_over_the_model_step():
+    """Measured series get the shared averaging filter, and it is switchable."""
+    import build
+
+    dash = yaml.safe_load(
+        open(os.path.join(SAILING_DASH_DIR, "build", "dashboard-sailing.yaml"), encoding="utf-8")
+    )
+    charts = [
+        c
+        for sec in dash["views"][0]["sections"]
+        for c in sec["cards"]
+        if isinstance(c, dict) and c.get("type") == "custom:plotly-graph"
+    ]
+    averaged = [
+        s
+        for c in charts
+        for s in c.get("entities", [])
+        if any(
+            isinstance(f, dict) and "Anchor each bucket" in str(f.get("fn", ""))
+            for f in s.get("filters", []) or []
+        )
+    ]
+    assert len(averaged) == 2, "both measured wind series must be averaged"
+
+    assert build.resolve_measured_averaging({}) is True
+    assert build.resolve_measured_averaging({"measured_averaging": "none"}) is False
+    card = {"entities": [{"filters": [{"fn": "x plotly_measured_average y"}, {"map_y": "y"}]}]}
+    build.drop_measured_averaging(card)
+    assert card["entities"][0]["filters"] == [{"map_y": "y"}]

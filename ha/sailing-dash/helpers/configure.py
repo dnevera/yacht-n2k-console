@@ -47,6 +47,7 @@ def load_baseline(config_path, template_path):
                 "measured_arrows_on_line",
                 "forecast_style",
                 "line_smoothing",
+                "measured_averaging",
                 "zoom_controls",
                 "now_label_opacity",
                 "forecast_history_arrow_opacity",
@@ -221,6 +222,11 @@ def run_wizard(config, non_interactive=False):
         "How the measured (NMEA) lines are smoothed",
         ["spline", "smooth", "none"],
         config.get("line_smoothing", "spline"),
+    )
+    config["measured_averaging"] = prompt_choice(
+        "How measured (NMEA) series are aggregated before drawing",
+        ["model_step", "none"],
+        config.get("measured_averaging", "model_step"),
     )
     config["zoom_controls"] = prompt_bool(
         "Allow zoom/pan along the time axis (with +/-/reset buttons)",

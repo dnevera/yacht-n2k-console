@@ -171,4 +171,25 @@ t('opacity 0 hides the forecast history arrows completely',
 t('opacity 1 keeps the plain scale colour',
   /^#[0-9a-f]{6}$/i.test(nowOf({ forecast_history_arrow_opacity: 1 }).filter(a => a.showarrow).pop().arrowcolor));
 
+
+// 7. measured series averaged over the grid step of the ACTIVE forecast model.
+// The window is read from the forecast timestamps themselves, and a DIRECTION
+// (unit "°") must be averaged as a vector: the arithmetic mean of 350° and 10°
+// is 180°, i.e. the exact opposite of the correct 0°.
+const avg=load('plotly_measured_average.js');
+const hass1h={states:{'sensor.wind_forecast_flat':{attributes:{forecast_time:['2026-01-01T00:00','2026-01-01T01:00','2026-01-01T02:00']}}}};
+const hass3h={states:{'sensor.wind_forecast_flat':{attributes:{forecast_time:['2026-01-01T00:00','2026-01-01T03:00']}}}};
+const dirSeries={xs:[T(0),T(10),T(20),T(70)],ys:[350,10,'unknown',180]};
+const avgDir=avg(Object.assign({meta:{unit_of_measurement:'°'}},{hass:hass1h},dirSeries));
+t('direction averaged as a vector, not arithmetically',
+  avgDir.ys.length===2 && Math.abs(avgDir.ys[0])<1e-6 && Math.abs(avgDir.ys[1]-180)<1e-6);
+t('one point per model step, anchored at the bucket centre',
+  new Date(avgDir.xs[0]).getTime()===new Date(T(30)).getTime());
+const avgSpeed=avg(Object.assign({meta:{unit_of_measurement:'kts'}},{hass:hass1h},{xs:[T(0),T(30)],ys:[4,6]}));
+t('speed averaged arithmetically', avgSpeed.ys.length===1 && Math.abs(avgSpeed.ys[0]-5)<1e-6);
+t('window follows the model step (3h model merges into one bucket)',
+  avg(Object.assign({meta:{}},{hass:hass3h},{xs:[T(0),T(70)],ys:[4,6]})).ys.length===1);
+t('no forecast loaded falls back to a 1h window',
+  avg(Object.assign({meta:{}},{hass:{states:{}}},{xs:[T(0),T(70)],ys:[4,6]})).ys.length===2);
+
 process.exit(ok?0:1);

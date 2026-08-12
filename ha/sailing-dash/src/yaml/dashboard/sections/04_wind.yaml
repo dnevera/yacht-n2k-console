@@ -48,12 +48,36 @@
           }\n"
     - entity: sensor.wind_gust_next_hour
       name: Gusts next 1h
+      # Not every Open-Meteo model publishes gusts (ECMWF IFS returns an array
+      # of nulls), and the sensor stays numeric, so it reports `unknown` in that
+      # case. Rendering it as "Unknown" reads like a failure, so the tile itself
+      # hides the state text and draws a plain dash instead: the value is
+      # legitimately absent for the selected model, not broken.
       card_mod:
-        style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
-          \  line-height: 14px !important;\n  color: var(--secondary-text-color)\
-          \ !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight:\
-          \ 500 !important;\n  line-height: 30px !important;\n  color: #ff7043 !important;\n\
-          }\n"
+        style: |
+          div.name {
+            font-size: 12px !important;
+            font-weight: 400 !important;
+            line-height: 14px !important;
+            color: var(--secondary-text-color) !important;
+          }
+          div:not(.name) {
+            font-size: 26px !important;
+            font-weight: 500 !important;
+            line-height: 30px !important;
+            color: #ff7043 !important;
+            {% if states('sensor.wind_gust_next_hour') in ['unknown', 'unavailable', 'none', ''] %}
+            font-size: 0 !important;
+            {% endif %}
+          }
+          div:not(.name)::after {
+            {% if states('sensor.wind_gust_next_hour') in ['unknown', 'unavailable', 'none', ''] %}
+            content: "—";
+            font-size: 26px !important;
+            font-weight: 500 !important;
+            line-height: 30px !important;
+            {% endif %}
+          }
     card_mod:
       style: "ha-card { padding: 10px 8px 6px !important; }\n.entities { padding:\
         \ 0 !important; }\n.entity {\n  flex-direction: column-reverse !important;\n\
@@ -77,7 +101,10 @@
       filters:
       - map_y: parseFloat(y)
       - fn: '$include:plotly_history_series'
-      - resample: 30m
+      # Averaged over the grid step of the ACTIVE Open-Meteo model (directions
+      # as vectors) so measurements are comparable with the forecast instead of
+      # jittering around it. Dropped by build.py when `measured_averaging: none`.
+      - fn: '$include:plotly_measured_average'
       - fn: '$include:plotly_history_series'
       - store_var: dir
     - entity: sensor.boat_wind_speed
@@ -93,7 +120,10 @@
       filters:
       - map_y: parseFloat(y)
       - fn: '$include:plotly_history_series'
-      - resample: 30m
+      # Averaged over the grid step of the ACTIVE Open-Meteo model (directions
+      # as vectors) so measurements are comparable with the forecast instead of
+      # jittering around it. Dropped by build.py when `measured_averaging: none`.
+      - fn: '$include:plotly_measured_average'
       - fn: '$include:plotly_history_series'
       - store_var: speed
       customdata: '$include:plotly_direction_label'

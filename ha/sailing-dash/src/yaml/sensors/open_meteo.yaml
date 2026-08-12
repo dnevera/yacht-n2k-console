@@ -17,6 +17,11 @@
 # `best_match` (and any unknown/unavailable helper state) must emit NO `models=`
 # parameter at all: Open-Meteo then picks the best model per location itself,
 # whereas `models=best_match` is not a valid model id.
+#
+# The selector stores a HUMAN READABLE title ("ECMWF IFS 0.25°"), not the raw
+# API id, so the `MODEL_IDS_*` token below is replaced at build time with the
+# title -> id mapping from build.py (single source of truth for both the helper
+# options and this lookup).
 rest:
   - resource_template: >-
       {%- set lat = states('sensor.boat_latitude_raw') | float(0) -%}
@@ -24,7 +29,7 @@ rest:
       {%- if lat | abs < 0.01 and lon | abs < 0.01 -%}
       {%- set lat = 42.43 -%}{%- set lon = 18.60 -%}
       {%- endif -%}
-      {%- set model = states('input_select.forecast_wind_model') -%}
+      {%- set model = MODEL_IDS_WIND.get(states('input_select.forecast_wind_model'), 'best_match') -%}
       {%- if model in ['best_match', 'unknown', 'unavailable', 'none', ''] -%}
       {%- set models = '' -%}
       {%- else -%}
@@ -47,7 +52,7 @@ rest:
       {%- if lat | abs < 0.01 and lon | abs < 0.01 -%}
       {%- set lat = 42.43 -%}{%- set lon = 18.60 -%}
       {%- endif -%}
-      {%- set model = states('input_select.forecast_wave_model') -%}
+      {%- set model = MODEL_IDS_WAVE.get(states('input_select.forecast_wave_model'), 'best_match') -%}
       {%- if model in ['best_match', 'unknown', 'unavailable', 'none', ''] -%}
       {%- set models = '' -%}
       {%- else -%}

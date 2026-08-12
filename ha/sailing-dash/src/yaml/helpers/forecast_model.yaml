@@ -8,7 +8,9 @@
 # when the selection changes.
 #
 # The option lists and the initial values are injected by build.py from the
-# `forecast_models` block of config.yaml — DO NOT hard-code them here.
+# `forecast_models` block of config.yaml — DO NOT hard-code them here. The
+# options are HUMAN READABLE titles ("ECMWF IFS 0.25°"), not raw API ids; the
+# REST templates map a title back to its id with the same table.
 input_select:
   forecast_wind_model:
     name: Wind forecast model

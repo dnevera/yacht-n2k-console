@@ -71,6 +71,7 @@ arrow_length_scale: 3     # Arrow length amplifier: shaft grows with wind speed 
 measured_arrows_on_line: true  # Measured (NMEA) arrows anchored on the measured line
 forecast_style: markers   # How the forecast series is drawn: markers | circle | line | dot
 line_smoothing: spline    # Smoothing of every line trace: spline | smooth | none
+measured_averaging: model_step  # Average measured series over the model step | none
 zoom_controls: true       # Zoom/pan the time axis + vertical +/-/reset button column
 now_label_opacity: 0.55   # Opacity of the "Now" badge (0..1)
 forecast_history_arrow_opacity: 0.4  # Opacity of forecast arrows left of Now (0 = hide)
@@ -176,6 +177,15 @@ both charts — measured, measured gusts, forecast and forecast gusts alike:
 `1.3`) or `none` (raw polyline, `shape: linear`). Marker-only forecast styles
 have nothing to smooth and are left untouched.
 
+`measured_averaging` (default `model_step`) averages the measured (NMEA) series
+over the grid step of the **active** Open-Meteo model before drawing them. The
+step is taken from the forecast timestamps themselves, so it follows the model
+picked on the dashboard (1 h, 3 h, ...). Directions are averaged as **vectors**
+via sin/cos — the arithmetic mean of 350° and 10° is 180°, i.e. the exact
+opposite of the correct 0°. Without it the measured arrows jitter by tens of
+degrees around an hourly-mean forecast and look like they disagree with it even
+when their mean matches it exactly. Set it to `none` to draw every raw sample.
+
 `zoom_controls` (default `true`) unlocks the **time axis only**: the mouse wheel
 zooms in a browser, pinch zooms and one finger pans on a phone, and a vertical
 `+ / − / reset` button column is shown on the right edge of the chart (the only
@@ -195,6 +205,13 @@ merged into the target's `configuration.yaml` by `helpers/deploy_sensors.sh`.
 They stay two separate selectors on purpose: waves come from the *marine* API,
 whose model ids do not match the forecast API's (`ecmwf_ifs025` is rejected
 there), so a single shared selection could not cover both.
+
+The dropdown lists **human readable titles** (`ECMWF IFS 0.25°`), not raw API
+ids: the helper stores what it shows, so `build.py` injects the same
+`title -> id` table into both REST `resource_template`s, which map the selection
+back to the id the URL needs. `Best match (auto)` (and any unknown/unavailable
+helper state) emits **no** `models=` parameter at all — `models=best_match` is
+not a valid id and the API rejects the whole request.
 
 Both REST `resource_template`s render `models=` from those helpers and are
 re-rendered on **every** poll, so picking another model in the UI takes effect

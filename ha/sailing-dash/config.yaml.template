@@ -45,7 +45,16 @@ forecast_style: line
 #   spline - smoothed curve, reads well next to the forecast line. Default.
 #   smooth - the same spline with a stronger smoothing factor (fewer wiggles).
 #   none   - raw polyline through every sample, no smoothing at all.
-line_smoothing: smooth
+line_smoothing: spline
+# How the MEASURED (NMEA) series are aggregated before they are drawn:
+#   model_step - averaged over the grid step of the ACTIVE Open-Meteo model
+#                (1 h, 3 h, ... — taken from the forecast timestamps themselves,
+#                so it follows the model picked on the dashboard). Directions are
+#                averaged as vectors, so 350°/10° gives 0° and not 180°. This is
+#                what makes the measured arrows comparable with the forecast
+#                instead of jittering by tens of degrees around it. Default.
+#   none       - draw every raw NMEA sample as recorded.
+measured_averaging: model_step
 # Zoom/pan along the time (X) axis:
 #   true  - mouse wheel zooms in a browser, pinch zooms on a phone, one finger
 #           pans, and a vertical +/-/reset button column is shown on the right

@@ -56,6 +56,7 @@ def load_config(config_path=None, template_path=None):
                     "chart_style",
                     "forecast_style",
                     "line_smoothing",
+                    "measured_averaging",
                     "zoom_controls",
                     "arrow_spacing_hours",
                     "arrow_length_scale",
@@ -143,6 +144,14 @@ DEFAULT_LINE_SMOOTHING = "spline"
 # whole chart is smoothed consistently.
 MEASURED_SERIES_NAMES = {"Measured", "Gusts (measured)"}
 
+# Whether the measured (recorder) series are averaged over the grid step of the
+# active Open-Meteo model before they are drawn. `model_step` makes the
+# measurements comparable with the forecast (an hourly/3-hourly mean); `none`
+# draws every raw NMEA sample. The averaging itself lives in the shared snippet
+# src/js/common/plotly_measured_average.js.
+DEFAULT_MEASURED_AVERAGING = "model_step"
+MEASURED_AVERAGE_SNIPPET = "plotly_measured_average"
+
 # Whether the charts allow zooming/panning along the time axis and show the
 # vertical +/-/reset button column on their right edge.
 DEFAULT_ZOOM_CONTROLS = True
@@ -177,6 +186,39 @@ FORECAST_MODEL_SELECTORS = {
     "wind": "forecast_wind_model",
     "wave": "forecast_wave_model",
 }
+# Human readable titles shown in the dashboard dropdown. The selector used to
+# list the raw API ids (`ecmwf_ifs025`), which is what the URL needs but not
+# what a crew member wants to read. The title is what the helper stores, so the
+# REST templates map it back to the id through this very table (injected into
+# `resource_template` by build_sensors) — one source of truth, no duplication.
+FORECAST_MODEL_TITLES = {
+    "best_match": "Best match (auto)",
+    "ecmwf_ifs025": "ECMWF IFS 0.25°",
+    "gfs_seamless": "NOAA GFS",
+    "icon_seamless": "DWD ICON",
+    "meteofrance_seamless": "Météo-France ARPEGE",
+    "ukmo_seamless": "UK Met Office",
+    "ecmwf_wam025": "ECMWF WAM 0.25°",
+    "gwam": "DWD GWAM (global)",
+    "ewam": "DWD EWAM (Europe)",
+}
+# Placeholder token per forecast kind in src/yaml/sensors/open_meteo.yaml,
+# replaced with the literal Jinja title -> id mapping at build time.
+FORECAST_MODEL_ID_TOKENS = {
+    "wind": "MODEL_IDS_WIND",
+    "wave": "MODEL_IDS_WAVE",
+}
+
+
+def forecast_model_title(model_id):
+    """Return the human readable title of a model id (id itself if unknown)."""
+    return FORECAST_MODEL_TITLES.get(model_id, model_id)
+
+
+def forecast_model_id_map(options):
+    """Return the `{title: id}` Jinja literal for the given model ids."""
+    pairs = ", ".join(f"'{forecast_model_title(o)}': '{o}'" for o in options)
+    return "{" + pairs + "}"
 
 # Colours of the chart series, overridable by the `colors` block of
 # config.yaml. The role of a series/tile is taken from its name, so a colour is
@@ -225,6 +267,28 @@ def resolve_forecast_style(config):
     if style not in FORECAST_STYLES:
         style = DEFAULT_FORECAST_STYLE
     return style, FORECAST_STYLES[style]
+
+
+def resolve_measured_averaging(config):
+    """Return True when measured series must be averaged over the model step."""
+    raw = config.get("measured_averaging", DEFAULT_MEASURED_AVERAGING)
+    return str(raw).strip().lower() not in ("none", "off", "false", "raw")
+
+
+def drop_measured_averaging(card):
+    """Remove the averaging filter step from every series of a plotly card."""
+    for series in card.get("entities", []) or []:
+        if not isinstance(series, dict) or not isinstance(series.get("filters"), list):
+            continue
+        series["filters"] = [
+            step
+            for step in series["filters"]
+            if not (
+                isinstance(step, dict)
+                and isinstance(step.get("fn"), str)
+                and MEASURED_AVERAGE_SNIPPET in step["fn"]
+            )
+        ]
 
 
 def resolve_line_smoothing(config):
@@ -505,12 +569,21 @@ def build_sensors(config=None):
                             "forecast_hours": f"{{{{ {forecast_hours} }}}}",
                         }
 
+    models = resolve_forecast_models(config)
     if "rest" in merged and isinstance(merged["rest"], list):
         for r_item in merged["rest"]:
             if isinstance(r_item, dict) and "resource_template" in r_item:
-                r_item["resource_template"] = re.sub(
+                template = re.sub(
                     r"int\(\d+\)", f"int({forecast_hours})", r_item["resource_template"]
                 )
+                # The selector stores a human readable title, so the URL has to
+                # map it back to the API id with the very table that produced
+                # the helper's options.
+                for kind, token in FORECAST_MODEL_ID_TOKENS.items():
+                    template = template.replace(
+                        token, forecast_model_id_map(models[kind][0])
+                    )
+                r_item["resource_template"] = template
 
     dst_path = os.path.join(BUILD_DIR, "sensors-sailing.yaml")
     with open(dst_path, "w", encoding="utf-8") as f:
@@ -552,8 +625,9 @@ def build_helpers(config=None):
         for kind, (options, default) in resolve_forecast_models(config).items():
             entry = selects.get(FORECAST_MODEL_SELECTORS[kind])
             if isinstance(entry, dict):
-                entry["options"] = list(options)
-                entry["initial"] = default
+                # Titles, not raw API ids: the dropdown is read by the crew.
+                entry["options"] = [forecast_model_title(o) for o in options]
+                entry["initial"] = forecast_model_title(default)
 
     with open(dst_path, "w", encoding="utf-8") as f:
         f.write("# Generated by build.py — DO NOT EDIT MANUALLY\n")
@@ -659,6 +733,7 @@ def build_dashboard(config=None):
     _forecast_style_name, forecast_style = resolve_forecast_style(config)
     _line_smoothing_name, line_smoothing = resolve_line_smoothing(config)
     zoom_controls = bool(config.get("zoom_controls", DEFAULT_ZOOM_CONTROLS))
+    measured_averaging = resolve_measured_averaging(config)
     colors = resolve_colors(config)
 
     sections = []
@@ -712,6 +787,8 @@ def build_dashboard(config=None):
                                     forecast_history_arrow_opacity
                                 )
                                 card["arrow_kind"] = arrow_kind
+                            if not measured_averaging:
+                                drop_measured_averaging(card)
                             style_chart_series(card, colors, forecast_style, line_smoothing)
                             apply_zoom_controls(card, zoom_controls)
                         elif card.get("type") == "glance":

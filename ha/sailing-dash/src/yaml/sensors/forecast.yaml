@@ -35,9 +35,12 @@ template:
         state: "{{ states('sensor.wind_forecast_rest') }}"
         attributes:
           forecast_time: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['time'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
-          forecast_wind: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['windspeed_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
-          forecast_gust: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['windgusts_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
-          forecast_dir: "{{ state_attr('sensor.wind_forecast_rest', 'hourly')['winddirection_10m'] if state_attr('sensor.wind_forecast_rest', 'hourly') else [] }}"
+          forecast_wind: "{{ (state_attr('sensor.wind_forecast_rest', 'hourly') or {}).get('windspeed_10m', []) }}"
+          # `.get()`, not `[...]`: not every Open-Meteo model publishes gusts,
+          # and a missing key used to raise inside the template and take the
+          # WHOLE sensor (speed, direction included) to `unavailable`.
+          forecast_gust: "{{ (state_attr('sensor.wind_forecast_rest', 'hourly') or {}).get('windgusts_10m', []) }}"
+          forecast_dir: "{{ (state_attr('sensor.wind_forecast_rest', 'hourly') or {}).get('winddirection_10m', []) }}"
 
       # Next full forecast hour as a plain numeric sensor so the vector
       # chart's header row can show it like apexcharts-card shows series states.
@@ -65,11 +68,19 @@ template:
           {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_gust') or [] %}
           {% set ns = namespace(v = none) %}
           {% for t in times %}
-            {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}
+            {% if ns.v is none and loop.index0 < vals | count and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}
               {% set ns.v = vals[loop.index0] %}
             {% endif %}
           {% endfor %}
-          {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}
+          {# Models such as ECMWF IFS publish `windgusts_10m` as an array of
+             nulls, so there is legitimately no value. The sensor stays NUMERIC
+             (it has a unit and feeds the chart), therefore it must report the
+             special `unknown` state and not a dash: a non-numeric state on a
+             sensor with `unit_of_measurement` is rejected by HA
+             ("expected a number") and ends up as `unknown` anyway, only with an
+             error per poll in the log. The dash is rendered by the glance tile
+             in src/yaml/dashboard/sections/04_wind.yaml. #}
+          {{ (ns.v | float(0)) | round(1) if ns.v is not none and ns.v | is_number else 'unknown' }}
 
       # Flattened open-meteo marine wave forecast — feeds the wave height &
       # direction vector chart the same way wind_forecast_flat feeds the wind one.
