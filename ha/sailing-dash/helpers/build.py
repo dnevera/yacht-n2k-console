@@ -59,12 +59,53 @@ def load_config(config_path=None, template_path=None):
                     for sec_key, sec_val in override["sections"].items():
                         if isinstance(sec_val, dict):
                             target_sec = config["sections"].setdefault(sec_key, {})
-                            if "enabled" in sec_val:
-                                target_sec["enabled"] = sec_val["enabled"]
+                            # Any scalar section option (enabled, chart_style,
+                            # arrow_spacing_hours, ...) overrides the template
+                            # as-is; `cards` is merged key-by-key so a partial
+                            # config.yaml keeps the template's other toggles.
+                            for opt_key, opt_val in sec_val.items():
+                                if opt_key == "cards":
+                                    continue
+                                target_sec[opt_key] = opt_val
                             if "cards" in sec_val and isinstance(sec_val["cards"], dict):
                                 target_sec.setdefault("cards", {}).update(sec_val["cards"])
 
     return config
+
+
+# Wind chart styles. Both are rendered by the same `custom:plotly-graph` card —
+# the only difference is where the wind-direction arrow annotations are drawn,
+# which `src/js/common/plotly_wind_annotations.js` decides from the injected
+# `arrow_layout` option:
+#   plotly     -> on_point: an arrow sits on each data point of the speed line.
+#   open_meteo -> top_row : arrows line up in one row under the chart's top
+#                 edge (open-meteo.com preview style), values stay as lines.
+WIND_CHART_STYLES = {
+    "plotly": "on_point",
+    "open_meteo": "top_row",
+}
+DEFAULT_WIND_CHART_STYLE = "open_meteo"
+
+
+def resolve_wind_chart_style(wind_cfg):
+    """Return `(style, arrow_layout)` for the wind section config.
+
+    Accepts the legacy `chart_engine` key as an alias of `chart_style` so an
+    existing config.yaml keeps working; the retired `apexcharts` /
+    `open_meteo_sdk` engines map onto the closest surviving Plotly style
+    instead of failing the build.
+    """
+    raw = wind_cfg.get("chart_style", wind_cfg.get("chart_engine"))
+    style = str(raw if raw is not None else DEFAULT_WIND_CHART_STYLE).strip().lower()
+    legacy = {
+        "apexcharts": "open_meteo",
+        "open_meteo_sdk": "open_meteo",
+        "openmeteo": "open_meteo",
+    }
+    style = legacy.get(style, style)
+    if style not in WIND_CHART_STYLES:
+        style = DEFAULT_WIND_CHART_STYLE
+    return style, WIND_CHART_STYLES[style]
 
 
 def strip_leading_line_comments(js_code):
@@ -296,31 +337,15 @@ def build_dashboard(config=None):
     total_hours = history_hours + forecast_hours
 
     wind_cfg = sec_configs.get("wind", {})
-    wind_engine = str(wind_cfg.get("chart_engine", "plotly")).strip().lower()
-    # `04_wind*.yaml` are three alternative implementations of the same
-    # section (Plotly / hand-rolled SVG / ApexCharts) — exactly one is kept
-    # per build, selected by `sections.wind.chart_engine` in config.yaml.
-    wind_section_files = {
-        "plotly": "04_wind.yaml",
-        "open_meteo_sdk": "04_wind_openmeteo.yaml",
-        "openmeteo": "04_wind_openmeteo.yaml",
-        "apexcharts": "04_wind_apexcharts.yaml",
-    }
-    active_wind_file = wind_section_files.get(wind_engine, "04_wind.yaml")
-    all_wind_files = {"04_wind.yaml", "04_wind_openmeteo.yaml", "04_wind_apexcharts.yaml"}
+    wind_style, wind_arrow_layout = resolve_wind_chart_style(wind_cfg)
+    wind_arrow_spacing = int(wind_cfg.get("arrow_spacing_hours", 3))
 
     sections = []
     for fname in sorted(os.listdir(sections_dir)):
         if not fname.endswith(".yaml"):
             continue
 
-        if fname in all_wind_files and fname != active_wind_file:
-            continue
-
         sec_key = re.sub(r"^\d+_", "", fname[:-5])
-        if fname in all_wind_files:
-            # All three wind-section variants share the same config key.
-            sec_key = "wind"
         sec_cfg = sec_configs.get(sec_key, {})
 
         if sec_cfg.get("enabled", True) is False:
@@ -351,20 +376,13 @@ def build_dashboard(config=None):
                         if card.get("type") == "custom:plotly-graph":
                             card["hours_to_show"] = total_hours
                             card["time_offset"] = f"{forecast_hours}h"
-                        elif card.get("type") == "custom:apexcharts-card":
-                            card["graph_span"] = f"{total_hours}h"
-                            card.setdefault("span", {})["offset"] = f"-{history_hours}h"
-                        elif card.get("type") == "custom:wind-chart-with-arrows-card":
-                            # Keep the arrow/legend overlay's time axis in
-                            # lock-step with the nested chart's own axis
-                            # (same source of truth: config.yaml's time_window).
-                            card["history_hours"] = history_hours
-                            card["forecast_hours"] = forecast_hours
-                            card["arrow_spacing_hours"] = int(wind_cfg.get("arrow_spacing_hours", 3))
-                            nested = card.get("chart_config")
-                            if isinstance(nested, dict) and nested.get("type") == "custom:apexcharts-card":
-                                nested["graph_span"] = f"{total_hours}h"
-                                nested.setdefault("span", {})["offset"] = f"-{history_hours}h"
+                            if sec_key == "wind":
+                                # Both wind chart styles are the same Plotly
+                                # card — only the wind-arrow annotation layer
+                                # differs, and it reads these two options at
+                                # runtime via plotly-graph's getFromConfig().
+                                card["arrow_layout"] = wind_arrow_layout
+                                card["arrow_spacing_hours"] = wind_arrow_spacing
                     filtered_cards.append(card)
                 item["cards"] = filtered_cards
 

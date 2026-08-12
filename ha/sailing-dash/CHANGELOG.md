@@ -10,6 +10,18 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-12
+
+- **Changed: one chart engine (Plotly) with two wind chart *styles* — `sections.wind.chart_engine` renamed to `chart_style`:**
+  - The wind chart now always renders through `custom:plotly-graph`. The retired implementations were deleted: `04_wind_apexcharts.yaml`, `04_wind_openmeteo.yaml`, `src/js/cards/apex-wind.js`, `src/js/cards/openmeteo-wind-card.js`, `src/js/cards/wind-chart-with-arrows-card.js`, `src/js/common/wind_chart_style.js`, plus their `/local/*.js` entries in `lovelace-resources.yaml` — no more three parallel wind-chart code paths whose tooltip, colours and arrows kept diverging.
+  - `sections.wind.chart_style` now selects the only thing that actually differs, the wind-arrow annotation layout, both served by the single existing `src/js/common/plotly_wind_annotations.js`:
+    - `open_meteo` (new default) — `arrow_layout: top_row`: arrows line up in one straight row just under the chart's top edge (paper coordinates, open-meteo.com forecast-preview style) while values stay as chart lines.
+    - `plotly` — `arrow_layout: on_point`: every arrow sits on its own data point (previous behaviour).
+  - `arrow_spacing_hours` (default 3) now applies to both styles and is enforced inside the annotation layer by timestamp, so measured and forecast arrows stay on one grid; `0` restores an arrow per data point. The layer reads `arrow_layout`/`arrow_spacing_hours` at runtime via plotly-graph's `getFromConfig`, injected by `build.py`, so both styles share one section YAML and one JS module instead of duplicating either.
+  - Backward compatible: the legacy `chart_engine` key is still read as an alias (`apexcharts`/`open_meteo_sdk`/`openmeteo` map onto the surviving `open_meteo` style), so an existing `config.yaml` keeps building.
+  - **Fixed a pre-existing bug found along the way:** `helpers/build.py::load_config()` only merged `enabled` and `cards` from the user's `config.yaml` — every scalar section option (`chart_engine`/`chart_style`, `arrow_spacing_hours`, …) set there was silently ignored in favour of the template's value. All scalar section options now override the template.
+  - `config.yaml.template` and `helpers/configure.py`'s `--config` wizard updated to the new key/choices; tests reworked (`test_wind_chart_styles_share_the_single_plotly_engine`, `test_wind_chart_style_defaults_to_open_meteo`, `test_legacy_chart_engine_key_still_understood`, `test_wind_arrow_spacing_hours_override`, `test_section_scalar_options_from_user_config_are_applied`, plus arrow-layout/spacing cases in `tests/js/wind_chart_snippets.test.js`). 38 Python tests and all JS snippet tests pass.
+
 ## 2026-08-11
 
 - **Fixed: ApexCharts wind chart tooltip was missing measured gusts and had a different row order than Plotly:**

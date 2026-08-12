@@ -7,9 +7,9 @@
 # You can also run `./install_wizard.sh --config` for an interactive CLI
 # wizard that writes `config.yaml` for you instead of editing it by hand.
 
-# Controls the time span shown on the wind and wave charts (Plotly /
-# ApexCharts / Open-Meteo SDK — the same window is used by all chart
-# engines) and how far ahead the Open-Meteo REST forecast is requested.
+# Controls the time span shown on the wind and wave charts (the same window is
+# used by both wind chart styles) and how far ahead the Open-Meteo REST
+# forecast is requested.
 time_window:
   # How many hours of measured history (left of "Now") to show on the wind
   # and wave charts, read from Home Assistant's recorder. Default: 4.
@@ -57,17 +57,19 @@ sections:
   # "Wind Direction & Speed" section.
   wind:
     enabled: true
-    # Which chart implementation to use for the wind speed/gusts chart:
-    #   plotly         - custom:plotly-graph, the default/original chart.
-    #   apexcharts     - custom:apexcharts-card, Open-Meteo preview style
-    #                    (shared tooltip, filled forecast area, reusable
-    #                    top row of wind-direction arrows).
-    #   open_meteo_sdk - hand-rolled SVG card (openmeteo-wind-card.js),
-    #                    experimental fallback, not the recommended option.
-    chart_engine: apexcharts
-    # How many hours apart the wind-direction arrows drawn above the chart
-    # are spaced (only used by the `apexcharts` engine's arrow overlay).
-    # Lower = more arrows/denser; higher = fewer, easier to read. Default: 3.
+    # Visual style of the wind speed/gusts chart. Both styles are rendered by
+    # the very same `custom:plotly-graph` card (one chart engine only) and
+    # share all series, the unified tooltip and the kt colour bar — they only
+    # differ in where the wind-direction arrows are drawn:
+    #   open_meteo - arrows line up in one straight row just under the chart's
+    #                top edge (open-meteo.com forecast-preview style) and the
+    #                values themselves are read from the chart lines. Default.
+    #   plotly     - every arrow sits ON its own data point, so the arrow row
+    #                follows the measured/forecast speed line.
+    chart_style: open_meteo
+    # How many hours apart the wind-direction arrows are spaced. Lower = more
+    # arrows/denser; higher = fewer, easier to read. 0 = draw an arrow on
+    # every data point (very dense on recorder history). Default: 3.
     arrow_spacing_hours: 3
     cards:
       glance: true  # Instant value tiles (measured now / forecast / gusts)

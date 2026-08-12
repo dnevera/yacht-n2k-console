@@ -48,8 +48,11 @@ def load_baseline(config_path, template_path):
                         target_sec = config["sections"].setdefault(sec_key, {})
                         if "enabled" in sec_val:
                             target_sec["enabled"] = sec_val["enabled"]
-                        if "chart_engine" in sec_val:
-                            target_sec["chart_engine"] = sec_val["chart_engine"]
+                        if "chart_style" in sec_val:
+                            target_sec["chart_style"] = sec_val["chart_style"]
+                        elif "chart_engine" in sec_val:
+                            # Legacy key name, kept readable for old configs.
+                            target_sec["chart_style"] = sec_val["chart_engine"]
                         if "arrow_spacing_hours" in sec_val:
                             target_sec["arrow_spacing_hours"] = sec_val["arrow_spacing_hours"]
                         if "cards" in sec_val and isinstance(sec_val["cards"], dict):
@@ -155,17 +158,17 @@ def run_wizard(config, non_interactive=False):
         sec_data["enabled"] = sec_enabled
 
         if sec_enabled and sec_id == "wind":
-            sec_data["chart_engine"] = prompt_choice(
-                "  Chart engine for wind speed/gusts chart",
-                ["plotly", "apexcharts", "open_meteo_sdk"],
-                sec_data.get("chart_engine", "plotly"),
+            sec_data.pop("chart_engine", None)
+            sec_data["chart_style"] = prompt_choice(
+                "  Wind chart style (open_meteo = arrow row on top of the chart)",
+                ["open_meteo", "plotly"],
+                sec_data.get("chart_style", "open_meteo"),
             )
-            if sec_data["chart_engine"] == "apexcharts":
-                sec_data["arrow_spacing_hours"] = prompt_int(
-                    "  Spacing between wind-direction arrows above the chart (hours)",
-                    sec_data.get("arrow_spacing_hours", 3),
-                    min_val=1,
-                )
+            sec_data["arrow_spacing_hours"] = prompt_int(
+                "  Spacing between wind-direction arrows (hours)",
+                sec_data.get("arrow_spacing_hours", 3),
+                min_val=1,
+            )
 
         if sec_enabled:
             cards = sec_data.get("cards", {})

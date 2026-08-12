@@ -90,6 +90,9 @@ sections:
       barometer_trend: true
   wind:
     enabled: true
+    chart_style: open_meteo   # open_meteo = wind-direction arrows in one row on top of the chart
+                             # plotly     = one arrow per data point, on the speed line
+    arrow_spacing_hours: 3   # Hours between wind-direction arrows (0 = every point)
     cards:
       glance: true
       chart: true
@@ -111,7 +114,23 @@ During setup or reconfiguration, run:
 # or directly via helper:
 python3 helpers/configure.py
 ```
-This guides the installer through interactive prompts for history/forecast time windows and section/card visibility choices before `build.py` runs.
+This guides the installer through interactive prompts for history/forecast time windows, the wind chart style (`open_meteo` / `plotly`) with its arrow spacing, and section/card visibility choices before `build.py` runs.
+
+### Wind Chart Styles
+
+There is only **one** chart engine — `custom:plotly-graph`. `sections.wind.chart_style`
+selects how the wind-direction arrows are laid out over the very same chart (same
+series, same unified tooltip, same kt colour bar), and `build.py` injects that choice
+into the card as `arrow_layout`, which `src/js/common/plotly_wind_annotations.js` reads
+at runtime:
+
+| `chart_style` | `arrow_layout` | Arrows |
+| --- | --- | --- |
+| `open_meteo` (default) | `top_row` | One straight row just under the chart's top edge, open-meteo.com forecast-preview style |
+| `plotly` | `on_point` | Each arrow sits on its own data point, following the speed line |
+
+The legacy key name `chart_engine` is still accepted as an alias (the removed
+`apexcharts` / `open_meteo_sdk` values map onto `open_meteo`).
 
 ## Key Files
 
@@ -119,7 +138,7 @@ Everything except `deploy.sh`, `run_stage.sh` and `install_wizard.sh` lives in `
 those as `python3 helpers/<script>.py`.
 
 - `install_wizard.sh` — **guided install / re-install for any profile** (`--target <profile>`). Runs every automatable step in order and stops at two blocking gates: **GATE A** (HACS activated in the UI, verified by `helpers/stage_provisioner.py check-hacs`) and **GATE B** (NMEA 2000 config entry on the tcp-gw plus raw entities, verified by `deploy.sh --preflight`). A gate never continues on a warning and behaves identically on Stage and Prod. Flags: `--config`, `--list`, `--from N`, `--only N`, `--reinstall`, `--dry-run`.
-- `config.yaml` / `config.yaml.template` — **central build configuration**. Controls chart time windows (`history_hours`, `forecast_days`) and section/card visibility toggles.
+- `config.yaml` / `config.yaml.template` — **central build configuration**. Controls chart time windows (`history_hours`, `forecast_days`), the wind chart style (`chart_style`, `arrow_spacing_hours`) and section/card visibility toggles.
 - `helpers/configure.py` — **interactive configuration wizard**. CLI helper executed by `./install_wizard.sh --config` to prompt for time windows and section/card enablement choices.
 - `build.py` — **automated build engine**. Compiles modular source code from `src/` into deployable target YAML/JS files in `build/`.
 - `build_docker.sh` — **HA Docker build script**. Compiles source modules, builds the custom Stage Home Assistant Docker image (`local-ha`), starts the container, and deploys build artifacts.

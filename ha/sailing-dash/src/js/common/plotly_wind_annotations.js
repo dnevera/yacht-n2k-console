@@ -14,7 +14,30 @@
 //      every point without a direction, and a non-finite speed (an `unknown`
 //      state parsed by parseFloat) produced an arrow at NaN. Such points are
 //      skipped now.
-({ vars }) => {
+//
+// Two chart styles share this single layer (see `sections.wind.chart_style` in
+// config.yaml, injected by build.py as card-level options):
+//   * `plotly`     - arrow_layout `on_point`: every arrow sits ON its own data
+//                    point, i.e. the arrow head follows the speed line.
+//   * `open_meteo` - arrow_layout `top_row`: arrows line up in one straight row
+//                    just under the chart's top edge (paper coordinates), the
+//                    way open-meteo.com's own forecast preview draws them,
+//                    while the values themselves stay as plain chart lines.
+// `arrow_spacing_hours` thins the row out: without it a recorder history of a
+// few hundred points would draw a solid, unreadable wall of arrows.
+({ vars, getFromConfig }) => {
+  const readConfig = (key, fallback) => {
+    try {
+      const value = getFromConfig(key);
+      return value === undefined || value === null ? fallback : value;
+    } catch (e) {
+      return fallback;
+    }
+  };
+  const arrowLayout = String(readConfig('arrow_layout', 'on_point'));
+  const topRow = arrowLayout === 'top_row';
+  const spacingMs = Math.max(0, Number(readConfig('arrow_spacing_hours', 0)) || 0) * 3600 * 1000;
+  const TOP_ROW_Y = 0.93;
   const walk = (root) => {
     root.querySelectorAll('plotly-graph').forEach((el) => {
       const sr = el.shadowRoot;
@@ -36,7 +59,10 @@
     const rad = ((d + 180) * Math.PI) / 180;
     const len = 10 + y;
     return {
-      x, y, xref: 'x', yref: 'y',
+      x,
+      y: topRow ? TOP_ROW_Y : y,
+      xref: 'x',
+      yref: topRow ? 'paper' : 'y',
       ax: -len * Math.sin(rad), ay: len * Math.cos(rad),
       axref: 'pixel', ayref: 'pixel',
       showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5,
@@ -85,10 +111,26 @@
     }
     return out;
   };
-  const arrows = [
+  // Keep at most one arrow per `arrow_spacing_hours` window, preserving the
+  // first arrow of each window so measured and forecast arrows stay on the
+  // same grid instead of drifting apart.
+  const thin = (list) => {
+    if (!spacingMs) return list;
+    const out = [];
+    let lastT = -Infinity;
+    for (const a of list) {
+      const t = new Date(a.x).getTime();
+      if (!Number.isFinite(t)) continue;
+      if (t - lastT < spacingMs) continue;
+      lastT = t;
+      out.push(a);
+    }
+    return out;
+  };
+  const arrows = thin([
     ...arrowsByTime(vars.speed, vars.dir, 15 * 60 * 1000),
     ...arrowsByIndex(vars.forecastSpeed, vars.forecastDir),
-  ];
+  ]);
   return [
     ...arrows,
     { xref: 'x', yref: 'paper', x: new Date(), y: 0.99, yanchor: 'top', xanchor: 'right', text: 'Now', textangle: -90, showarrow: false, xshift: -2, bgcolor: '#ffffff', borderpad: 4, font: { color: '#000000', size: 10 } },

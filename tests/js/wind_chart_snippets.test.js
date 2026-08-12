@@ -54,17 +54,24 @@ const f=arrows[2];
 t('forecast dir 270 -> tail west (ax<0)',f.ax<-0.01);
 t('Now marker present',out.some(o=>o.text==='Now'));
 
-// 4. wind_chart_style.js: shared colour scale used by both the Plotly "kt
-// scale" colourbar and the ApexCharts wind-chart-with-arrows-card.js overlay
-// must agree on every sample, so the two chart engines never disagree on
-// what colour a given wind speed should be.
-const style = require(D + 'wind_chart_style.js');
-const cardSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'ha', 'sailing-dash', 'src', 'js', 'cards', 'wind-chart-with-arrows-card.js'), 'utf8');
-global.HTMLElement = class {};
-global.customElements = { define: () => {} };
-const cardWindSpeedColor = new Function(cardSrc + '\nreturn windSpeedColor;')();
-for (const v of [0, 4.9, 5, 9.9, 12, 19.9, 24, 29.9, 34, 39.9, 40, 55]) {
-  t(`windSpeedColor(${v}) matches between wind_chart_style.js and wind-chart-with-arrows-card.js`, style.windSpeedColor(v) === cardWindSpeedColor(v));
-}
+// 4. arrow layout styles: the same annotation layer serves both wind chart
+// styles (config.yaml's sections.wind.chart_style), reading `arrow_layout` and
+// `arrow_spacing_hours` from the card config at runtime.
+const cfg = (opts) => (key) => opts[key];
+const onPoint = ann({ vars, getFromConfig: cfg({ arrow_layout: 'on_point' }) }).filter(a => a.showarrow);
+t('on_point: arrow anchored to the data value', onPoint[0].y === 5 && onPoint[0].yref === 'y');
+
+const topRow = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row' }) }).filter(a => a.showarrow);
+t('top_row: all arrows share one paper-space row', topRow.length === 3
+  && topRow.every(a => a.yref === 'paper' && a.y === topRow[0].y));
+t('top_row: colour still follows wind speed', topRow[1].arrowcolor !== topRow[2].arrowcolor);
+
+// Spacing thins the row out but keeps the first arrow of each window.
+const spaced = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row', arrow_spacing_hours: 1 }) })
+  .filter(a => a.showarrow);
+t('arrow_spacing_hours: 1h keeps t=30 and t=120, drops t=60', spaced.length === 2
+  && spaced[0].x === T(30) && spaced[1].x === T(120));
+t('missing getFromConfig falls back to on_point without throwing',
+  ann({ vars }).filter(a => a.showarrow).length === 3);
 
 process.exit(ok?0:1);
