@@ -23,22 +23,18 @@ yacht-n2k-console/
 │   └── gateway.py / gateway_settings.py
 ├── ydnu02/                       # YDNU-02 hardware controller (BLE + Service mode)
 ├── device_manager/               # ProxyControlClient, ServiceModeManager
-├── scripts/
-│   └── patch_ha_nmea2000_message.py  # Идемпотентный патч message.py (v2)
-├── patches/
-│   └── nmea2000_ioclient.py      # Пропатченный ioclient.py (EOF fix)
 ├── tests/
 │   ├── test_ha_gateway.py        # Unit тесты DataHub + registry (221+ тестов)
 │   ├── test_live_ha_integration.py  # Live тесты против реального HA (7 тестов)
 │   ├── test_service_mode.py      # Service mode тесты (TCP socket — sandbox-only)
 │   └── ...
-├── deploy.sh                     # Деплой на Pi + HA патчи (идемпотентный)
+├── deploy.sh                     # Деплой на Pi + drift-guard форка nmea2000
 ├── requirements.txt              # Зависимости + nmea2000 из нашего git форка
 └── pyproject.toml
 
 Смежный репозиторий:
 /path/to/yacht/nmea2000/   # форк tomer-w/nmea2000
-  ветка: fix/pgn-126996-hash-collision-per-source
+  ТЕГ: cpu-overload-fix (коммит 6c9df918d19a) — оба фикса внутри
   nmea2000/message.py  — исправлен primary_key (unique_number fix)
   nmea2000/ioclient.py — исправлен EOF spin-loop (PR уже merged в upstream)
 ```
@@ -159,13 +155,9 @@ primary_key = f"{self.id}_{source_id}"
 - SA=64 (YDNU-02, unique_number=402047): `ef195c7c99c762fdfda4e198aae87930`
 - SA=200 (TCP-GW, unique_number=902047): `c11f5c824c71fe7e186cba56bf0f8672`
 
-**Маркер идемпотентности:**
-- `"yacht-n2k-console-patch-v1"` — использовал `.name` (нестабильный, создавал дубли)
-- `"yacht-n2k-console-patch-v2"` — использует `.unique_number` (стабильный, текущий)
+**Как доставляется фикс:** никаких патчей и маркеров. Библиотека ставится из тега нашего форка `dnevera/nmea2000@cpu-overload-fix` (коммит `6c9df918d19a`), где `primary_key = f"{self.id}_{source_id}"` с `unique_number` уже внутри.
 
-**Upgrade v1→v2:** автоматически через `patch_ha_nmea2000_message.py` при следующем `--patch-ha`.
-
-**PR pending:** `dnevera/nmea2000` → `tomer-w/nmea2000`
+**PR pending:** `dnevera/nmea2000` → `tomer-w/nmea2000` (в upstream фикс не влит, поэтому форк — штатный постоянный источник, а не временный обход).
 
 ---
 
@@ -173,7 +165,7 @@ primary_key = f"{self.id}_{source_id}"
 
 **Симптом:** Несколько «Product Information (Yacht Devices - PC Gateway - ...)» в HA.
 
-**Причина:** До patch-v2 `device_instance` в `iso_name.name` менялся → другой MD5 → новая запись.
+**Причина:** До перехода на `unique_number` `device_instance` в `iso_name.name` менялся → другой MD5 → новая запись.
 Тест `next(d for d in devices if '902047' in str(d))` брал первый попавшийся (старый, 0 entities).
 
 **Диагностика:**
@@ -192,7 +184,7 @@ for d in nmea:
 
 **Фикс:** `./deploy.sh --clean-ha` → удаляет все nmea2000 devices → HA пересоздаёт с нуля.
 
-**После patch-v2:** дубли больше не создаются. Одноразовая очистка решает проблему навсегда.
+**После перехода на `unique_number`:** дубли больше не создаются. Одноразовая очистка решает проблему навсегда.
 
 ---
 
@@ -201,38 +193,37 @@ for d in nmea:
 ### Режимы
 
 ```bash
-./deploy.sh                   # полный деплой: gateway + web + patch HA
-./deploy.sh --proxy           # только gateway + patch HA (без web restart)
+./deploy.sh                   # полный деплой: gateway + web
+./deploy.sh --proxy           # только gateway (без web restart)
 ./deploy.sh --web             # только web (gateway и HA не трогается)
-./deploy.sh --patch-ha        # только патчи HA (без деплоя кода)
+./deploy.sh --check-ha        # drift-guard: проверить форк nmea2000 в контейнере HA
 ./deploy.sh --clean-ha        # удалить мусорные NMEA devices из HA registry
 ./deploy.sh --proxy --no-test # без post-deploy тестов
 ./deploy.sh --no-diff         # пропустить pre-deploy diff
 ```
 
-### patch_ha() — алгоритм (идемпотентный)
+### verify_nmea2000_fork() — drift-guard (замена патчей)
+
+Патчей больше нет: оба фикса внутри тега форка. Вместо наложения — проверка, что установлена именно наша библиотека:
 
 ```
-Patch 1 (ioclient EOF fix):
-  md5(local patches/nmea2000_ioclient.py) == md5(remote in container)?
-    YES → "already up to date — skipping"   [ha_changed остаётся false]
-    NO  → docker cp → applied ✓              [ha_changed=true]
+verify_nmea2000_fork gateway   # venv шлюза (--user site-packages)
+verify_nmea2000_fork ha        # копия внутри контейнера HA
 
-Patch 2 (message.py hash collision fix):
-  запустить scripts/patch_ha_nmea2000_message.py внутри контейнера
-  Сценарий A: PATCH_MARKER_V2 в файле  → "Already applied."             [ha_changed=false]
-  Сценарий B: PATCH_MARKER_V1 в файле  → upgrade .name→.unique_number    [ha_changed=true]
-  Сценарий C: оригинальный upstream     → fresh install                   [ha_changed=true]
-  Сценарий D: файл не найден            → ERROR (динамический discovery)
-
-HA restart: ТОЛЬКО если ha_changed=true
+Алгоритм:
+  найти путь пакета: python3 -c 'import nmea2000; ...'
+  grep маркеров:
+    ioclient.py → "Connection closed by remote host"   (Bug 1)
+    message.py  → primary_key = f"{self.id}_{source_id}" (Bug 2)
+  оба на месте → OK
+  чего-то нет  → предупреждение + точная команда переустановки
 ```
 
-### requirements.txt — nmea2000 из git форка
+### requirements.txt — nmea2000 из тега нашего форка
 
 ```
-# Устанавливается из нашего git-форка (не из PyPI!):
-git+https://github.com/dnevera/nmea2000.git@fix/pgn-126996-hash-collision-per-source#egg=nmea2000
+# Только форк, только по ТЕГУ (ветка — плавающий указатель):
+nmea2000 @ git+https://github.com/dnevera/nmea2000.git@cpu-overload-fix
 ```
 
 **После merge PR в tomer-w:** заменить на `nmea2000>=<новая версия>`.
@@ -522,6 +513,53 @@ Raymarine display) — то есть **собственный GPS лодки**.
 `device_tracker.iphone_17_promax_nevera` (HA Companion App, GPS телефона)
 существует, но **не используется** в карточке — трекает того, у кого телефон,
 а не лодку (баг был исправлен 2026-08-09: карта раньше указывала на телефон).
+
+### ⚠️ ПРАВИЛО: график «показывает дичь» — искать в обработке данных карточки (2026-08-11)
+Промежуточные сенсоры `sensor.boat_*` (`src/yaml/sensors/derived_n2k.yaml`,
+генератор `helpers/map_nmea_sensors.py`) сделаны **специально** — чтобы дашборд
+был автономным и воспроизводимым на любом инстансе HA. Убирать их и
+подставлять сырые `nmea2000`-сущности «как на prod» — **неверное решение**.
+Дашборд-YAML вместе со всей JS-обвязкой (`$fn`/`$include:` сниппеты) при этом
+побайтово совпадает с рабочим prod, если подставить алиасы — значит при жалобе
+на график сравнивать надо не данные (их достаточно быстро проверить через
+`/api/history/period` и атрибуты `sensor.wind_forecast_flat`), а **UI-поведение:
+привязку серий к осям, точек/стрелок к времени и обработку пропусков**.
+
+Ещё одна причина создания второй Y-оси (`yaxis2`) / таскания правой оси мышкой:
+разные `unit_of_measurement` у сущностей одной карточки. `plotly-graph-card`
+автоматически заводит `yaxis2` для сущностей с отличным unit (`kn` у `boat_wind_speed`
+против `kts` у `wind_forecast_flat`), и так как в layout зафиксирована только `yaxis`
+(`fixedrange: true`), правая `yaxis2` оставалась подвижной. Фикс — единый `kts` у
+всех скоростных сенсоров (`derived_n2k.yaml`, `map_nmea_sensors.py`).
+
+Два реальных дефекта этой обработки (оба исправлены 2026-08-11):
+1. **NaN отравляет `resample`.** История recorder не чисто числовая: при каждом
+   рестарте HA пишется `unknown`, а алиас с `availability` отдаёт
+   `unavailable`, пока молчит шина. `map_y: parseFloat(y)` даёт `NaN`, и один
+   `NaN` в бакете `resample: 30m` портит весь бакет → трассу, цветовую шкалу
+   (`$ex ys`) и авто-масштаб оси Y. Фикс — сниппет
+   `src/js/common/plotly_drop_non_finite.js` **между `map_y` и `resample`** во
+   всех сериях, читающих историю.
+2. **Привязка по индексу вместо времени.** Скорость и направление ветра — это
+   ДВЕ разные сущности, каждая ресемплится по своей истории (на стенде было
+   1152 против 1199 точек), поэтому `vars.dir.ys[i]` подписывал и поворачивал
+   точку направлением из другого момента времени, а `dirs[i] || 0` рисовал
+   стрелку «на север» там, где направления просто нет. Фикс — сопоставление по
+   штампу времени с допуском ±15 мин (`plotly_direction_label.js`,
+   `plotly_wind_annotations.js`); нет данных → нет стрелки и подпись
+   `direction n/a`. Прогнозные стрелки остаются index-aligned (один и тот же
+   `hourly`-ответ open-meteo), но защищены проверкой на конечность.
+
+Тесты: `tests/js/wind_chart_snippets.test.js` (node, вызывается из
+`tests/test_sailing_dash.py::test_wind_chart_js_snippets`) + pytest-проверки,
+что фильтр стоит до `resample` и что index-lookup не вернулся в конфиг.
+
+Ещё: `$include:` в шаге `filters: - fn:` вставляется **без** префикса `$fn `
+(`RAW_INCLUDE_KEYS` в `helpers/build.py`) — там уже сырое тело JS-функции.
+
+Доступ к stage-стенду, если `STAGE_HA_TOKEN` в `.env` устарел: логин
+`test`/`test` (см. `stage_provisioner.provision_auth`) через
+`/auth/login_flow` → `/auth/token`.
 
 ### Wind History & Forecast — реальный баг найден и исправлен (2026-08-09)
 Цепочка: `api.open-meteo.com` (`rest: resource_template`, теперь templated
@@ -821,9 +859,9 @@ Link (iOS) / App Link (Android) — если приложение установ
 
 1. **Никогда не трогать тесты** без явного подтверждения бага в тесте (из AGENTS.md)
 2. **Перед деплоем** — pre_deploy_diff показывается автоматически
-3. **После --patch-ha** — HA перезапускается только если что-то реально изменилось
+3. **После обновления образа HA** — прогнать `./deploy.sh --check-ha`: HACS мог поставить PyPI-релиз вместо форка
 4. **После --clean-ha** — обязательно запустить live тесты
-5. **При появлении дублей** в HA → deploy.sh --clean-ha (patch-v2 предотвращает новые дубли)
+5. **При появлении дублей** в HA → deploy.sh --clean-ha (фикс `unique_number` в теге форка предотвращает новые дубли)
 6. **test_service_mode.py** падает в sandbox (socket.bind) — это нормально, не баг кода
 7. **nmea2000 устанавливается из git форка** (requirements.txt) — не из PyPI upstream
 8. **systemd ExecStart** — ОБЯЗАТЕЛЬНО через `python3 -m ydnu02_tcp_gateway.ydnu02_tcp_gateway` (НЕ прямой путь к .py в пакете — Python не распознает package, импорты сломаются)
@@ -1020,3 +1058,37 @@ raw_tx = parts[0] + b' ' + b' '.join(parts[1:]) + b'\r\n'
 [serial] unexpected error: argument must be an int, or have a fileno() method. — retrying in 5s
 ```
 Порт переоткрылся штатно через 5с, без дальнейших проблем. Не расследовано глубже (вероятно гонка между `ctrl_handler` подменой `ser`-хендла и `SerialReader.run()`), помечено в коде (`serial_reader.py`, catch-all `except Exception`) как кандидат для отдельного расследования.
+
+---
+
+## 🏛️ Архитектура Виртуальных Сенсоров и Декуплинг Дашборда (`ha/sailing-dash`)
+
+> ⚠️ **КРИТИЧЕСКОЕ ПРАВИЛО:** Дашборд `ha/sailing-dash` и его карточки полностью изолированы от конкретных PGN-идентификаторов железа NMEA 2000.
+
+1. **Единственный слой в UI — канонические виртуальные сенсоры (`sensor.boat_*`):**
+   - Дашборд (`src/yaml/dashboard/sections/*.yaml`) и ассистирующие модули (`open_meteo.yaml`, `refresh_forecast.yaml`) должны ссылаться **ИСКЛЮЧИТЕЛЬНО** на виртуальные template-сенсоры (`sensor.boat_stw`, `sensor.boat_depth`, `sensor.boat_wind_speed`, `sensor.boat_wind_angle`, `sensor.boat_cog`, `sensor.boat_sog`, `sensor.boat_heading`, `sensor.boat_heading_magnetic`, `sensor.boat_magnetic_variation`, `sensor.boat_latitude_raw`, `sensor.boat_longitude_raw`, `sensor.boat_pressure_raw`, `sensor.wind_direction_history`, `sensor.barometer_mmhg`).
+   - Прямая подстановка сырых hardware-hashed ID (например `sensor.wind_data_raymarine_...`) в UI или `DEFAULT_FALLBACKS` **СТРОГО ЗАПРЕЩЕНА**.
+
+2. **Слой маппинга (`helpers/map_nmea_sensors.py`):**
+   - Сканирует HA registry / REST API для автообнаружения реальных NMEA 2000 сущностей на инстансе и генерирует `src/yaml/sensors/derived_n2k.yaml`.
+   - `DEFAULT_FALLBACKS` в `map_nmea_sensors.py` **ОБЯЗАНЫ ВСЕГДА БЫТЬ ГЕНЕРИЧЕСКИМИ СЕНСОРАМИ** (`sensor.speed_water_referenced`, `sensor.water_depth`, `sensor.wind_speed`, `sensor.wind_angle`, `sensor.cog`, `sensor.sog`, `sensor.latitude`, `sensor.longitude`, `sensor.pressure`, `sensor.vessel_heading`, `sensor.magnetic_variation`).
+   - Никогда не хардкодить специфические hash ID конкретного экземпляра Raymarine/YDNU в `DEFAULT_FALLBACKS`.
+   - `src/yaml/sensors/derived_n2k.yaml` — **host-specific артефакт, НЕ исходник**: не хранится в git (`.gitignore`), при отсутствии генерируется `build.py::ensure_derived_n2k()` из generic-фолбэков, а деплой перезаписывает его маппингом своей цели.
+
+2a. **⚠️ ПРИВЯЗЫВАТЬСЯ ТОЛЬКО К ЖИВЫМ СУЩНОСТЯМ (причина «датчики не синхронизировались»):**
+   - После переустановки интеграции `nmea2000` в реестре остаются **дубли одного и того же PGN**: на Pi5 одновременно жили `wind_data_pk_f9e756…_wind_speed` (`unavailable`) и `wind_data_raymarine_20_442559_pk_a00872…_wind_speed` (4.8 kt). Реестр их не различает — различают только **состояния** цели.
+   - Поэтому `map_nmea_sensors.py` обязан читать `/api/states` цели (`fetch_live_states()`), ставить живые сущности вперёд (`prioritize_live()`, свежие первыми) и для числовых величин требовать **числовое** состояние — иначе STW цепляется к `..._speed_water_referenced_type` («Paddle wheel»).
+   - **⚠️ `pgn_include` в config entry интеграции — белый список, и он молча прячет приборы.** На prod он был `127505, 127508, 127506, 127488, 127489, 130306, 128267, 128259, 129025, 129026, 130310, 130312` — без 127250/127258, поэтому сущностей `vessel_heading_*`/`magnetic_variation_*` не существовало (только в `deleted_entities`), хотя PGN 127250/127258 РЕАЛЬНО идут по шине (проверка фактом: `timeout 60 nc 127.0.0.1 4001` → 44 PGN). Диагностируя «датчик unavailable», СНАЧАЛА смотри сырой трафик шины и `pgn_include` цели, и только потом делай выводы об отсутствии прибора.
+   - Собственные виртуальные сущности (`OWN_ENTITY_PREFIXES`: `sensor.boat_*`, `wind_direction_history`, `barometer_mmhg`) **никогда** не могут быть кандидатами: без PGN 127250 маппинг подбирал `heading` → `sensor.boat_heading_magnetic`, то есть template-сенсор на себя самого.
+   - `deploy_sensors.sh` вызывает маппинг с `--strict` и **без `|| true`**: провал автообнаружения обязан останавливать деплой. Иначе деплой рапортует успех, а на цели все `sensor.boat_*` висят `unavailable` — и `--force` тут не помогает, потому что перезаливается неверная привязка, а не устаревшая.
+
+3. **Системы отсчёта: ветер с шины ≠ ветер из прогноза (частая причина «данные не совпадают»):**
+   - PGN 130306 отдаёт `wind_angle` **относительно НОСА** (0° = ветер точно в нос), а open-meteo `wind_direction_10m` — **географическое** направление, ОТКУДА дует. Рисовать сырой угол против прогноза = развернуть все измеренные стрелки на курс лодки (при курсе на юг выглядит как перепутанные N/S).
+   - Поэтому на графики и в тултипы идёт `sensor.boat_true_wind_direction` (и `sensor.boat_true_wind_speed`), генерируемые `map_nmea_sensors.py`. Поправка выбирается по полю `reference` того же PGN (автообнаружение: точный суффикс `_reference` + «wind», иначе матчится `..._cog_reference` из PGN 129026):
+     `true north referenced` — как есть; `true boat referenced` — `+ heading`; `apparent` (и дефолт, если поля нет) — полный векторный пересчёт `flow = -AWS·(sin θ, cos θ) + SOG·(sin COG, cos COG)`, `θ = HDG + AWA`, потому что ход лодки смещает и **направление**, а не только скорость.
+   - `sensor.boat_wind_angle` (относительно носа) остаётся только для роз ветров/плашек «угол к носу» — сопоставлять его с прогнозом нельзя.
+
+4. **Конфигурация Сборки и Тайм-Фреймов (`ha/sailing-dash/config.yaml`):**
+   - Центрирует параметры инсталляции: временные окна графиков/REST прогноза (`history_hours` назад, `forecast_days` вперёд) и тумблеры видимости секций/карточек (`sections.<sec>.enabled`, `cards.<card_id>`).
+   - `helpers/build.py` считывает `config.yaml` (с фолбэком на `config.yaml.template`), фильтрует блоки YAML и подставляет атрибуты `history_hours` и `forecast_hours = forecast_days * 24` в `sensor.chart_time_window`.
+   - Интерактивная настройка при инсталляции запускается через `./install_wizard.sh --config` (вызывает `helpers/configure.py`).

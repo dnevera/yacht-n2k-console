@@ -1,0 +1,55 @@
+- type: grid
+  cards:
+  - type: heading
+    heading_style: title
+    heading: Sensors
+  - id: stw_gauge
+    type: gauge
+    name: STW (kn)
+    entity: sensor.boat_stw
+    min: 0
+    max: 12
+    needle: true
+    severity:
+      green: 0
+      yellow: 8
+      red: 10
+  - id: depth_gauge
+    type: gauge
+    name: Depth (m)
+    entity: sensor.boat_depth
+    min: 0
+    max: 30
+    needle: true
+    severity:
+      red: 0
+      yellow: 3
+      green: 5
+    card_mod:
+      style: "ha-card {\n  --accent-color: {{ '#ff1100' if states('sensor.boat_depth')\
+        \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
+        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
+        \ | float(0) >= 4.5 else '#888888')) }};\n}\n\nha-gauge {\n  --gauge-color:\
+        \ {{ '#ff1100' if states('sensor.boat_depth')\
+        \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
+        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
+        \ | float(0) >= 4.5 else '#888888')) }} !important;\n  --primary-text-color:\
+        \ {{ '#ff1100' if states('sensor.boat_depth')\
+        \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
+        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
+        \ | float(0) >= 4.5 else '#888888')) }} !important;\n}\n\nha-card {\n  color:\
+        \ {{ '#ff1100' if states('sensor.boat_depth')\
+        \ | float(0) < 3 else ('#ff8866' if states('sensor.boat_depth')\
+        \ | float(0) < 4.5 else ('var(--green-color)' if states('sensor.boat_depth')\
+        \ | float(0) >= 4.5 else '#888888')) }};\n}"
+  - id: sog_gauge
+    type: gauge
+    name: SOG (kn)
+    entity: sensor.boat_sog
+    min: 0
+    max: 12
+    needle: true
+    severity:
+      green: 0
+      yellow: 8
+      red: 10

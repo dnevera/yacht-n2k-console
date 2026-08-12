@@ -49,3 +49,28 @@ build.conf
 .env
 real-config.js
 .output.txt
+
+# Home Assistant Stage runtime state
+ha/sailing-dash/.cache/
+ha/sailing-dash/local-ha/config/.cache/
+ha/sailing-dash/local-ha/config/.storage/
+ha/sailing-dash/local-ha/config/www/
+ha/sailing-dash/local-ha/config/custom_components/
+ha/sailing-dash/local-ha/config/*.db*
+ha/sailing-dash/local-ha/config/*.log*
+ha/sailing-dash/local-ha/config/.HA_VERSION
+ha/sailing-dash/local-ha/config/.ha_run.lock
+ha/sailing-dash/local-ha/config/blueprints/
+ha/sailing-dash/local-ha/config/deps/
+ha/sailing-dash/local-ha/config/tts/
+ha/sailing-dash/local-ha/config/.cloud/
+ha/sailing-dash/local-ha/config/secrets.yaml
+
+# Third-party artifacts are never vendored: fetch_deps.py downloads them
+# from the tags pinned in ha/sailing-dash/deps.yaml into build/deps/.
+vendor/
+.cache/
+
+# Host-specific generated NMEA alias mapping (map_nmea_sensors.py output):
+# one instance PGN hashes must never be committed.
+ha/sailing-dash/src/yaml/sensors/derived_n2k.yaml

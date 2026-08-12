@@ -18,10 +18,10 @@
 #      systemd: ydnu02-web.service  (Requires=ydnu02-tcp-gateway.service)
 #
 # USAGE
-#   ./deploy.sh                     — deploy both services + patch HA (host from deploy.conf)
-#   ./deploy.sh --proxy             — gateway only + patch HA (no web restart)
+#   ./deploy.sh                     — deploy both services (host from deploy.conf)
+#   ./deploy.sh --proxy             — gateway only (no web restart)
 #   ./deploy.sh --web               — web only (gateway/HA untouched)
-#   ./deploy.sh --patch-ha          — re-apply HA patches only (after HA update)
+#   ./deploy.sh --check-ha          — verify the nmea2000 fork inside the HA container
 #   ./deploy.sh --clean-ha          — delete garbage NMEA devices + restart HA
 #   ./deploy.sh user@host --proxy   — override host from CLI
 #   ./deploy.sh --proxy --no-test   — deploy without running post-deploy tests
@@ -32,7 +32,7 @@
 #     --proxy   → gateway + service mode tests (2 suites)
 #     --web     → API + sensors + BLE tests (7 suites)
 #     (full)    → all tests (9 suites)
-#     --patch-ha / --clean-ha → manual verification only
+#     --check-ha / --clean-ha → manual verification only
 #   Pass --no-test to skip.
 #
 # CONFIGURATION
@@ -51,34 +51,33 @@
 #   The .service unit goes via /tmp → sudo mv (only systemd dir needs root).
 #   NEVER use "sudo cp + sudo chown" for py files — scp ownership is correct.
 #
-# HA PATCHES (idempotent — safe to run multiple times)
+# NMEA2000 LIBRARY — OUR FORK, NO PATCHES
 #
-#   Patch 1: patches/nmea2000_ioclient.py → nmea2000/ioclient.py
-#     Fix: TextNmea2000Gateway readline() EOF → ConnectionError (not silent return → 100% CPU)
-#     Upstream PR merged: github.com/tomer-w/nmea2000 (PR #61)
-#     Idempotency: MD5 checksum comparison before copy — skipped if identical.
+#   There are no patch files any more. Both fixes we need live in the tag
+#   dnevera/nmea2000@cpu-overload-fix (commit 6c9df918d19a) and the library is
+#   installed from that tag everywhere:
+#     - this host / our venv+Docker → requirements.txt (`nmea2000 @ git+...@tag`)
+#     - inside the HA container      → manifest.json of our ha-nmea2000 fork
+#   The tag is declared once, in ha/sailing-dash/deps.yaml.
 #
-#   Patch 2: scripts/patch_ha_nmea2000_message.py → nmea2000/message.py
-#     Fix: primary_key = f"{self.id}" caused hash collision for PGN 126996 — all devices
-#     shared MD5 818d9516db08fd90ffd1967e3c403bed → second device got 0 HA entities.
-#     Fix: include source_iso_name.name (64-bit ISO NAME) in primary_key.
-#     Upstream PR pending: github.com/dnevera/nmea2000/tree/fix/pgn-126996-hash-collision-per-source
-#     Idempotency: marker "yacht-n2k-console-patch-v1" checked before applying.
+#   Fix 1 (ioclient.py): TextNmea2000Gateway readline() EOF → ConnectionError
+#     instead of a silent return that span the event loop at 100% CPU.
+#   Fix 2 (message.py): primary_key includes the source unique_number, so PGN
+#     126996 no longer collides and every device gets its own HA entities.
 #
-#   HA is restarted ONLY if at least one patch was actually applied (changed).
-#   If HA image is updated: run ./deploy.sh --patch-ha to re-apply both patches.
-#   Remove each patch when: nmea2000 package has the fix included upstream.
+#   verify_nmea2000_fork() is a DRIFT GUARD, not a patcher: it checks that the
+#   installed library actually contains both markers (i.e. it is the fork, not a
+#   PyPI release) and reports loudly if it is not. Run ./deploy.sh --check-ha
+#   after a Home Assistant image update.
 #
 # SERVICE START ORDER
 #   ydnu02-tcp-gateway  →  ydnu02-web  →  homeassistant (docker)
 #   ydnu02-web.service has Requires= + After= on ydnu02-tcp-gateway.service.
 #
-# SKILL: Adding a new patch to HA
-#   1. Put the patched file in patches/
-#   2. Add a new block in patch_ha() following the ioclient pattern:
-#      - Discover path dynamically via `python3 -c 'import ... print(__file__)'`
-#      - scp to /tmp → docker cp into container
-#   3. Test: ./deploy.sh --patch-ha
+# SKILL: Changing the nmea2000 library version
+#   1. Move the tag in the fork github.com/dnevera/nmea2000
+#   2. Update `ref:` in ha/sailing-dash/deps.yaml and the pin in requirements.txt
+#   3. Test: ./deploy.sh --check-ha
 #
 # SKILL: Adding a new Python module to web deploy
 #   1. Add filename to the `for f in ...` loop in the DEPLOY_WEB section
@@ -99,10 +98,9 @@
 #   installed `nmea2000` package silently drifted from our git-fork requirement
 #   (a plain PyPI release ended up installed instead), which caused a 100% CPU
 #   spin-loop bug that was only found/fixed manually via SSH.
-#   A drift guard additionally checks that the installed nmea2000/message.py
-#   actually contains our fork's PGN-126996 fix (pip alone can't detect that a
-#   git+ branch moved forward, or that a PyPI release replaced the fork) and
-#   force-reinstalls the exact fork branch from requirements.txt if missing.
+#   A drift guard additionally checks that the installed nmea2000 really is our
+#   fork (pip alone can't detect that a PyPI release replaced it) by looking for
+#   both fix markers in ioclient.py/message.py — see verify_nmea2000_fork().
 #
 # TODO: Add --dry-run mode that shows what would be deployed without executing
 # TODO: Add rollback support (backup previous version before overwrite)
@@ -139,11 +137,16 @@ if [[ "${1:-}" != --* ]] && [[ -n "${1:-}" ]]; then
     shift
 fi
 HOST="$DEPLOY_HOST"
-MODE="${1:-}"   # --proxy | --web | --patch-ha | (empty = both)
+MODE="${1:-}"   # --proxy | --web | --check-ha | --clean-ha | (empty = both)
 
 # REMOTE_DIR, WEB_SERVICE, PROXY_SERVICE, HA_CONTAINER are from deploy.conf
 LOCAL_DIR="$SCRIPT_DIR"
-PATCH_DIR="${LOCAL_DIR}/patches"
+
+# The nmea2000 fork tag is declared once, in ha/sailing-dash/deps.yaml; these are
+# the content markers proving the installed library really is that fork.
+NMEA2000_FORK_SPEC="git+https://github.com/dnevera/nmea2000.git@cpu-overload-fix"
+NMEA2000_MARKER_IOCLIENT="Connection closed by remote host"
+NMEA2000_MARKER_MESSAGE="primary_key = f\"{self.id}_{source_id}\""
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -169,7 +172,7 @@ done
 
 [[ "$MODE" == "--proxy"    ]] && DEPLOY_WEB=false
 [[ "$MODE" == "--web"      ]] && DEPLOY_PROXY=false
-[[ "$MODE" == "--patch-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && RESTART_HA=true
+[[ "$MODE" == "--check-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false
 [[ "$MODE" == "--clean-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && CLEAN_HA=true && RESTART_HA=true
 
 # ── pre_deploy_diff() ────────────────────────────────────────────────────────
@@ -272,17 +275,6 @@ if ! $SKIP_DIFF && [[ "$MODE" != "--clean-ha" ]]; then
     pre_deploy_diff
 fi
 
-# ── patch_ha() ───────────────────────────────────────────────────────────────
-# Applies local patches/ fixes to third-party libs inside the HA docker container.
-# Called automatically on every proxy deploy (gateway restart triggers EOF → HA
-# needs patched nmea2000 to reconnect cleanly instead of spinning at 100% CPU).
-# Also callable standalone: ./deploy.sh [host] --patch-ha
-#
-# Patches applied:
-#   patches/nmea2000_ioclient.py → nmea2000/ioclient.py
-#     Fix: TextNmea2000Gateway readline() EOF → ConnectionError (not silent return)
-#     Upstream PR: github.com/dnevera/nmea2000/tree/fix/text-gateway-eof-spin-loop
-#
 # ── sync_python_deps() ───────────────────────────────────────────────────────
 # Ensures the remote host's Python environment matches requirements.txt BEFORE
 # proxy/web services are (re)started. Runs on every full/--proxy/--web deploy.
@@ -297,15 +289,10 @@ fi
 # externally-managed-environment Python (PEP 668) — plain `pip install` is
 # refused otherwise. Discovered the hard way while debugging the 100% CPU bug.
 #
-# NOTE: this only installs whatever requirements.txt says (currently a pinned
-# PyPI nmea2000 release). It intentionally does NOT try to auto-detect/auto-fix
-# "drift" by force-reinstalling arbitrary specs — an earlier version of this
-# function did that (force-reinstalling the git+ fork branch whenever a fix
-# marker was missing) and that fork branch turned out to be incompatible with
-# the nmea2000 release actually running here (`NameError: NMEA2000Field`),
-# which took production down. requirements.txt now pins the exact working
-# release instead; see patch_gateway_nmea2000() for the one local patch that
-# IS still needed on top of it.
+# NOTE: this installs exactly what requirements.txt says — including the
+# nmea2000 library pinned to our fork's TAG (never a branch: a branch is a moving
+# pointer and two installs on different days would give different code). Nothing
+# is patched afterwards; verify_nmea2000_fork() only verifies the result.
 sync_python_deps() {
     section "Python dependencies (requirements.txt)"
 
@@ -318,105 +305,57 @@ sync_python_deps() {
         || warn "pip3 install -r requirements.txt reported errors — review output above"
 }
 
-# ── patch_gateway_nmea2000() ─────────────────────────────────────────────────
-# Applies patches/nmea2000_ioclient.py (EOF spin-loop fix) directly to the
-# gateway's OWN nmea2000 install (its --user site-packages), separate from
-# patch_ha() which patches the copy running inside the HA docker container.
-# Without this, every `pip install`/reinstall of the pinned nmea2000 release
-# in sync_python_deps() would silently drop the fix and reintroduce the
-# 100% CPU EOF spin-loop bug on the gateway side.
-# Idempotent — compares MD5 checksums before overwriting, same pattern as Patch 1
-# in patch_ha().
-patch_gateway_nmea2000() {
-    section "Gateway nmea2000 patch (ioclient EOF fix)"
+# DRIFT GUARD (replaces the old patch_ha()/patch_gateway_nmea2000() pair).
+#
+# The library is installed from our fork's tag — on this host through
+# requirements.txt, inside the HA container through the integration's
+# manifest.json requirement. Neither pip nor HACS can tell us afterwards that a
+# plain PyPI release replaced the fork, so we check the installed files for both
+# fix markers instead.
+#
+#   verify_nmea2000_fork gateway   — the gateway host's own --user install
+#   verify_nmea2000_fork ha        — the copy inside the HA docker container
+verify_nmea2000_fork() {
+    local scope="$1"
+    local runner=""
+    [[ "$scope" == "ha" ]] && runner="sudo docker exec ${HA_CONTAINER} "
+    section "nmea2000 fork check (${scope})"
 
-    local ioclient_path
-    ioclient_path=$(${SSH} ${HOST} \
-        "python3 -c 'import nmea2000.ioclient as m; print(m.__file__)'" 2>/dev/null) \
-        || { warn "Cannot find nmea2000.ioclient on gateway host — skipping"; return 0; }
+    local pkg_dir
+    pkg_dir=$(${SSH} ${HOST} \
+        "${runner}python3 -c 'import os, nmea2000; print(os.path.dirname(nmea2000.__file__))'" \
+        2>/dev/null) || pkg_dir=""
 
-    if [[ -z "$ioclient_path" ]]; then
-        warn "nmea2000.ioclient path empty — skipping"
+    if [[ -z "$pkg_dir" ]]; then
+        warn "nmea2000 is not importable (${scope}) — cannot verify the fork"
         return 0
     fi
 
-    local local_md5 remote_md5
-    local_md5=$(md5 -q "${PATCH_DIR}/nmea2000_ioclient.py" 2>/dev/null \
-                || md5sum "${PATCH_DIR}/nmea2000_ioclient.py" | cut -d' ' -f1)
-    remote_md5=$(${SSH} ${HOST} "md5sum '${ioclient_path}' 2>/dev/null | cut -d' ' -f1") || remote_md5=""
+    local missing=()
+    ${SSH} ${HOST} "${runner}grep -qF '${NMEA2000_MARKER_IOCLIENT}' '${pkg_dir}/ioclient.py'" \
+        >/dev/null 2>&1 || missing+=("ioclient.py (EOF spin-loop fix)")
+    ${SSH} ${HOST} "${runner}grep -qF '${NMEA2000_MARKER_MESSAGE}' '${pkg_dir}/message.py'" \
+        >/dev/null 2>&1 || missing+=("message.py (PGN 126996 per-source primary_key)")
 
-    if [[ "$local_md5" == "$remote_md5" ]]; then
-        log "Gateway ioclient EOF fix: already up to date — skipping"
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        log "nmea2000 (${scope}): our fork is installed ✓  (${pkg_dir})"
+        return 0
+    fi
+
+    warn "nmea2000 (${scope}) at ${pkg_dir} is NOT our fork — missing:"
+    local item
+    for item in "${missing[@]}"; do
+        warn "  - ${item}"
+    done
+    if [[ "$scope" == "ha" ]]; then
+        warn "Fix: reinstall the NMEA 2000 integration from our fork's tag through HACS"
+        warn "     (dnevera/ha-nmea2000@ydnu-02-usb-tcp-gw), then restart Home Assistant."
+        warn "     Its manifest.json must require ${NMEA2000_FORK_SPEC}"
     else
-        log "Gateway ioclient EOF fix: applying → ${ioclient_path}"
-        ${SCP} "${PATCH_DIR}/nmea2000_ioclient.py" "${HOST}:/tmp/nmea2000_ioclient_gw.py"
-        ${SSH} ${HOST} "cp /tmp/nmea2000_ioclient_gw.py '${ioclient_path}' \
-            && rm -rf \"\$(dirname '${ioclient_path}')/__pycache__\""
-        log "Gateway ioclient EOF fix: applied ✓"
+        warn "Fix: pip3 install --user --break-system-packages --force-reinstall \\"
+        warn "       '${NMEA2000_FORK_SPEC}'"
     fi
-}
-
-
-patch_ha() {
-    section "HA patches"
-    local ha_changed=false  # track if any patch was actually applied → need HA restart
-
-    # ── Patch 1: nmea2000 ioclient EOF spin-loop fix ──────────────────────────
-    # Discover exact path inside container (survives Python version bumps).
-    # Same dynamic discovery pattern used for Patch 2 below.
-    local ioclient_path
-    ioclient_path=$(${SSH} ${HOST} \
-        "sudo docker exec ${HA_CONTAINER} python3 -c \
-        'import nmea2000.ioclient as m; print(m.__file__)'" 2>/dev/null) \
-        || { warn "Cannot find nmea2000.ioclient in HA container — skipping Patch 1"; ioclient_path=""; }
-
-    if [[ -n "$ioclient_path" ]]; then
-        # IDEMPOTENCY: compare MD5 checksums before overwriting
-        local local_md5 remote_md5
-        local_md5=$(md5 -q "${PATCH_DIR}/nmea2000_ioclient.py" 2>/dev/null \
-                    || md5sum "${PATCH_DIR}/nmea2000_ioclient.py" | cut -d' ' -f1)
-        remote_md5=$(${SSH} ${HOST} \
-            "sudo docker exec ${HA_CONTAINER} md5sum '${ioclient_path}' 2>/dev/null \
-             | cut -d' ' -f1") || remote_md5=""
-
-        if [[ "$local_md5" == "$remote_md5" ]]; then
-            log "Patch 1 (ioclient EOF fix): already up to date — skipping"
-        else
-            log "Patch 1 (ioclient EOF fix): applying → ${ioclient_path}"
-            ${SCP} "${PATCH_DIR}/nmea2000_ioclient.py" "${HOST}:/tmp/nmea2000_ioclient.py"
-            ${SSH} ${HOST} "sudo docker cp /tmp/nmea2000_ioclient.py \
-                ${HA_CONTAINER}:${ioclient_path}"
-            log "Patch 1 (ioclient EOF fix): applied ✓"
-            ha_changed=true
-        fi
-    fi
-
-    # ── Patch 2: nmea2000 message.py PGN 126996 hash collision fix ────────────
-    # Script is idempotent — checks for marker "yacht-n2k-console-patch-v1" before applying.
-    # Reports "Already applied" if marker found, "SUCCESS" if newly applied.
-    # Dynamic path discovery is done inside the script itself (survives Python version bumps).
-    log "Patch 2 (message.py hash collision fix): checking..."
-    ${SCP} "${SCRIPT_DIR}/scripts/patch_ha_nmea2000_message.py" \
-        "${HOST}:/tmp/patch_ha_nmea2000_message.py"
-    ${SSH} ${HOST} "sudo docker cp /tmp/patch_ha_nmea2000_message.py \
-        ${HA_CONTAINER}:/tmp/patch_ha_nmea2000_message.py"
-
-    local patch2_out
-    patch2_out=$(${SSH} ${HOST} \
-        "sudo docker exec ${HA_CONTAINER} python3 /tmp/patch_ha_nmea2000_message.py")
-    log "Patch 2: ${patch2_out}"
-    if echo "$patch2_out" | grep -q "SUCCESS"; then
-        ha_changed=true
-    fi
-
-    # ── Restart HA only if something actually changed ─────────────────────────
-    if $ha_changed; then
-        log "Patches changed — restarting HA to reload modules..."
-        ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
-        log "HA restarted ✓  (auto-reconnects to :4001 within ~10s)"
-    else
-        log "All patches already up to date — HA restart skipped ✓"
-    fi
+    return 1
 }
 
 
@@ -424,7 +363,7 @@ ${SSH} ${HOST} "mkdir -p ${REMOTE_DIR}"
 
 if $DEPLOY_PROXY || $DEPLOY_WEB; then
     sync_python_deps
-    patch_gateway_nmea2000
+    verify_nmea2000_fork gateway || true
 fi
 
 # ── N2K Proxy ────────────────────────────────────────────────────────────────
@@ -457,15 +396,18 @@ if $DEPLOY_PROXY; then
     log "ydnu02-tcp-gateway deploy complete ✓"
 
     if $RESTART_HA; then
-        patch_ha
+        verify_nmea2000_fork ha || true
+        log "Restarting Home Assistant to reconnect to :${DATA_PORT} ..."
+        ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
+        log "HA restarted ✓  (auto-reconnects within ~10s)"
     else
         log "Skipping Home Assistant restart (pass --restart-ha to restart HA container)"
     fi
 fi
 
-# ── Standalone --patch-ha ────────────────────────────────────────────────────
-if [[ "$MODE" == "--patch-ha" ]]; then
-    patch_ha
+# ── Standalone --check-ha: drift guard only, changes nothing ────────────────
+if [[ "$MODE" == "--check-ha" ]]; then
+    verify_nmea2000_fork ha
 fi
 
 # ── --clean-ha: remove garbage NMEA 2000 devices from HA registry ────────────
@@ -557,7 +499,7 @@ fi
 #                  test_ble_registry.py, test_gobius_parsers.py,
 #                  test_mopeka_parsers.py, test_n2k_commands.py,
 #                  test_gobius_ble_writes.py
-#   --patch-ha  → (no tests, manual verification only)
+#   --check-ha  → (no tests, manual verification only)
 #   --clean-ha  → (no tests, manual verification only)
 #   (full)      → ALL test files
 #
@@ -632,7 +574,7 @@ if ! $SKIP_TESTS; then
         run_post_deploy_tests "${TESTS_PROXY[@]}"
     elif [[ "$MODE" == "--web" ]]; then
         run_post_deploy_tests "${TESTS_WEB[@]}"
-    elif [[ "$MODE" == "--patch-ha" ]] || [[ "$MODE" == "--clean-ha" ]]; then
+    elif [[ "$MODE" == "--check-ha" ]] || [[ "$MODE" == "--clean-ha" ]]; then
         log "No automated tests for ${MODE} — verify manually"
     else
         # Full deploy — run all tests

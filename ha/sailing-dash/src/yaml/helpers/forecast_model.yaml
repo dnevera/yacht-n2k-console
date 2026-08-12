@@ -1,0 +1,26 @@
+# Home Assistant input helpers for the sailing dashboard.
+#
+# FORECAST MODEL SELECTION — these two `input_select` entities let the crew pick
+# the Open-Meteo weather model straight from the dashboard, without editing YAML
+# or restarting Home Assistant: `src/yaml/sensors/open_meteo.yaml` templates the
+# `models=` query parameter on them, and `resource_template` is re-rendered on
+# every poll, so `refresh_forecast.yaml` only has to re-poll the REST sensors
+# when the selection changes.
+#
+# The option lists and the initial values are injected by build.py from the
+# `forecast_models` block of config.yaml — DO NOT hard-code them here. The
+# options are HUMAN READABLE titles ("ECMWF IFS 0.25°"), not raw API ids; the
+# REST templates map a title back to its id with the same table.
+input_select:
+  forecast_wind_model:
+    name: Wind forecast model
+    icon: mdi:weather-windy
+    options:
+      - best_match
+    initial: best_match
+  forecast_wave_model:
+    name: Wave forecast model
+    icon: mdi:waves
+    options:
+      - best_match
+    initial: best_match

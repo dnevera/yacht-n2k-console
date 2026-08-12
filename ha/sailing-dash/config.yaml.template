@@ -1,0 +1,179 @@
+# Sailing Dashboard Build & Deployment Configuration
+#
+# Copy this file to `config.yaml` (in this same directory) and edit it to
+# customize your installation. `helpers/build.py` reads `config.yaml` and
+# falls back to the defaults below for any missing key, so this file is
+# always a safe, complete reference of every available option.
+# You can also run `./install_wizard.sh --config` for an interactive CLI
+# wizard that writes `config.yaml` for you instead of editing it by hand.
+
+# Visual style of ALL time-series charts (wind and waves alike). Both styles
+# are rendered by the very same `custom:plotly-graph` card (one chart engine
+# only) and share all series, the unified tooltip and the colour bar - they
+# only differ in where the direction arrows are drawn:
+#   open_meteo - arrows line up in one straight row just under the chart's top
+#                edge (open-meteo.com forecast-preview style) and the values
+#                themselves are read from the chart lines. Default.
+#   plotly     - every arrow sits ON its own data point, so the arrow row
+#                follows the measured/forecast value line.
+chart_style: open_meteo
+# How many hours apart the direction arrows are spaced on every chart.
+# Lower = more arrows/denser; higher = fewer, easier to read. 0 = draw an
+# arrow on every data point (very dense on recorder history). Default: 3.
+arrow_spacing_hours: 3
+# Amplifier of the direction arrow length: the arrow shaft grows with the
+# measured/forecast value (wind speed in knots, wave height in metres)
+# multiplied by this factor. 1 = barely noticeable growth, higher = the
+# difference between light and strong wind is much more visible (the length is
+# capped so arrows never leave the chart). Default: 3.
+arrow_length_scale: 2
+# Where the arrows of the MEASURED (NMEA history) series are drawn:
+#   true  - anchored on the measured value line itself, so in the history zone
+#           it is always clear which line a direction belongs to. Forecast
+#           arrows still follow `chart_style`. Default.
+#   false - measured arrows join the forecast arrows in the top row
+#           (`chart_style: open_meteo` only).
+# Ignored by `chart_style: plotly`, where every arrow is on its point anyway.
+measured_arrows_on_line: false
+# How the FORECAST value series is drawn on every chart (wind and waves):
+#   markers - diamond markers, one per forecast hour. Default.
+#   circle  - the same, with round markers.
+#   line    - a solid line connecting the forecast values.
+#   dot     - a dotted line connecting the forecast values.
+forecast_style: line
+# How the MEASURED (NMEA recorder history) lines are smoothed on every chart:
+#   spline - smoothed curve, reads well next to the forecast line. Default.
+#   smooth - the same spline with a stronger smoothing factor (fewer wiggles).
+#   none   - raw polyline through every sample, no smoothing at all.
+line_smoothing: spline
+# How the MEASURED (NMEA) series are aggregated before they are drawn:
+#   model_step - averaged over the grid step of the ACTIVE Open-Meteo model
+#                (1 h, 3 h, ... — taken from the forecast timestamps themselves,
+#                so it follows the model picked on the dashboard). Directions are
+#                averaged as vectors, so 350°/10° gives 0° and not 180°. This is
+#                what makes the measured arrows comparable with the forecast
+#                instead of jittering by tens of degrees around it. Default.
+#   none       - draw every raw NMEA sample as recorded.
+measured_averaging: model_step
+# Zoom/pan along the time (X) axis:
+#   true  - mouse wheel zooms in a browser, pinch zooms on a phone, one finger
+#           pans, and a vertical +/-/reset button column is shown on the right
+#           edge of the chart (needed on touch devices). Default.
+#   false - charts are static: no zoom, no buttons.
+# The Y axis always stays fixed, so the traces can never be dragged off scale.
+zoom_controls: true
+# Opacity (0..1) of the "Now" badge drawn on the dashed now line. Lower values
+# let the traces running underneath it stay visible. Default: 0.55.
+now_label_opacity: 0.55
+# Opacity (0..1) of the FORECAST direction arrows that fall left of "Now" (the
+# Open-Meteo history overlapping the measured zone), so they read as background
+# next to the measured arrows. 0 = do not draw them at all, 1 = as bright as
+# the forecast arrows right of "Now". Default: 0.4.
+forecast_history_arrow_opacity: 0.4
+
+# Open-Meteo forecast models offered by the model selector (card id
+# `forecast_model`, sitting in the heading row of the "Wind" and "Waves"
+# sections respectively). The selection is a
+# Home Assistant `input_select` helper, so it can be changed at any time from
+# the dashboard itself: the REST `resource_template` renders `models=` from it
+# on every poll and the refresh automation re-polls immediately - no rebuild
+# and no Home Assistant restart needed.
+#   options - which models appear in the dropdown. `best_match` is not a real
+#             model id: it sends NO `models=` parameter, letting Open-Meteo
+#             pick the best model for the boat's position.
+#   default - the value the helper starts with; must be one of `options`.
+# Wind uses the standard forecast API, waves the separate marine API, so the
+# two lists are different sets of models.
+forecast_models:
+  wind:
+    options:
+      - best_match
+      - ecmwf_ifs025
+      - gfs_seamless
+      - icon_seamless
+      - meteofrance_seamless
+      - ukmo_seamless
+    default: best_match
+  wave:
+    options:
+      - best_match
+      - ecmwf_wam025
+      - gwam
+      - ewam
+    default: best_match
+
+# Colours of the chart series and of the matching value tiles. Any CSS colour
+# accepted by Plotly works; each colour is defined here once and applied to
+# both the trace and its tile so they can never drift apart.
+colors:
+  measured: '#4fc3f7'        # Measured (NMEA) wind speed line and tile
+  measured_gusts: '#b0bec5'  # Measured gusts (10-minute peaks)
+  forecast: '#ff7043'        # Open-Meteo forecast wind speed
+  forecast_gusts: '#78909c'  # Open-Meteo forecast gusts
+
+# Controls the time span shown on the wind and wave charts (the same window is
+# used by both chart styles) and how far ahead the Open-Meteo REST forecast is
+# requested.
+time_window:
+  # How many hours of measured history (left of "Now") to show on the wind
+  # and wave charts, read from Home Assistant's recorder. Default: 4.
+  history_hours: 12
+  # How many days ahead (right of "Now") to request/show forecast data.
+  # Converted internally to forecast_hours = forecast_days * 24 and used
+  # both for the Open-Meteo REST query window and the chart's right edge.
+  # Default: 3 (= 72 hours).
+  forecast_days: 5
+
+# Enable/disable whole dashboard sections and individual cards within them.
+# Each section has:
+#   enabled: true/false  - show/hide the entire section (heading + cards).
+#   cards:                - per-card visibility toggles, keyed by the card's
+#     <card_id>: true/false  `id` tag in src/yaml/dashboard/sections/*.yaml.
+#                             A card is dropped from the build when its
+#                             `enabled` (section) is false OR its own id is
+#                             set to false here. Missing keys default to
+#                             `true` (card/section shown) for backward
+#                             compatibility with older config.yaml files.
+sections:
+  # "Sensors" section: instant gauge tiles for boat speed/depth.
+  sensors:
+    enabled: true
+    cards:
+      stw_gauge: true    # Speed Through Water gauge (sensor.boat_stw)
+      depth_gauge: true  # Water depth gauge (sensor.boat_depth)
+      sog_gauge: true    # Speed Over Ground gauge (sensor.boat_sog)
+  # "Position" section: heading, course, and GPS position cards.
+  position:
+    enabled: true
+    cards:
+      hdg_compass: true  # HDG compass card (true heading + magnetic details)
+      cog_compass: true  # COG compass card (Course Over Ground)
+      map: false         # Map card showing the boat's live position
+      latitude: true     # Latitude value tile
+      longitude: true    # Longitude value tile
+  # "Conditions" section: wind rose and barometric pressure cards.
+  conditions:
+    enabled: true
+    cards:
+      windrose: true         # Wind rose card (direction history)
+      barometer_gauge: true  # Current barometric pressure gauge
+      barometer_trend: true  # Barometric pressure trend chart
+  # "Wind Direction & Speed" section.
+  wind:
+    enabled: true
+    cards:
+      glance: true          # Instant value tiles (measured now / forecast / gusts)
+      forecast_model: true  # Open-Meteo wind model selector, in the heading row
+      chart: true           # The time-series wind speed/gusts chart itself
+  # "Waves" section.
+  waves:
+    enabled: true
+    cards:
+      glance: true          # Instant value tiles (wave height / period)
+      forecast_model: true  # Open-Meteo wave (marine API) model selector
+      chart: true           # Wave height/period forecast chart (Plotly)
+  # "Forecast" section: embedded map-based forecast widgets.
+  forecast:
+    enabled: true
+    cards:
+      windy_map: true  # Windy.com embedded weather map widget

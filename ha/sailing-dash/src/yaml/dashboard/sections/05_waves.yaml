@@ -1,0 +1,117 @@
+- type: grid
+  cards:
+#  - type: heading
+#    heading_style: title
+#    heading: Waves
+#    icon: mdi:wave
+#    grid_options:
+#      columns: 24
+  # Wave forecast model selector, in the heading row as its continuation.
+  # It is a SEPARATE helper from the wind one on purpose: waves come from the
+  # marine API, whose model ids do not match the forecast API's (`ecmwf_ifs025`
+  # is rejected there), so one shared selector could not cover both.
+  - id: forecast_model
+    type: tile
+    entity: input_select.forecast_wave_model
+    hide_state: true
+    vertical: false
+    name: Waves
+    features_position: inline
+    features:
+    - type: select-options
+    grid_options:
+      columns: 36
+  - id: glance
+    type: glance
+    show_icon: false
+    state_color: false
+    columns: 2
+    entities:
+    - entity: sensor.wave_height_next_hour
+      name: Height next 1h
+      card_mod:
+        style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
+          \  line-height: 14px !important;\n  color: var(--secondary-text-color)\
+          \ !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight:\
+          \ 500 !important;\n  line-height: 30px !important;\n  color: #4fc3f7 !important;\n\
+          }\n"
+    - entity: sensor.wave_period_next_hour
+      name: Period next 1h
+      card_mod:
+        style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
+          \  line-height: 14px !important;\n  color: var(--secondary-text-color)\
+          \ !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight:\
+          \ 500 !important;\n  line-height: 30px !important;\n  color: #b0bec5 !important;\n\
+          }\n"
+    card_mod:
+      style: "ha-card { padding: 10px 8px 6px !important; }\n.entities { padding:\
+        \ 0 !important; }\n.entity {\n  flex-direction: column-reverse !important;\n\
+        }\n"
+    grid_options:
+      columns: 36
+  - id: chart
+    type: custom:plotly-graph
+    hours_to_show: 76
+    time_offset: 72h
+    entities:
+    - entity: sensor.wave_forecast_flat
+      name: Wave height (forecast)
+      mode: markers
+      extend_to_present: false
+      filters:
+      - fn: '$include:plotly_forecast_wave_series'
+      - fn: '$include:plotly_forecast_wave_store'
+      - store_var: waveHeight
+      customdata: '$include:plotly_direction_label'
+      hovertemplate: '%{y:.2f} m · %{customdata}<extra>Wave (forecast)</extra>'
+      marker:
+        size: 6
+        symbol: diamond
+        color: '#4fc3f7'
+        line:
+          width: 0
+    - entity: sensor.wave_forecast_flat
+      name: Period (s)
+      mode: lines
+      extend_to_present: false
+      visible: legendonly
+      filters:
+      - fn: '$include:plotly_forecast_wave_period_series'
+      hovertemplate: '%{y:.1f} s<extra>Period</extra>'
+      line:
+        dash: dot
+        width: 1
+        color: '#b0bec5'
+    on_dblclick: "$include:plotly_reset_on_dblclick"
+    config:
+      scrollZoom: false
+      displayModeBar: false
+      doubleClick: false
+    layout:
+      dragmode: pan
+      hovermode: x unified
+      xaxis:
+        showspikes: true
+        spikemode: across
+        spikedash: dash
+        spikethickness: 1
+        spikecolor: '#90a4ae'
+        spikesnap: cursor
+      yaxis:
+        title: Wave height (m)
+        rangemode: tozero
+        autorange: true
+        fixedrange: true
+        showspikes: false
+      legend:
+        orientation: h
+        x: 0.5
+        xanchor: center
+        y: -0.3
+      margin:
+        b: 70
+      annotations: '$include:plotly_chart_annotations'
+      shapes: "$include:plotly_touch_patch_shapes"
+    grid_options:
+      columns: 36
+  column_span: 3

@@ -1,0 +1,87 @@
+# Single source of truth for every EXTERNAL artifact this dashboard needs.
+#
+# Nothing here is committed into the repo: `fetch_deps.py` downloads all of it
+# into `build/deps/` (an ordinary build artifact directory next to
+# `build/dashboard-sailing.yaml`, gitignored) and the deploy/provision scripts
+# take it from there. There is no `vendor/` copy and no `.cache/` any more.
+#
+# Everything is pinned to a TAG (never a branch): two "from scratch" installs on
+# different days must produce byte-identical code. `sha256` is verified on every
+# fetch; refresh it with `python3 fetch_deps.py --update-hashes` after a bump.
+
+# ── Python library (decoder) ────────────────────────────────────────────────
+# Installed with pip, NOT downloaded into build/deps/: it goes into our venv /
+# Docker image via the repo root requirements.txt, and into the HA container via
+# the integration's manifest.json requirement. Declared here so the fork tag
+# lives in exactly one place.
+lib:
+  - name: nmea2000
+    source: git
+    repo: dnevera/nmea2000          # OUR OWN fork of tomer-w/nmea2000
+    ref: cpu-overload-fix           # tag, commit 6c9df918d19a (both fixes in)
+    # Content markers used by the drift-guard to prove the fork (not PyPI) is
+    # what actually got installed.
+    markers:
+      - file: nmea2000/ioclient.py
+        contains: "Connection closed by remote host"
+      - file: nmea2000/message.py
+        contains: 'primary_key = f"{self.id}_{source_id}"'
+
+# ── HA custom integrations ──────────────────────────────────────────────────
+integrations:
+  - name: nmea2000
+    source: github_tag_archive
+    repo: dnevera/ha-nmea2000       # OUR OWN fork of tomer-w/ha-nmea2000
+    ref: ydnu-02-usb-tcp-gw         # tag, commit 2cdef78c6df2
+    # Path of the component inside the extracted archive.
+    component_path: custom_components/nmea2000
+    sha256: "fb0b882bd9fd52d225f886dd3780f21c87a9b863f0b49d49b469326d2fdd1ea8"
+  - name: hacs
+    source: github_release_asset
+    repo: hacs/integration
+    ref: latest                     # HACS is self-updating; pin only if needed
+    asset: hacs.zip
+    component_path: custom_components/hacs
+    sha256: null                    # `latest` is a moving target — not verified
+
+# ── Lovelace frontend cards ─────────────────────────────────────────────────
+# On Prod these are installed through the HACS UI; on Stage they are copied
+# straight into /config/www/ from build/deps/cards/ (identical runtime effect).
+cards:
+  - name: card-mod
+    source: github_raw
+    repo: thomasloven/lovelace-card-mod
+    ref: v4.2.1
+    path: card-mod.js               # this repo ships the bundle at its root
+    asset: card-mod.js
+    sha256: "5e7e71ad61796f59070f8c4621e69fa8e71a9864d0be0922bc4dbc72f990cd35"
+  - name: compass-card
+    source: github_release_asset
+    repo: tomvanswam/compass-card
+    ref: v3.5.0
+    asset: compass-card.js
+    sha256: "3f7f523d952a1388d84b153d2012c338f7abc682446af02e867932062d46d51e"
+  - name: apexcharts-card
+    source: github_release_asset
+    repo: RomRider/apexcharts-card
+    ref: v2.2.3
+    asset: apexcharts-card.js
+    sha256: "346780707773fb90c45e9eeaf8acb010d16a8089e86563a242cc4e1d8995f718"
+  - name: windrose-card
+    source: github_release_asset
+    repo: aukedejong/lovelace-windrose-card
+    ref: v2.4.2
+    asset: windrose-card.js
+    sha256: "8b7431b49774869495ec2301824faa3ec58fd3bcb806b69282758e3717f7b8a7"
+  - name: plotly-graph-card
+    source: github_release_asset
+    repo: dbuezas/lovelace-plotly-graph-card
+    ref: v3.3.5
+    asset: plotly-graph-card.js
+    sha256: "c98b05b03ef760a7b3393b7480081171d42cc0da92abf8997e94e0eff097ffad"
+  - name: config-template-card
+    source: github_release_asset
+    repo: iantrich/config-template-card
+    ref: "1.3.6"
+    asset: config-template-card.js
+    sha256: "ecee3c7e0a10920e9a432de2e7f1f9506ae742425e95741d1835bbd4dea56c2e"

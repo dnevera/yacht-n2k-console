@@ -1,0 +1,96 @@
+- type: grid
+  cards:
+  - type: heading
+    heading: Position
+  - id: hdg_compass
+    type: custom:compass-card
+    header:
+      title:
+        value: HDG
+      icon:
+        value: mdi:compass
+    compass:
+      circle:
+        color: '#37474f'
+      ticks:
+        show: true
+        color: '#90a4ae'
+        radius: 95
+      north:
+        show: true
+      east:
+        show: true
+      south:
+        show: true
+      west:
+        show: true
+    indicator_sensors:
+    - sensor: sensor.boat_heading
+      indicator:
+        image: arrow_inward
+        color: '#4fc3f7'
+      state_abbreviation:
+        show: true
+    value_sensors:
+    - sensor: sensor.boat_heading
+    card_mod:
+      style: "ha-card::after {\n  content: \"Mag: {{ states('sensor.boat_heading_magnetic')\
+        \ }}° | Var: {% set v = states('sensor.boat_magnetic_variation') | float(0)\
+        \ %}{{ '+' if v > 0 else '' }}{{ v }}°\";\n  position: absolute;\n  bottom:\
+        \ 8px;\n  right: 12px;\n  font-size: 11px;\n  color: var(--secondary-text-color);\n\
+        \  pointer-events: none;\n}\n"
+  - id: cog_compass
+    type: custom:compass-card
+    header:
+      title:
+        value: COG
+      icon:
+        value: mdi:compass-outline
+    compass:
+      circle:
+        color: '#37474f'
+      ticks:
+        show: true
+        color: '#90a4ae'
+        radius: 95
+      north:
+        show: true
+      east:
+        show: true
+      south:
+        show: true
+      west:
+        show: true
+    indicator_sensors:
+    - sensor: sensor.boat_cog
+      indicator:
+        image: arrow_inward
+        color: '#ff7043'
+    value_sensors:
+    - sensor: sensor.boat_cog
+  - id: map
+    type: map
+    entities:
+    - entity: device_tracker.nevera
+    default_zoom: 14
+    aspect_ratio: 16x9
+  - id: latitude
+    type: entity
+    entity: sensor.boat_latitude
+    name: Latitude
+    card_mod:
+      style: "ha-card {\n  font-size: 14px;\n  font-weight: bold;\n  color: var(--grey-color);\n\
+        }\n\n.name {\n  font-size: 14px !important;\n  font-weight: bold !important;\n\
+        \  color: var(--grey-color) !important;\n}\n\n.value {\n  font-size: calc(14px\
+        \ * 1.75) !important;\n}\n\n.measurement {\n  font-size: 14px !important;\n\
+        \  color: var(--grey-color) !important;\n}"
+  - id: longitude
+    type: entity
+    entity: sensor.boat_longitude
+    name: Longitude
+    card_mod:
+      style: "ha-card {\n  font-size: 13px;\n  font-weight: bold;\n  color: var(--grey-color);\n\
+        }\n\n.name {\n  font-size: 13px !important;\n  font-weight: bold !important;\n\
+        \  color: var(--grey-color) !important;\n}\n\n.value {\n  font-size: calc(14px\
+        \ * 1.75) !important;\n}\n\n.measurement {\n  font-size: 14px !important;\n\
+        \  color: var(--grey-color) !important;\n}"
