@@ -21,7 +21,7 @@ const D=path.join(__dirname,'..','..','ha','sailing-dash','src','js','common')+p
 const load=(n)=>{const lines=fs.readFileSync(D+n,'utf8').split('\n'); let i=0; while(lines[i].trim().startsWith('//')) i++;
   return eval('('+lines.slice(i).join('\n')+')');};
 const historySeries=load('plotly_history_series.js');
-const cd=load('plotly_wind_customdata.js');
+const cd=load('plotly_direction_label.js');
 const ann=load('plotly_chart_annotations.js');
 global.document={querySelectorAll:()=>[],};
 let ok=true; const t=(name,c)=>{console.log((c?'PASS':'FAIL')+' '+name); if(!c) ok=false;};
@@ -38,8 +38,15 @@ const speed={xs:[T(0),T(30),T(60)]};
 const dir={xs:[T(30),T(60)],ys:[90,180]};   // first sample missing
 const labels=cd({xs:speed.xs,vars:{dir}});
 t('no dir in window -> n/a',labels[0]==='direction n/a');
-t('t=30 -> E 90',labels[1]==='E 90°');
-t('t=60 -> S 180',labels[2]==='S 180°');
+t('t=30 -> E 90 with flow arrow',labels[1]==='← E 90°');
+t('t=60 -> S 180 with flow arrow',labels[2]==='↑ S 180°');
+// The SAME snippet formats the forecast rows, so measured and forecast look
+// identical in the unified tooltip (arrow glyph + cardinal point + degrees).
+const fLabels=cd({meta:{forecast_dir:[0,270,'x']}});
+t('forecast label carries the arrow glyph too',fLabels[0]==='↓ N 0°'&&fLabels[1]==='→ W 270°');
+t('forecast without direction says n/a',fLabels[2]==='direction n/a');
+const wLabels=cd({meta:{wave_direction:[45],wave_period:[6.25]}});
+t('wave label: arrow + cardinal + period',wLabels[0]==='↙ NE 45° · 6.3 s');
 
 // 3. arrows: skip points without direction / non-finite speed, angle by time
 const vars={speed:{xs:[T(0),T(30),T(60)],ys:[NaN,5,10]},dir,forecastSpeed:{xs:[T(120)],ys:[7]},forecastDir:[270]};
@@ -85,6 +92,15 @@ const spaced = ann({ vars, getFromConfig: cfg({ arrow_layout: 'top_row', arrow_s
   .filter(a => a.showarrow);
 t('arrow_spacing_hours: 1h keeps t=30 and t=120, drops t=60', spaced.length === 2
   && spaced[0].x === T(30) && spaced[1].x === T(120));
+// Measured and forecast arrows are thinned INDEPENDENTLY: a shared window
+// counter let the denser measured arrows swallow every overlapping window, so
+// the open-meteo forecast had no direction arrows at all left of "Now".
+const overlapVars = { speed: vars.speed, dir, forecastSpeed: { xs: [T(45)], ys: [7] }, forecastDir: [270] };
+const overlap = ann({ vars: overlapVars, getFromConfig: cfg({ arrow_layout: 'top_row', arrow_spacing_hours: 1 }) })
+  .filter(a => a.showarrow);
+t('forecast arrows survive inside the measured (history) zone',
+  overlap.some(a => a.x === T(45)));
+
 // arrow_length_scale amplifies the shaft length, which is the pixel distance
 // between the anchor (x/y) and the tail (ax/ay).
 const shaft = (a) => Math.hypot(a.ax, a.ay);

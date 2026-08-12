@@ -79,7 +79,7 @@
       - resample: 30m
       - fn: '$include:plotly_history_series'
       - store_var: speed
-      customdata: '$include:plotly_wind_customdata'
+      customdata: '$include:plotly_direction_label'
       hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Measured</extra>'
     - entity: sensor.boat_wind_speed
       name: Gusts (measured)
@@ -105,7 +105,7 @@
       - fn: '$include:plotly_forecast_wind_series'
       - fn: '$include:plotly_forecast_wind_store'
       - store_var: forecastSpeed
-      customdata: '$include:plotly_forecast_wind_customdata'
+      customdata: '$include:plotly_direction_label'
       hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Forecast</extra>'
       marker:
         size: 6

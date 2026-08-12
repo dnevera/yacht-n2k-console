@@ -158,12 +158,17 @@
     }
     return out;
   };
-  const arrows = thin(wave
-    ? arrowsByIndex(vars.waveHeight, vars.waveDir)
+  // Measured and forecast arrows are thinned INDEPENDENTLY: a single shared
+  // window counter over the concatenated list let the (much denser) measured
+  // arrows consume every window they overlap, which silently dropped ALL
+  // forecast arrows left of "Now" — i.e. the open-meteo history had no
+  // direction arrows at all. Each group keeps its own grid instead.
+  const arrows = wave
+    ? thin(arrowsByIndex(vars.waveHeight, vars.waveDir))
     : [
-      ...arrowsByTime(vars.speed, vars.dir, 15 * 60 * 1000, true),
-      ...arrowsByIndex(vars.forecastSpeed, vars.forecastDir),
-    ]);
+      ...thin(arrowsByTime(vars.speed, vars.dir, 15 * 60 * 1000, true)),
+      ...thin(arrowsByIndex(vars.forecastSpeed, vars.forecastDir)),
+    ];
   return [
     ...arrows,
     { xref: 'x', yref: 'paper', x: new Date(), y: 0.99, yanchor: 'top', xanchor: 'right', text: 'Now', textangle: -90, showarrow: false, xshift: -2, bgcolor: '#ffffff', borderpad: 4, font: { color: '#000000', size: 10 } },

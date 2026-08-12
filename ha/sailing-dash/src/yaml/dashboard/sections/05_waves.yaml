@@ -45,7 +45,7 @@
       - fn: '$include:plotly_forecast_wave_series'
       - fn: '$include:plotly_forecast_wave_store'
       - store_var: waveHeight
-      customdata: '$include:plotly_forecast_wave_customdata'
+      customdata: '$include:plotly_direction_label'
       hovertemplate: '%{y:.2f} m · %{customdata}<extra>Wave (forecast)</extra>'
       marker:
         size: 6

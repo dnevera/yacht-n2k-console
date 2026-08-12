@@ -10,6 +10,15 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-12 (5)
+
+- **Fixed: the open-meteo forecast had NO direction arrows in the history zone (left of "Now"):**
+  - `src/js/common/plotly_chart_annotations.js` thinned the CONCATENATED list `[measured…, forecast…]` with a single shared `arrow_spacing_hours` window counter. The measured arrows come first and are far denser (recorder history), so they consumed every window they overlapped and silently dropped all forecast arrows that fall inside the measured time range. Each group is now thinned independently, keeping the same spacing grid.
+- **Added: the direction row of the unified tooltip now shows an arrow glyph, for measurements AND forecast alike:**
+  - New single shared snippet `src/js/common/plotly_direction_label.js` formats `↗ WSW 240°` (glyph points where the wind/wave goes, exactly like the chart arrows) and serves all three traces: measured wind (direction matched by timestamp from `vars.dir`, ±15 min), forecast wind (`meta.forecast_dir`) and forecast wave (`meta.wave_direction` + period).
+  - Removed the three duplicated snippets it replaces (`plotly_wind_customdata.js`, `plotly_forecast_wind_customdata.js`, `plotly_forecast_wave_customdata.js`); `04_wind.yaml` and `05_waves.yaml` now include the same module, so measured and forecast rows can no longer drift apart in style.
+  - Tests: JS suite extended to 30 assertions (glyph for measured/forecast/wave labels, `direction n/a` kept for missing data, forecast arrows surviving inside the measured zone); 40 Python tests pass.
+
 ## 2026-08-12 (4)
 
 - **Added: `measured_arrows_on_line` — measured wind direction arrows are now anchored on the measured line (default `true`):**
