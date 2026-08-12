@@ -1,0 +1,45 @@
+- type: grid
+  cards:
+  - type: heading
+    heading_style: title
+    heading: Conditions
+  - id: windrose
+    type: custom:windrose-card
+    windspeed_bar_location: right
+    data_period:
+      period_back: -24h
+    wind_direction_entity:
+      entity: sensor.wind_direction_history
+    windspeed_entities:
+    - entity: sensor.boat_wind_speed
+      name: Speed
+    current_direction:
+      show_arrow: true
+    corner_info:
+      top_right:
+        label: Wind Speed
+        unit: ' kn'
+        entity: sensor.boat_wind_speed
+  - id: barometer_gauge
+    type: gauge
+    name: Pressure (mmHg)
+    entity: sensor.barometer_mmhg
+    min: 720
+    max: 790
+    needle: true
+    severity:
+      red: 720
+      yellow: 745
+      green: 760
+    grid_options:
+      rows: 3
+      columns: 12
+  - id: barometer_trend
+    type: tile
+    entity: sensor.barometer_mmhg
+    features:
+    - type: trend-graph
+    grid_options:
+      columns: 12
+      rows: 2
+  column_span: 1

@@ -1,0 +1,240 @@
+default_config: null
+frontend:
+  themes: !include_dir_merge_named 'themes'
+automation: !include 'automations.yaml'
+script: !include 'scripts.yaml'
+scene: !include 'scenes.yaml'
+rest:
+- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} {%- set model = {''Best match (auto)'': ''best_match'', ''ECMWF IFS 0.25°'': ''ecmwf_ifs025'', ''NOAA GFS'': ''gfs_seamless'', ''DWD ICON'': ''icon_seamless'', ''Météo-France ARPEGE'': ''meteofrance_seamless'', ''UK Met Office'': ''ukmo_seamless''}.get(states(''input_select.forecast_wind_model''), ''best_match'') -%} {%- if model in [''best_match'', ''unknown'', ''unavailable'', ''none'', ''''] -%} {%- set models = '''' -%} {%- else -%} {%- set models = ''&models='' ~ model -%} {%- endif -%} https://api.open-meteo.com/v1/forecast?latitude={{ lat }}&longitude={{ lon }}{{ models }}&hourly=windspeed_10m,windgusts_10m,winddirection_10m&wind_speed_unit=kn&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'',
+    ''forecast_hours'') | int(120))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
+  scan_interval: 900
+  sensor:
+  - name: Wind Forecast REST
+    unique_id: wind_forecast_rest
+    icon: mdi:weather-windy
+    value_template: '{{ value_json.hourly.windspeed_10m | list | first | round(1) }}'
+    unit_of_measurement: kts
+    json_attributes:
+    - hourly
+- resource_template: '{%- set lat = states(''sensor.boat_latitude_raw'') | float(0) -%} {%- set lon = states(''sensor.boat_longitude_raw'') | float(0) -%} {%- if lat | abs < 0.01 and lon | abs < 0.01 -%} {%- set lat = 42.43 -%}{%- set lon = 18.60 -%} {%- endif -%} {%- set model = {''Best match (auto)'': ''best_match'', ''ECMWF WAM 0.25°'': ''ecmwf_wam025'', ''DWD GWAM (global)'': ''gwam'', ''DWD EWAM (Europe)'': ''ewam''}.get(states(''input_select.forecast_wave_model''), ''best_match'') -%} {%- if model in [''best_match'', ''unknown'', ''unavailable'', ''none'', ''''] -%} {%- set models = '''' -%} {%- else -%} {%- set models = ''&models='' ~ model -%} {%- endif -%} https://marine-api.open-meteo.com/v1/marine?latitude={{ lat }}&longitude={{ lon }}{{ models }}&hourly=wave_height,wave_direction,wave_period&forecast_days={{ [ (((utcnow().hour + utcnow().minute / 60) + (state_attr(''sensor.chart_time_window'', ''forecast_hours'') | int(120))) / 24) | round(0, ''ceil'') | int, 16 ] | min }}&timezone=UTC'
+  scan_interval: 900
+  sensor:
+  - name: Wave Forecast REST
+    unique_id: wave_forecast_rest
+    icon: mdi:waves
+    value_template: '{{ value_json.hourly.wave_height | list | first | round(1) }}'
+    unit_of_measurement: m
+    json_attributes:
+    - hourly
+template:
+- sensor:
+  - name: Boat STW
+    unique_id: boat_stw
+    unit_of_measurement: kts
+    device_class: speed
+    availability: '{{ states(''sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced'') | is_number }}'
+    state: '{{ states(''sensor.speed_raymarine_20_442559_pk_b941014ae3e7110c03bb1cd071a22b76_speed_water_referenced'') | float(0) | round(1) }}
+
+      '
+  - name: Boat Depth
+    unique_id: boat_depth
+    unit_of_measurement: m
+    availability: '{{ states(''sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth'') | is_number }}'
+    state: '{{ states(''sensor.water_depth_raymarine_20_442559_pk_f84fbd9ceeb9d458972daa61e19e4acf_depth'') | float(0) | round(1) }}
+
+      '
+  - name: Boat Wind Speed
+    unique_id: boat_wind_speed
+    unit_of_measurement: kts
+    device_class: wind_speed
+    availability: '{{ states(''sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed'') | is_number }}'
+    state: '{{ states(''sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed'') | float(0) | round(1) }}
+
+      '
+  - name: Boat Wind Angle
+    unique_id: boat_wind_angle
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle'') | is_number }}'
+    state: '{{ states(''sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle'') | float(0) | round(0) }}
+
+      '
+  - name: Boat COG
+    unique_id: boat_cog
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog'') | is_number }}'
+    state: '{{ states(''sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_cog'') | float(0) | round(0) }}
+
+      '
+  - name: Boat SOG
+    unique_id: boat_sog
+    unit_of_measurement: kts
+    device_class: speed
+    availability: '{{ states(''sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog'') | is_number }}'
+    state: '{{ states(''sensor.cog_sog_rapid_update_raymarine_display_1180407_pk_3b6721c745c17891811fa7e601a6aa50_sog'') | float(0) | round(1) }}
+
+      '
+  - name: Boat Heading Magnetic
+    unique_id: boat_heading_magnetic
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | is_number }}'
+    state: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | float(0) | round(0) }}
+
+      '
+  - name: Boat Magnetic Variation
+    unique_id: boat_magnetic_variation
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | is_number }}'
+    state: '{% set raw = states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_variation'') %} {{ raw | float(0) | round(1) if raw | is_number else 0.0 }}
+
+      '
+  - name: Boat Heading
+    unique_id: boat_heading
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | is_number }}'
+    state: '{% set hdg = states(''sensor.boat_heading_magnetic'') | float(0) %} {% set var = states(''sensor.boat_magnetic_variation'') | float(0) %} {{ ((hdg + var) % 360) | round(0) }}
+
+      '
+  - name: Boat Latitude Raw
+    unique_id: boat_latitude_raw
+    availability: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude'') | is_number }}'
+    state: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_latitude'') | float(0) }}
+
+      '
+  - name: Boat Longitude Raw
+    unique_id: boat_longitude_raw
+    availability: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude'') | is_number }}'
+    state: '{{ states(''sensor.position_rapid_update_raymarine_display_1180407_pk_dbdf6a933ca2a0c28e21602200f43fa1_longitude'') | float(0) }}
+
+      '
+  - name: Boat Pressure Raw
+    unique_id: boat_pressure_raw
+    availability: '{{ states(''sensor.environmental_parameters_raymarine_20_442559_pk_c0b9b7c9728b2e5148992f92655bbe0c_atmospheric_pressure'') | is_number }}'
+    state: '{{ states(''sensor.environmental_parameters_raymarine_20_442559_pk_c0b9b7c9728b2e5148992f92655bbe0c_atmospheric_pressure'') | float(0) }}
+
+      '
+  - name: Boat True Wind Direction
+    unique_id: boat_true_wind_direction
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: "{{ states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle') | is_number\n     and states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed') | is_number }}"
+    state: "{% set awa = states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle') | float(0) %} {% set aws = states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed') | float(0) %} {% set ref = states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_reference') | lower %} {% set hdg = states('sensor.boat_heading') | float(0) %} {% set cog = states('sensor.boat_cog') | float(hdg) %} {% set sog = states('sensor.boat_sog') | float(0) %} {% set rad = pi / 180 %} {% if 'north' in ref %}\n  {{ (awa % 360) | round(0) }}\n{% elif 'true' in ref %}\n  {{ ((awa + hdg) % 360) | round(0) }}\n{% else %}\n  {% set th = (awa + hdg) * rad %}\n  {% set u = sog * sin(cog * rad) - aws * sin(th) %}\n  {% set v = sog * cos(cog * rad) - aws * cos(th) %}\n  {{ ((atan2(-u, -v) / rad) % 360) | round(0) }}\n{% endif %}\n"
+  - name: Boat True Wind Speed
+    unique_id: boat_true_wind_speed
+    unit_of_measurement: kts
+    device_class: wind_speed
+    availability: "{{ states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed') | is_number\n     and states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle') | is_number }}"
+    state: "{% set awa = states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle') | float(0) %} {% set aws = states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed') | float(0) %} {% set ref = states('sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_reference') | lower %} {% set hdg = states('sensor.boat_heading') | float(0) %} {% set cog = states('sensor.boat_cog') | float(hdg) %} {% set sog = states('sensor.boat_sog') | float(0) %} {% set rad = pi / 180 %} {% if 'true' in ref or 'north' in ref %}\n  {{ aws | round(1) }}\n{% else %}\n  {% set th = (awa + hdg) * rad %}\n  {% set u = sog * sin(cog * rad) - aws * sin(th) %}\n  {% set v = sog * cos(cog * rad) - aws * cos(th) %}\n  {{ sqrt(u * u + v * v) | round(1) }}\n{% endif %}\n"
+  - name: Wind Direction History
+    unique_id: wind_direction_history
+    unit_of_measurement: °
+    icon: mdi:compass-rose
+    availability: '{{ states(''sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_angle'') | is_number }}'
+    state: '{{ states(''sensor.boat_true_wind_direction'') | float(0) | round(0) }}
+
+      '
+  - name: Barometer mmHg
+    unique_id: barometer_mmhg
+    unit_of_measurement: mmHg
+    device_class: pressure
+    state: '{% set p = states(''sensor.boat_pressure_raw'') | float(0) %} {{ (p * 0.750062) | round(1) if p > 200 else (p * 7.50062) | round(1) }}
+
+      '
+  - name: Boat Latitude
+    unique_id: boat_latitude
+    icon: mdi:latitude
+    state: '{% set v = states(''sensor.boat_latitude_raw'') | float(0) %} {% set d = v | abs | int %}{% set m = ((v | abs) - d) * 60 %} {{ d }}°{{ ''%.2f'' | format(m) }}''{{ ''N'' if v >= 0 else ''S'' }}
+
+      '
+  - name: Boat Longitude
+    unique_id: boat_longitude
+    icon: mdi:longitude
+    state: '{% set v = states(''sensor.boat_longitude_raw'') | float(0) %} {% set d = v | abs | int %}{% set m = ((v | abs) - d) * 60 %} {{ d }}°{{ ''%.2f'' | format(m) }}''{{ ''E'' if v >= 0 else ''W'' }}
+
+      '
+- device_tracker:
+  - name: Nevera
+    unique_id: nevera_boat_gps
+    latitude: '{{ states(''sensor.boat_latitude_raw'') | float(0) }}
+
+      '
+    longitude: '{{ states(''sensor.boat_longitude_raw'') | float(0) }}
+
+      '
+    icon: mdi:sail-boat
+- sensor:
+  - name: Chart Time Window
+    unique_id: chart_time_window
+    icon: mdi:chart-timeline-variant
+    attributes:
+      history_hours: '{{ 12 }}'
+      forecast_hours: '{{ 120 }}'
+    state: '{{ state_attr(''sensor.chart_time_window'', ''history_hours'') }}h back / {{ state_attr(''sensor.chart_time_window'', ''forecast_hours'') }}h ahead
+
+      '
+  - name: Wind Forecast Flat
+    unique_id: wind_forecast_flat
+    unit_of_measurement: kts
+    icon: mdi:weather-windy
+    state: '{{ states(''sensor.wind_forecast_rest'') }}'
+    attributes:
+      forecast_time: '{{ state_attr(''sensor.wind_forecast_rest'', ''hourly'')[''time''] if state_attr(''sensor.wind_forecast_rest'', ''hourly'') else [] }}'
+      forecast_wind: '{{ (state_attr(''sensor.wind_forecast_rest'', ''hourly'') or {}).get(''windspeed_10m'', []) }}'
+      forecast_gust: '{{ (state_attr(''sensor.wind_forecast_rest'', ''hourly'') or {}).get(''windgusts_10m'', []) }}'
+      forecast_dir: '{{ (state_attr(''sensor.wind_forecast_rest'', ''hourly'') or {}).get(''winddirection_10m'', []) }}'
+  - name: Wind Forecast Next Hour
+    unique_id: wind_forecast_next_hour
+    unit_of_measurement: kts
+    icon: mdi:weather-windy
+    state: "{% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_wind') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wind Gust Next Hour
+    unique_id: wind_gust_next_hour
+    unit_of_measurement: kts
+    icon: mdi:weather-windy-variant
+    state: "{% set times = state_attr('sensor.wind_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wind_forecast_flat', 'forecast_gust') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and loop.index0 < vals | count and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {# Models such as ECMWF IFS publish `windgusts_10m` as an array of\n   nulls, so there is legitimately no value. The sensor stays NUMERIC\n   (it has a unit and feeds the chart), therefore it must report the\n   special `unknown` state and not a dash: a non-numeric state on a\n   sensor with `unit_of_measurement` is rejected by HA\n   (\"expected a number\") and ends up as `unknown` anyway, only with an\n   error per poll in the log. The dash is rendered by the glance tile\n   in src/yaml/dashboard/sections/04_wind.yaml. #}\n{{ (ns.v | float(0)) | round(1) if ns.v is not none and ns.v\
+      \ | is_number else 'unknown' }}\n"
+  - name: Wave Forecast Flat
+    unique_id: wave_forecast_flat
+    unit_of_measurement: m
+    icon: mdi:waves
+    state: '{{ states(''sensor.wave_forecast_rest'') }}'
+    attributes:
+      forecast_time: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''time''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_height: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_height''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_direction: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_direction''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+      wave_period: '{{ state_attr(''sensor.wave_forecast_rest'', ''hourly'')[''wave_period''] if state_attr(''sensor.wave_forecast_rest'', ''hourly'') else [] }}'
+  - name: Wave Height Next Hour
+    unique_id: wave_height_next_hour
+    unit_of_measurement: m
+    icon: mdi:waves
+    state: "{% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_height') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+  - name: Wave Period Next Hour
+    unique_id: wave_period_next_hour
+    unit_of_measurement: s
+    icon: mdi:waves-arrow-up
+    state: "{% set times = state_attr('sensor.wave_forecast_flat', 'forecast_time') or [] %} {% set vals = state_attr('sensor.wave_forecast_flat', 'wave_period') or [] %} {% set ns = namespace(v = none) %} {% for t in times %}\n  {% if ns.v is none and as_timestamp(t ~ '+00:00', 0) >= as_timestamp(now()) %}\n    {% set ns.v = vals[loop.index0] %}\n  {% endif %}\n{% endfor %} {{ (ns.v | float(0)) | round(1) if ns.v is not none else 'unknown' }}\n"
+input_select:
+  forecast_wind_model:
+    name: Wind forecast model
+    icon: mdi:weather-windy
+    options:
+    - Best match (auto)
+    - ECMWF IFS 0.25°
+    - NOAA GFS
+    - DWD ICON
+    - Météo-France ARPEGE
+    - UK Met Office
+    initial: Best match (auto)
+  forecast_wave_model:
+    name: Wave forecast model
+    icon: mdi:waves
+    options:
+    - Best match (auto)
+    - ECMWF WAM 0.25°
+    - DWD GWAM (global)
+    - DWD EWAM (Europe)
+    initial: Best match (auto)

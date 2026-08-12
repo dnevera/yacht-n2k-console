@@ -1,0 +1,247 @@
+- type: grid
+  cards:
+#  - type: heading
+#    heading_style: title
+#    heading: Wind Direction & Speed
+#    icon: mdi:weather-windy
+#    grid_options:
+#      columns: 24
+  # Open-Meteo model selector, sitting in the heading row as its continuation:
+  # [Wind Direction & Speed --- [model]]. Picking another model re-renders the
+  # REST `resource_template` (see src/yaml/sensors/open_meteo.yaml) and the
+  # refresh automation re-polls at once - no rebuild, no HA restart.
+  # A `tile` with the native `select-options` feature is used instead of an
+  # `entities` card: it is a plain dropdown with no card header, so it reads as
+  # part of the heading rather than as a separate card.
+  - id: forecast_model
+    type: tile
+    entity: input_select.forecast_wind_model
+    hide_state: true
+    vertical: false
+    name: Wind Direction & Speed
+    features_position: inline
+    features:
+    - type: select-options
+    grid_options:
+      columns: 36
+  - id: glance
+    type: glance
+    show_icon: false
+    state_color: false
+    columns: 3
+    entities:
+    - entity: sensor.boat_wind_speed
+      name: Measured now
+      card_mod:
+        style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
+          \  line-height: 14px !important;\n  color: var(--secondary-text-color)\
+          \ !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight:\
+          \ 500 !important;\n  line-height: 30px !important;\n  color: #4fc3f7 !important;\n\
+          }\n"
+    - entity: sensor.wind_forecast_next_hour
+      name: Forecast next 1h
+      card_mod:
+        style: "div.name {\n  font-size: 12px !important;\n  font-weight: 400 !important;\n\
+          \  line-height: 14px !important;\n  color: var(--secondary-text-color)\
+          \ !important;\n}\ndiv:not(.name) {\n  font-size: 26px !important;\n  font-weight:\
+          \ 500 !important;\n  line-height: 30px !important;\n  color: #b0bec5 !important;\n\
+          }\n"
+    - entity: sensor.wind_gust_next_hour
+      name: Gusts next 1h
+      # Not every Open-Meteo model publishes gusts (ECMWF IFS returns an array
+      # of nulls), and the sensor stays numeric, so it reports `unknown` in that
+      # case. Rendering it as "Unknown" reads like a failure, so the tile itself
+      # hides the state text and draws a plain dash instead: the value is
+      # legitimately absent for the selected model, not broken.
+      card_mod:
+        style: |
+          div.name {
+            font-size: 12px !important;
+            font-weight: 400 !important;
+            line-height: 14px !important;
+            color: var(--secondary-text-color) !important;
+          }
+          div:not(.name) {
+            font-size: 26px !important;
+            font-weight: 500 !important;
+            line-height: 30px !important;
+            color: #ff7043 !important;
+            {% if states('sensor.wind_gust_next_hour') in ['unknown', 'unavailable', 'none', ''] %}
+            font-size: 0 !important;
+            {% endif %}
+          }
+          div:not(.name)::after {
+            {% if states('sensor.wind_gust_next_hour') in ['unknown', 'unavailable', 'none', ''] %}
+            content: "—";
+            font-size: 26px !important;
+            font-weight: 500 !important;
+            line-height: 30px !important;
+            {% endif %}
+          }
+    card_mod:
+      style: "ha-card { padding: 10px 8px 6px !important; }\n.entities { padding:\
+        \ 0 !important; }\n.entity {\n  flex-direction: column-reverse !important;\n\
+        }\n"
+    grid_options:
+      columns: 36
+  - id: chart
+    type: custom:plotly-graph
+    hours_to_show: 76
+    time_offset: 72h
+    entities:
+    # `map_y` + drop-non-finite BEFORE `resample`: a recorder history contains
+    # `unknown`/`unavailable` states (HA restart, or a derived alias going
+    # unavailable while the N2K bus is quiet), `parseFloat` turns those into
+    # NaN, and resampling a bucket that holds a single NaN poisons the whole
+    # bucket — the trace, the colour scale and the Y axis then render garbage.
+    # Dropping them first leaves an honest gap instead.
+    - entity: sensor.wind_direction_history
+      internal: true
+      extend_to_present: false
+      filters:
+      - map_y: parseFloat(y)
+      - fn: '$include:plotly_history_series'
+      # Averaged over the grid step of the ACTIVE Open-Meteo model (directions
+      # as vectors) so measurements are comparable with the forecast instead of
+      # jittering around it. Dropped by build.py when `measured_averaging: none`.
+      - fn: '$include:plotly_measured_average'
+      - fn: '$include:plotly_history_series'
+      - store_var: dir
+    - entity: sensor.boat_wind_speed
+      name: Measured
+      # We do not care about every exact instantaneous NMEA sample here — the
+      # line shape is set globally by `line_smoothing` in config.yaml and
+      # injected by build.py, so it can never drift between the charts.
+      mode: lines
+      line:
+        width: 2
+        color: '#4fc3f7'
+      extend_to_present: false
+      filters:
+      - map_y: parseFloat(y)
+      - fn: '$include:plotly_history_series'
+      # Averaged over the grid step of the ACTIVE Open-Meteo model (directions
+      # as vectors) so measurements are comparable with the forecast instead of
+      # jittering around it. Dropped by build.py when `measured_averaging: none`.
+      - fn: '$include:plotly_measured_average'
+      - fn: '$include:plotly_history_series'
+      - store_var: speed
+      customdata: '$include:plotly_direction_label'
+      hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Measured</extra>'
+    - entity: sensor.boat_wind_speed
+      name: Gusts (measured)
+      mode: lines
+      extend_to_present: false
+      filters:
+      - map_y: parseFloat(y)
+      - fn: '$include:plotly_history_series'
+      - fn: '$include:plotly_wind_gust_bucket'
+      - fn: '$include:plotly_history_series'
+      hovertemplate: '%{y:.1f} kt<extra>Gusts (measured)</extra>'
+      line:
+        dash: dot
+        width: 1
+        color: '#b0bec5'
+    - entity: sensor.wind_forecast_flat
+      name: Forecast
+      mode: markers
+      extend_to_present: false
+      filters:
+      - fn: '$include:plotly_forecast_wind_series'
+      - fn: '$include:plotly_forecast_wind_store'
+      - store_var: forecastSpeed
+      customdata: '$include:plotly_direction_label'
+      hovertemplate: '%{y:.1f} kt · %{customdata}<extra>Forecast</extra>'
+      marker:
+        size: 6
+        symbol: diamond
+        color: '#ff7043'
+        line:
+          width: 0
+    - entity: sensor.boat_wind_speed
+      name: kt scale
+      mode: markers
+      showlegend: false
+      hoverinfo: skip
+      extend_to_present: false
+      filters:
+      - map_y: parseFloat(y)
+      - fn: '$include:plotly_history_series'
+      - resample: 30m
+      - fn: '$include:plotly_empty_series'
+      marker:
+        size: 0.1
+        opacity: 0
+        color: $ex ys
+        colorscale:
+        - - 0
+          - '#b0e2ff'
+        - - 0.125
+          - '#61c4e0'
+        - - 0.25
+          - '#4bbf7a'
+        - - 0.375
+          - '#a8d048'
+        - - 0.5
+          - '#f5e642'
+        - - 0.625
+          - '#f2a93b'
+        - - 0.75
+          - '#eb5c2a'
+        - - 0.875
+          - '#d62828'
+        - - 1
+          - '#8e1b8e'
+        cmin: 0
+        cmax: 40
+        showscale: true
+        colorbar:
+          title:
+            text: kt
+            side: top
+          ticksuffix: ' kt'
+          len: 0.9
+    - entity: sensor.wind_forecast_flat
+      name: Gusts (forecast)
+      mode: lines
+      extend_to_present: false
+      filters:
+      - fn: '$include:plotly_forecast_gust_series'
+      hovertemplate: '%{y:.1f} kt<extra>Gusts (forecast)</extra>'
+      line:
+        dash: dot
+        width: 1
+        color: '#78909c'
+    on_dblclick: "$include:plotly_reset_on_dblclick"
+    config:
+      scrollZoom: false
+      displayModeBar: false
+      doubleClick: false
+    layout:
+      dragmode: pan
+      hovermode: x unified
+      xaxis:
+        showspikes: true
+        spikemode: across
+        spikedash: dash
+        spikethickness: 1
+        spikecolor: '#90a4ae'
+        spikesnap: cursor
+      yaxis:
+        title: Wind speed (kts)
+        rangemode: tozero
+        autorange: true
+        fixedrange: true
+        showspikes: false
+      legend:
+        orientation: h
+        x: 0.5
+        xanchor: center
+        y: -0.3
+      margin:
+        b: 70
+      annotations: "$include:plotly_chart_annotations"
+      shapes: "$include:plotly_touch_patch_shapes"
+    grid_options:
+      columns: 36
+  column_span: 3

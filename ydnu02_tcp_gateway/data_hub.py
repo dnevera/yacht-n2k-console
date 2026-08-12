@@ -51,12 +51,15 @@ HA REGISTRY STABILITY & unique_number
   Using .name would produce a different MD5 on every gateway restart, creating a new
   HA device entry each time and accumulating duplicates in the registry.
 
-  Stable hashes (patch-v2, unique_number-based):
+  Stable hashes (unique_number-based):
     SA=64  unique_number=402047 → hash=ef195c7c99c762fdfda4e198aae87930
     SA=200 unique_number=902047 → hash=c11f5c824c71fe7e186cba56bf0f8672
 
   If duplicates appear in HA: run `./deploy.sh --clean-ha` to purge stale entries.
-  The patch is applied by scripts/patch_ha_nmea2000_message.py (marker: patch-v2).
+  There are no patch scripts: the fix ships inside our fork's tag
+  dnevera/nmea2000@cpu-overload-fix, which requirements.txt and the ha-nmea2000
+  fork's manifest.json both pin. `./deploy.sh --check-ha` verifies that the
+  library actually installed is that fork and not a plain PyPI release.
 
 SKILLS / DIAGNOSTIC MINI-PROMPTS
 ================================

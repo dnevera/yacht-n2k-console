@@ -16,155 +16,345 @@ every edit).
 The dashboard was originally created via the HA UI (a *storage-mode*
 dashboard), so its config only lived inside HA's internal state file
 `.storage/lovelace.dashboard_sailing` on the target host — not as a plain
-file anyone could review, diff, or restore from git. This directory makes
-`dashboard-sailing.yaml` the source of truth and provides a script to push
-edits back into HA's storage.
+file anyone could review, diff, or restore from git. This project organizes
+the dashboard into modular source components under `src/`, compiles them into
+`build/` via `build.py`, and provides scripts to preview and deploy changes.
 
-## Files
+## Structure & Build Process
 
-- `deploy.sh` — **the single entry point for all deploys** (2026-08-09).
-  `--install`/`--update` run all three steps below in order; `--resources-
-  only`/`--dashboard-only`/`--sensors-only` run just one. See "Deploying"
-  below.
-- `dashboard-sailing.yaml` — the dashboard's `views:` config (Lovelace
-  "sections" view layout), extracted from the live instance on 2026-08-09.
-- `deploy_dashboard.sh` — converts the YAML back into the JSON shape HA
-  expects and uploads it into the `homeassistant` docker container's
-  `.storage/lovelace.dashboard_sailing`, backing up the previous version
-  on the remote host first, then **restarts Home Assistant** (required —
-  see "Why the dashboard deploy restarts HA" below).
-- `sensors-sailing.yaml` — the `rest:`/`template:` sensor + `device_tracker:`
-  config the dashboard depends on but which is NOT published by
-  `ydnu02_tcp_gateway`: the open-meteo wind forecast pipeline
-  (`sensor.wind_forecast_rest` → `sensor.wind_forecast_flat`) plus
-  `sensor.barometer_mmhg`/`sensor.boat_latitude`/`sensor.boat_longitude`
-  (derived from N2K sensors). Extracted from `/config/configuration.yaml`
-  on 2026-08-09.
-- `deploy_sensors.sh` — idempotently merges `sensors-sailing.yaml` into the
-  remote `/config/configuration.yaml` (matching existing entries by
-  `unique_id` so re-running it updates in place instead of duplicating),
-  backs up the previous file, and restarts the `homeassistant` container
-  (required — unlike the dashboard, `configuration.yaml` isn't
-  hot-reloadable).
-- `lovelace-resources.yaml` — list of ALL frontend resources the dashboard's
-  custom cards need: HACS-managed ones (`card-mod`, `compass-card`,
-  `apexcharts-card` — installed/managed via HACS in the UI, this file just
-  documents what must be present) and manually-installed ones
-  (`windrose-card`, `plotly-graph-card` — deployed by `deploy.sh`, see
-  "Deploying" below).
-- `local-preview/` — offline browser test rig (2026-08-09): renders the
-  real custom card bundles against a fake `hass`, so config/schema errors
-  and new draft configs (e.g. the `plotly-graph-card` sketch below) can be
-  checked **without** a live HA instance or a deploy cycle. See
-  `local-preview/README.md` for usage.
+The project is modularized into source components under `src/` and compiled into `build/` via `build.py`:
 
-## Dashboard layout (re-synced 2026-08-09, after the user rearranged tiles in the HA UI)
-
-1. **Wind & Forecast** — `custom:windrose-card` (history + current wind
-   direction/speed, see "Wind direction — windrose + timeline chart"
-   below), then a single `custom:apexcharts-card` "Wind — History &
-   Forecast" (measured wind vs. forecast wind/gusts pulled from
-   `sensor.wind_forecast_flat` attributes). **The wind `compass-card` that
-   used to sit here is GONE** (2026-08-09, ~13:40) — the user replaced it
-   with the windrose card directly in the HA UI and deleted the separate
-   "Wind Direction — History (rose)" subsection the rose used to live in;
-   do not reintroduce either without checking the live config first (see
-   "Editing the dashboard" below). **The combined "Wind Direction & Speed —
-   Timeline" `apexcharts-card` is also GONE again** (2026-08-09, ~14:15) —
-   the user removed it after it kept failing (see "Wind vector/arrow chart
-   — apexcharts-card limitation and the plotly-graph-card plan" below for
-   why, and the proposed replacement using a different custom card).
-   **Default view fixed (2026-08-09):** `graph_span`/`span` previously
-   rounded to the top of the hour and started 6h in the past
-   (`start: hour, offset: -6h`, `graph_span: 30h`) - since most of that
-   30h window is future forecast, recent measurements were squeezed into a
-   thin sliver on the left, which looked "randomly centered" and forced a
-   manual zoom/reset-zoom click every load. Changed to
-   `span: { start: minute, offset: -2h }` + `graph_span: 26h` - an exact,
-   non-rounded "now minus 2 hours" anchor, so the chart always opens
-   showing the last 2 hours of measured data in a consistent position. The
-   two `data_generator` forecast/gust series' internal `rangeStart` filter
-   was updated from `-6h` to `-2h` to match.
-2. **Weather & Forecast** — the Windy `iframe` widget (alternative
-   forecast/history view, tap-to-open windy.com, see "Windy alternative
-   view" below), a barometric pressure gauge, and a pressure `tile` card
-   with a `trend-graph` feature.
-3. **Position** — COG `compass-card` (still used here, now also showing SOG
-   as its value sensor), map (`device_tracker.nevera`, the boat's own N2K
-   GPS position — see "Boat position on the map" below), latitude/longitude
-   entities.
-4. **Speed & Depth** — SOG gauge, STW gauge, Depth gauge (each in its own
-   grid section; the last section title still says "New section" in HA —
-   left as-is to match the live dashboard, rename in the YAML + redeploy
-   if desired).
-
-This layout has been reshuffled by the user directly in the HA UI more than
-once (headings/positions of the compass, pressure gauge, etc. moved between
-sections) — `dashboard-sailing.yaml` is re-synced from the live
-`.storage/lovelace.dashboard_sailing` config each time this happens, so it
-always reflects the exact current on-screen arrangement rather than a fixed
-"canonical" layout.
-
-All N2K-derived sensors (COG/SOG, wind, STW, depth) are published by
-`ydnu02_tcp_gateway` — see the `nmea2000-setup` skill / `AGENTS.md` for how
-those entities get into HA in the first place.
-
-## Deploying (`deploy.sh` — the ONLY supported way)
-
-**As of 2026-08-09, `./deploy.sh` is the single entry point for deploying
-ANY part of this stack — do not `scp`/`docker cp` files onto the HA host
-by hand.** It wraps three pieces: manually-installed card `.js` bundles
-(`windrose-card`, `plotly-graph-card` — anything not in HACS) +
-`lovelace_resources` registration, `sensors-sailing.yaml`
-(`deploy_sensors.sh`), and `dashboard-sailing.yaml` (`deploy_dashboard.sh`).
-The underlying `deploy_dashboard.sh`/`deploy_sensors.sh` scripts still exist
-and can be called directly, but `deploy.sh` is what you should reach for by
-default since it always keeps all three in sync in one command.
-
-```bash
-./deploy.sh --install [user@host]   # fresh HA instance: resources + sensors + dashboard
-./deploy.sh --update  [user@host]   # existing install, same 3 steps (default if no flag given)
-./deploy.sh --resources-only [user@host]   # just sync manually-installed card JS + resource list
-./deploy.sh --dashboard-only [user@host]   # just dashboard-sailing.yaml
-./deploy.sh --sensors-only   [user@host]   # just sensors-sailing.yaml
+```
+ha/sailing-dash/
+├── build.py                      # Build script compiling src/ into build/
+├── build_docker.sh               # Build script for Stage HA Docker image & container
+├── start_stage.py                # Stage HA orchestrator (--demo / --live + file watcher)
+├── run_stage.sh                  # Shell entrypoint for launching Stage HA environment
+├── deploy.sh                     # Unified deploy script (--stage / --prod)
+├── deploy_dashboard.sh           # Dashboard deploy script (--stage / --prod)
+├── deploy_sensors.sh             # Sensors deploy script (--stage / --prod)
+├── INSTALLATION.md               # Environment setup & installation guide
+├── TEST.md                       # Test suites & verification procedures
+├── local-ha/                     # Stage Home Assistant Docker environment
+│   ├── Dockerfile                # Custom Dockerfile for local-ha Stage image
+│   ├── docker-compose.yml        # Docker compose specification for local-ha
+│   ├── mock_nmea_emulator.py     # Local NMEA 2000 PGN frames emulator (Demo mode)
+│   └── config/                   # Stage HA config & .storage/ initialized artifacts
+├── src/                          # Modular source files
+│   ├── js/                       # Reusable JS code and cards
+│   │   ├── common/               # Utility functions (color scales, Plotly helpers, time series)
+│   │   └── cards/                # Custom cards source (e.g. windy-boat-card.js)
+│   └── yaml/                     # Modular YAML configurations
+│       ├── dashboard/            # Dashboard header and sections (01_sensors, 02_position, etc.)
+│       ├── sensors/              # Open-meteo REST/template and derived N2K sensors
+│       ├── automations/          # Automations (forecast refresh)
+│       └── resources/            # Lovelace resources specification
+└── build/                        # Target deployable artifacts generated by build.py
+    ├── dashboard-sailing.yaml
+    ├── sensors-sailing.yaml
+    ├── automations-sailing.yaml
+    └── lovelace-resources.yaml
 ```
 
-HACS-managed cards (`card-mod`, `compass-card`, `apexcharts-card`, listed in
-`lovelace-resources.yaml`) are **not** touched by `deploy.sh` — install
-those once via HACS → Frontend, same as before. `--install`/
-`--resources-only` need `local-preview/vendor/*.js` present locally (run
-`local-preview/fetch-vendor.sh` first if missing) — those are the actual
-bundles pushed to `/config/www/` on the remote host.
+Before deploying, `deploy.sh` automatically invokes `python3 build.py` to ensure build artifacts in `build/` are completely up-to-date.
 
-The map card uses `device_tracker.nevera`, deployed by the sensors step
-above — no phone/Companion App setup is required for the map to work (see
-"Boat position on the map" below).
+## Customizing Dashboard & Time Windows (`config.yaml`)
 
-## Editing the dashboard
+Custom build parameters and visibility toggles are managed in `ha/sailing-dash/config.yaml` (default template provided in `config.yaml.template`):
 
-**Always compare HA vs. local before deploying.** The user has repeatedly
-rearranged tiles directly in the HA UI in the past — if this repo's
-`dashboard-sailing.yaml` isn't re-synced first, deploying would silently
-overwrite those manual changes. `deploy_dashboard.sh` now does this
-automatically (step 2b: pulls the live `.storage` config, converts it to
-YAML, and diffs it against the local file, printing the diff every run;
-set `REQUIRE_CLEAN_DIFF=1` to make it abort instead of just warning when
-they differ). `deploy_sensors.sh` already fetches+diffs the remote
-`configuration.yaml` before merging, for the same reason. If either diff
-shows unexpected changes, pull the live version into the repo file first
-(see "Dashboard layout" above) before pushing your own edits on top of it.
+```yaml
+chart_style: open_meteo   # Style of ALL charts (wind + waves):
+                          #   open_meteo = direction arrows in one row on top of the chart
+                          #   plotly     = one arrow per data point, on the value line
+arrow_spacing_hours: 3    # Hours between direction arrows (0 = every point)
+arrow_length_scale: 3     # Arrow length amplifier: shaft grows with wind speed / wave height
+measured_arrows_on_line: true  # Measured (NMEA) arrows anchored on the measured line
+forecast_style: markers   # How the forecast series is drawn: markers | circle | line | dot
+line_smoothing: spline    # Smoothing of every line trace: spline | smooth | none
+measured_averaging: model_step  # Average measured series over the model step | none
+zoom_controls: true       # Zoom/pan the time axis + vertical +/-/reset button column
+now_label_opacity: 0.55   # Opacity of the "Now" badge (0..1)
+forecast_history_arrow_opacity: 0.4  # Opacity of forecast arrows left of Now (0 = hide)
 
-1. Edit `dashboard-sailing.yaml` in this repo.
-2. Optional but recommended for new/risky custom-card configs (dual-axis
-   charts, unfamiliar card options, etc.): copy the changed card's config
-   into `local-preview/card-configs.js` and run the offline browser check
-   (`local-preview/README.md`) — it renders the real card bundle and shows
-   config/schema errors immediately, without a deploy-and-restart cycle.
-3. Run `./deploy.sh --update` (or `./deploy.sh --dashboard-only` if only
-   the dashboard changed — see "Deploying" above). Review the printed
-   pre-deploy diff before it uploads.
-4. Reload the dashboard in the browser (the script already restarted HA,
-   wait ~30s for it to come back up).
+forecast_models:          # Models offered by the dashboard's model selector
+  wind:                   #   (wind = forecast API, waves = marine API)
+    options: [best_match, ecmwf_ifs025, gfs_seamless, icon_seamless, meteofrance_seamless, ukmo_seamless]
+    default: best_match   # best_match = send NO models= parameter
+  wave:
+    options: [best_match, ecmwf_wam025, gwam, ewam]
+    default: best_match
+
+colors:                   # One definition per role, applied to trace AND tile
+  measured: '#4fc3f7'
+  measured_gusts: '#b0bec5'
+  forecast: '#ff7043'
+  forecast_gusts: '#78909c'
+
+time_window:
+  history_hours: 4   # Measured history time window drawn left of Now (hours)
+  forecast_days: 3   # Forecast window drawn right of Now (days) for REST queries and charts
+
+sections:
+  sensors:
+    enabled: true
+    cards:
+      stw_gauge: true
+      depth_gauge: true
+      sog_gauge: true
+  position:
+    enabled: true
+    cards:
+      hdg_compass: true
+      cog_compass: true
+      map: true
+      latitude: true
+      longitude: true
+  conditions:
+    enabled: true
+    cards:
+      windrose: true
+      barometer_gauge: true
+      barometer_trend: true
+  wind:
+    enabled: true
+    cards:
+      glance: true
+      chart: true
+  waves:
+    enabled: true
+    cards:
+      glance: true
+      chart: true
+  forecast:
+    enabled: true
+    cards:
+      windy_map: true
+```
+
+### Interactive Setup Wizard
+During setup or reconfiguration, run:
+```bash
+./install_wizard.sh --config
+# or directly via helper:
+python3 helpers/configure.py
+```
+This guides the installer through interactive prompts for the global chart style (`open_meteo` / `plotly`) with its arrow spacing, history/forecast time windows, and section/card visibility choices before `build.py` runs.
+
+### Chart Styles (global)
+
+There is only **one** chart engine — `custom:plotly-graph`. The top-level
+`chart_style` option selects how the direction arrows are laid out over the very
+same chart (same series, same unified tooltip, same colour bar) and it applies to
+**every** chart — wind and waves alike. `build.py` injects that choice into each
+chart card as `arrow_layout` (plus `arrow_kind`, picking the wind/wave flavour),
+and the single shared `src/js/common/plotly_chart_annotations.js` layer reads them
+at runtime:
+
+| `chart_style` | `arrow_layout` | Arrows |
+| --- | --- | --- |
+| `open_meteo` (default) | `top_row` | One straight row just under the chart's top edge, open-meteo.com forecast-preview style |
+| `plotly` | `on_point` | Each arrow sits on its own data point, following the value line |
+
+`arrow_spacing_hours` (default 3) thins the arrow row out on both charts, and
+`arrow_length_scale` (default 3) amplifies the arrow length: the shaft grows
+with the value (wind speed in knots, wave height in metres) multiplied by that
+factor, capped so arrows never leave the chart. `1` reproduces the old, barely
+visible growth.
+
+`measured_arrows_on_line` (default `true`) keeps the arrows of the measured
+(NMEA history) series anchored on the measured value line, so the direction of
+the measured wind is unambiguous in the history zone, while forecast arrows
+still follow `chart_style`. Set it to `false` to push measured arrows into the
+top row as well (only affects `chart_style: open_meteo`).
+
+`forecast_style` (default `markers`) selects how the forecast value series is
+drawn on every chart at once: `markers` (diamonds), `circle` (round markers),
+`line` (solid line) or `dot` (dotted line).
+
+`line_smoothing` (default `spline`) sets the shape of **every** line trace of
+both charts — measured, measured gusts, forecast and forecast gusts alike:
+`spline` (smoothed curve, `smoothing: 0.6`), `smooth` (stronger smoothing,
+`1.3`) or `none` (raw polyline, `shape: linear`). Marker-only forecast styles
+have nothing to smooth and are left untouched.
+
+`measured_averaging` (default `model_step`) averages the measured (NMEA) series
+over the grid step of the **active** Open-Meteo model before drawing them. The
+step is taken from the forecast timestamps themselves, so it follows the model
+picked on the dashboard (1 h, 3 h, ...). Directions are averaged as **vectors**
+via sin/cos — the arithmetic mean of 350° and 10° is 180°, i.e. the exact
+opposite of the correct 0°. Without it the measured arrows jitter by tens of
+degrees around an hourly-mean forecast and look like they disagree with it even
+when their mean matches it exactly. Set it to `none` to draw every raw sample.
+
+`zoom_controls` (default `true`) unlocks the **time axis only**: the mouse wheel
+zooms in a browser, pinch zooms and one finger pans on a phone, and a vertical
+`+ / − / reset` button column is shown on the right edge of the chart (the only
+way to zoom on touch devices without a wheel). The Y axis always stays
+`fixedrange: true`, so traces can never be dragged off the value scale. Set it
+to `false` for completely static charts.
+
+### Switching the Open-Meteo forecast model from the dashboard
+
+The weather model is **not** a build-time constant: each chart section carries a
+model dropdown **in its own heading row** (card id `forecast_model`, a `tile`
+with the native `select-options` feature) — the *Wind* heading selects
+`input_select.forecast_wind_model`, the *Waves* heading
+`input_select.forecast_wave_model`. Both helpers are generated by `build.py`
+into `build/helpers-sailing.yaml` from the `forecast_models` block above and
+merged into the target's `configuration.yaml` by `helpers/deploy_sensors.sh`.
+They stay two separate selectors on purpose: waves come from the *marine* API,
+whose model ids do not match the forecast API's (`ecmwf_ifs025` is rejected
+there), so a single shared selection could not cover both.
+
+The dropdown lists **human readable titles** (`ECMWF IFS 0.25°`), not raw API
+ids: the helper stores what it shows, so `build.py` injects the same
+`title -> id` table into both REST `resource_template`s, which map the selection
+back to the id the URL needs. `Best match (auto)` (and any unknown/unavailable
+helper state) emits **no** `models=` parameter at all — `models=best_match` is
+not a valid id and the API rejects the whole request.
+
+Both REST `resource_template`s render `models=` from those helpers and are
+re-rendered on **every** poll, so picking another model in the UI takes effect
+immediately: `refresh_forecast.yaml` triggers on the helper's state change and
+re-polls `sensor.wind_forecast_rest` / `sensor.wave_forecast_rest` without the
+startup delay. No rebuild, no Home Assistant restart.
+
+That automation is delivered to `/config/automations.yaml` (merged per `id`, so
+crew-authored automations are kept) — it can **not** live in
+`configuration.yaml`, which already holds `automation: !include automations.yaml`.
+Without that delivery the model switch only takes effect on the next
+`scan_interval` (15 min).
+
+`best_match` is not a real model id — it means "send no `models=` parameter at
+all" and let Open-Meteo pick the best model for the boat's position; the same
+applies while a helper is still `unknown`/`unavailable`. Note that
+`meteofrance_wam` is **not** a valid marine model (the API answers HTTP 400), so
+it is deliberately absent from the wave list.
+
+`now_label_opacity` (default `0.55`) makes the "Now" badge translucent so the
+traces underneath stay visible; a time tick with the current time is drawn where
+the dashed "Now" line meets the X axis.
+
+`forecast_history_arrow_opacity` (default `0.4`) fades the forecast direction
+arrows that fall left of "Now" (the Open-Meteo history overlapping the measured
+zone) so they read as background next to the measured arrows; `0` hides them.
+
+The `colors` block defines each series colour once — `build.py` applies it both
+to the trace and to the matching value tile, so a chart line and its tile can
+never drift apart.
+
+## Key Files
+
+Everything except `deploy.sh`, `run_stage.sh` and `install_wizard.sh` lives in `helpers/` — call
+those as `python3 helpers/<script>.py`.
+
+- `install_wizard.sh` — **guided install / re-install for any profile** (`--target <profile>`). Runs every automatable step in order and stops at two blocking gates: **GATE A** (HACS activated in the UI, verified by `helpers/stage_provisioner.py check-hacs`) and **GATE B** (NMEA 2000 config entry on the tcp-gw plus raw entities, verified by `deploy.sh --preflight`). A gate never continues on a warning and behaves identically on Stage and Prod. Flags: `--config`, `--list`, `--from N`, `--only N`, `--reinstall`, `--dry-run`.
+- `config.yaml` / `config.yaml.template` — **central build configuration**. Controls chart time windows (`history_hours`, `forecast_days`), the global chart style (`chart_style`, `arrow_spacing_hours`, `arrow_length_scale`) and section/card visibility toggles.
+- `helpers/configure.py` — **interactive configuration wizard**. CLI helper executed by `./install_wizard.sh --config` to prompt for time windows and section/card enablement choices.
+- `build.py` — **automated build engine**. Compiles modular source code from `src/` into deployable target YAML/JS files in `build/`.
+- `build_docker.sh` — **HA Docker build script**. Compiles source modules, builds the custom Stage Home Assistant Docker image (`local-ha`), starts the container, and deploys build artifacts.
+- `start_stage.py` / `run_stage.sh` — **Stage environment orchestrator**. Launches local Docker container (`local-ha`), controls NMEA telemetry (`--demo` local simulator or `--live` TCP gateway), triggers `build.py` + `./deploy.sh --stage`, and watches `src/` for live auto-rebuilding. `--provision-only` stops after provisioning (no deploy) — that is what `install_wizard.sh` uses so its gates are not bypassed.
+- `deploy.sh` — **unified entry point for all deploys**.
+  Supports any named profile via `--target <profile>` (`--stage` / `--prod` are aliases).
+  Sub-modes: `--install`/`--update` (all resources + sensors + dashboard), `--resources-only`, `--dashboard-only`, `--sensors-only`, plus `--bootstrap` (deliver HACS + integration + cards from `build/deps/`), `--preflight` (read-only readiness gate) and `--rollback`.
+- `build/dashboard-sailing.yaml` — compiled Lovelace "sections" view dashboard config generated from `src/yaml/dashboard/`.
+- `deploy_dashboard.sh` — converts `build/dashboard-sailing.yaml` into JSON and uploads it into the target HA container's `.storage/lovelace.dashboard_sailing` (`--stage` or `--prod`), backing up the previous version first, then **restarts Home Assistant**.
+- `build/sensors-sailing.yaml` — compiled `rest:`/`template:` sensor + `device_tracker:` config generated from `src/yaml/sensors/`.
+- `deploy_sensors.sh` — idempotently merges `build/sensors-sailing.yaml` into the target container's `/config/configuration.yaml` (`--stage` or `--prod`) and restarts Home Assistant.
+- `local-ha/mock_nmea_emulator.py` — Python NMEA 2000 PGN frame emulator broadcasting STW, Depth, Wind, Position, Heading, COG/SOG, and Pressure frames on TCP port 4001 for Demo mode.
+- `INSTALLATION.md` — detailed installation & environment setup guide for Stage and Prod.
+- `TEST.md` — comprehensive testing & verification suite.
+
+## Stage Debugging & Deployment Pipeline
+
+Instead of static HTML previews, dashboard development and custom card debugging are performed on a **full local Home Assistant instance** running in Docker (`local-ha`).
+
+### Stage Environment Launch
+```bash
+# Option 1: Using the convenience shell wrapper (Demo mode with local NMEA emulator)
+./run_stage.sh
+
+# Option 2: Live mode connected to remote vessel NMEA gateway
+./run_stage.sh --live --gw-host bumblebee.local
+```
+
+When launched, `start_stage.py`:
+1. Executes `build.py` to compile all source modules into `build/`.
+2. Starts the `local-ha` Docker container via `docker compose`.
+3. Launches `mock_nmea_emulator.py` broadcasting live PGN frames on TCP port 4001 (in `--demo` mode).
+4. Deploys compiled artifacts directly into `local-ha` via `./deploy.sh --stage`.
+5. Watches `src/` for modifications, re-compiling and re-deploying automatically on any file changes.
+6. Serves the dashboard live at `http://localhost:8123/dashboard-sailing/`.
+
+### Stage vs Prod Deploy Commands
+
+```bash
+# Stage deployment (direct local Docker execution, no SSH required)
+./deploy.sh --stage
+
+# Prod deployment (remote deployment over SSH to bumblebee.local)
+./deploy.sh --prod
+
+# Specific component deploys
+./deploy.sh --stage --dashboard-only
+./deploy.sh --prod --sensors-only
+
+# Re-upload everything even if the target already holds identical content
+./deploy.sh --prod --force
+```
+
+### Incremental delivery (what is actually copied)
+
+A deploy delivers **only what differs from the target**, so re-running it is
+cheap and safe:
+
+- **Single files** (card bundles, `lovelace_resources`, `configuration.yaml`,
+  the dashboard storage document) are compared by content: the sha256 of the
+  local file against the sha256 of the file *as the container currently sees
+  it* (`ha_cat`). A file edited by hand on the target therefore still gets
+  overwritten, while an unchanged one is skipped (`= <name> unchanged`).
+- **Directories** (HACS, the `nmea2000` integration in `--bootstrap`) are
+  compared by a tree-manifest hash stored inside the container in
+  `/config/.storage/sailing_deploy_state` — hashing a whole tree remotely on
+  every run would cost more than the copy it saves.
+- **Sensors**: the merge into `configuration.yaml` is idempotent, so
+  `deploy_sensors.sh` compares the merge result with the live file (on the
+  serialized YAML — HA tags such as `!include` are opaque objects that never
+  compare equal) and skips both the upload and the backup when they match.
+- **Dashboard**: the pre-deploy diff that is printed anyway is reused as the
+  upload condition.
+- **Restart**: Home Assistant is restarted **once and only if** something was
+  really delivered (the steps share the `SAILING_CHANGE_FLAG` marker). A
+  no-op deploy prints `Nothing changed … — no restart`.
+- `--force` (or `HA_FORCE_DELIVERY=1`) bypasses every check above.
+
+## Canonical Entity Alias Layer & Auto-Discovery Engine
+
+To decouple the dashboard layout, automations, and custom JS cards from hardware-specific NMEA 2000 sensor entity IDs (which contain vessel-specific unique numbers, device instances, and MD5 primary key hashes), all dashboard components reference **canonical entity aliases**:
+
+- `sensor.boat_stw`: Speed Through Water (knots)
+- `sensor.boat_depth`: Water Depth (meters)
+- `sensor.boat_wind_speed`: Apparent/True Wind Speed (knots)
+- `sensor.boat_wind_angle`: Apparent/True Wind Angle (degrees)
+- `sensor.boat_cog`: Course Over Ground (degrees)
+- `sensor.boat_sog`: Speed Over Ground (knots)
+- `sensor.boat_latitude` / `sensor.boat_longitude`: Position (GPS formatted string)
+- `sensor.boat_latitude_raw` / `sensor.boat_longitude_raw`: Position (float numerical degrees)
+- `sensor.barometer_mmhg`: Atmospheric Pressure (mmHg)
+
+### Auto-Discovery Tool (`map_nmea_sensors.py`)
+During deployment (`./deploy.sh --stage` or `./deploy.sh --prod`), `map_nmea_sensors.py` executes before `build.py`:
+1. Inspects Home Assistant's entity registry (`.storage/core.entity_registry` or HA REST API).
+2. Discovers raw PGN entities created by `ha-nmea2000` custom integration.
+3. Generates/updates `src/yaml/sensors/derived_n2k.yaml` which defines template sensors mapping raw sensor values to canonical aliases.
+4. If specific N2K sensors are offline or absent, graceful fallback values are assigned.
+
+## Editing & Debugging Workflow
+
+1. Edit modular source code under `src/yaml/dashboard/sections/` or `src/js/cards/`.
+2. Run `./run_stage.sh` to launch Stage HA and test card rendering and telemetry in the browser at `http://localhost:8123/dashboard-sailing/`.
+3. Modify code as needed; the live watcher will auto-build and auto-deploy changes to Stage HA.
+4. Once verified locally, deploy to production on the vessel using `./deploy.sh --prod`. Review the printed pre-deploy diff before confirming.
 
 ## Why the dashboard deploy restarts HA
 
@@ -179,7 +369,9 @@ correct while HA kept serving the old, broken config (verified 2026-08-09 by
 querying `lovelace/config` over the websocket API before and after a
 `docker restart homeassistant`). `deploy_dashboard.sh` now restarts the
 container itself; pass `SKIP_RESTART=1` to opt out (e.g. when the next step
-is `deploy_sensors.sh`, which restarts HA anyway).
+is `deploy_sensors.sh`, which restarts HA anyway). The restart is skipped
+automatically when the deploy delivered nothing at all — see *Incremental
+delivery* above.
 
 To verify what HA actually serves (needs `HA_URL`/`HA_TOKEN` from `.env`
 and `pip install websockets`):
@@ -464,7 +656,7 @@ entities:
       - map_y: parseFloat(y)
       - store_var: dir
   # 2) measured wind speed - visible dots + vars.speed for the arrows below
-  - entity: sensor.wind_data_raymarine_20_442559_pk_a00872849cc8b861a8f51deb51cc1cd2_wind_speed
+  - entity: sensor.boat_wind_speed
     name: Measured
     mode: markers
     filters:
@@ -581,7 +773,7 @@ layout:
    `layout.annotations` block much simpler: it now only builds the "Now"
    label + N/S legend (the arrows moved onto the entities above), and
    `legend.groupclick: togglegroup` was added in case a group ever gains a
-   second trace. Verified visually in `local-preview/`: arrows render with
+   second trace. Verified visually: arrows render with
    a clear shaft+arrowhead rotating with direction, on the same trace as
    the data point.
 
@@ -591,7 +783,7 @@ originally used Plotly's default `colorscale: RdYlGn, reversescale: true`
 — an arbitrary green-to-red gradient with no fixed reference range (it
 auto-scales to whatever's visible), and no relation to any real
 meteorological convention. Replaced with an explicit `WIND_SPEED_COLORSCALE`
-(defined once in `local-preview/card-configs.js`, applied to both the
+(defined in `src/js/common/color_scales.js`, applied to both the
 "Measured" and "Forecast" dot markers): a fixed **0–40kt** range
 (`cmin`/`cmax`) with color stops matching the convention used by marine
 wind-speed charts (windy.com's wind layer, NOAA wind maps) — calm = light
@@ -601,19 +793,10 @@ has a stable, learnable meaning across reloads instead of shifting its
 range to match whatever data happens to be on screen. The direction arrows
 (previously colored per-trace, blue for measured/orange for forecast, with
 no relation to speed at all) now use the **same** color-to-speed mapping
-(a duplicated discrete `windSpeedColor()` helper inside the `$fn` string,
-since it can't reference the outer JS constant directly) — so a point's
-color means "wind speed" consistently everywhere on the chart, and
-measured-vs-forecast is distinguished only by position/shape, not color.
-
-**Not installed/deployed on `bumblebee` yet** — pending the user's
-decision on whether to proceed (adds a full Plotly.js bundle to the
-dashboard's JS payload, on top of apexcharts-card/compass-card/
-windrose-card already loaded). If approved, install the same way as
-`windrose-card` (manual `.js` copy to `/config/www/` + `lovelace_resources`
-entry, since it isn't in the current `requirements-ha.txt` HACS list
-either) and redeploy `local-preview/card-configs.js`'s already-tuned
-config above rather than starting from scratch.
+(a discrete `windSpeedColor()` helper inside the snippet, since it can't
+reference the outer JS constant directly) — so a point's color means "wind speed"
+consistently everywhere on the chart, and measured-vs-forecast is distinguished
+only by position/shape, not color.
 
 ### Windy alternative view (2026-08-09)
 
@@ -685,11 +868,12 @@ available as a daily max or in "current"), so it cannot drive this chart.
 
 ## Editing the sensors/services (e.g. changing the open-meteo forecast location)
 
-1. Edit `sensors-sailing.yaml` in this repo (e.g. the `latitude`/`longitude`
-   query params in the `rest:` resource URL).
-2. Run `./deploy_sensors.sh` (or `./deploy_sensors.sh user@host`). It merges
-   the file into the remote `configuration.yaml` by matching `unique_id`
-   (safe to re-run — updates existing entries in place) and restarts HA,
+1. Edit modular YAML sensor files under `src/yaml/sensors/` (e.g. `open_meteo.yaml`
+   or `derived_n2k.yaml`).
+2. Run `./deploy_sensors.sh` (or `./deploy.sh --sensors-only`). It automatically
+   executes `python3 build.py` to compile `build/sensors-sailing.yaml`, merges
+   it into the remote `configuration.yaml` by matching `unique_id`
+   (safe to re-run — updates existing entries in place), and restarts HA,
    since `configuration.yaml` changes are not hot-reloadable.
 
 ## Requirements
@@ -699,16 +883,30 @@ available as a daily max or in "current"), so it cannot drive this chart.
   `deploy_dashboard.sh` / the YAML merge in `deploy_sensors.sh`. Optionally
   `websockets` (also in `requirements.txt`) to verify the live
   `lovelace/config` (see "Why the dashboard deploy restarts HA" above).
-- Remote host: passwordless `sudo` for `docker exec`/`docker cp`/
-  `docker restart` against the `homeassistant` container (same requirement
-  as `deploy.sh:patch_ha()`).
-- HACS custom cards must already be installed on the target HA instance
-  (see `lovelace-resources.yaml`, not managed by these scripts):
-  `card-mod`, `compass-card`, `apexcharts-card`.
-- **Setting up a brand-new HA instance from scratch?** See
-  `requirements-ha.txt` for the full checklist (HACS itself, the custom
-  cards above, and which parts are already built into HA core) — the
-  "Setting this up from scratch" section above covers the deploy order.
+- Target host: for an `ssh-docker` target profile (declared in `.env`, see
+  `.env.template` and "Configuring targets" in INSTALLATION.md),
+  passwordless `sudo` for `docker exec`/`docker cp`/`docker restart` against
+  the Home Assistant container. A `local-docker` profile needs nothing but a
+  running Docker daemon.
+- Custom Lovelace cards (see `lovelace-resources.yaml`):
+  - **Stage** — nothing to do: `fetch_deps.py` downloads every card at the
+    version pinned in `deps.yaml` into `build/deps/cards/`, and
+    `stage_provisioner.py` deploys them into `/config/www/`.
+  - **Prod** — install them through the HACS UI, or let
+    `./deploy.sh --prod --bootstrap` deliver the same pinned bundles.
+- Environments: `ha/sailing-dash/.env` (from `.env.template`) is the only source
+  of truth for target profiles — transport, ssh host, container, HA url/token and
+  the YDNU-02 tcp-gw of each instance. Any number of named profiles may coexist
+  (several Pi5 boxes); `./deploy.sh --target <profile>`. The repo root `.env` /
+  `deploy.conf` belong to the ydnu-02 manager and are never read from here.
+- No external code is committed to this repo: no `vendor/` directory, no patch
+  files. The `nmea2000` library comes from our fork's tag
+  (`dnevera/nmea2000@cpu-overload-fix`), the integration from
+  `dnevera/ha-nmea2000@ydnu-02-usb-tcp-gw`.
+- **Setting up a brand-new HA instance from scratch?** [INSTALLATION.md](INSTALLATION.md)
+  is the single document for that: it splits the procedure into "auto stage 1 →
+  manual pause → auto stage 2" and lists the manual steps for Stage and Prod
+  separately. `requirements-ha.txt` describes what each artifact is and why.
 
 ## Chart time window — one place to configure it
 
