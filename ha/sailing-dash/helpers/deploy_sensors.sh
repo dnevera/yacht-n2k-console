@@ -56,14 +56,30 @@ ENTITY_REG_TMP="${TMP_DIR}/core.entity_registry"
 BACKUP_NAME="configuration.yaml.$(date +%Y%m%d%H%M%S).bak"
 
 echo "== Step 0: Auto-discovering NMEA 2000 sensors =="
+# NO `|| true` HERE. It used to swallow every discovery failure, so a deploy
+# happily shipped the PREVIOUS binding (or the generic fallbacks) and looked
+# successful while every sensor.boat_* stayed unavailable on the target.
+# The url/token of THIS profile are passed along on purpose: the registry cannot
+# tell a live entity from a leftover duplicate of the same PGN — only the live
+# states can, and that is what --strict validates.
+# macOS ships bash 3.2, where an empty array expansion trips `set -u`; keep the
+# array non-empty from the start.
+MAP_ARGS=("--strict")
+HAVE_API=0
+if [[ -n "${HA_URL}" && -n "${HA_TOKEN}" ]]; then
+    MAP_ARGS+=("--api-url" "${HA_URL}" "--api-token" "${HA_TOKEN}")
+    HAVE_API=1
+fi
 if ha_cat "/config/.storage/core.entity_registry" > "${ENTITY_REG_TMP}" 2>/dev/null && [[ -s "${ENTITY_REG_TMP}" ]]; then
-    python3 "${HELPERS_DIR}/map_nmea_sensors.py" --entity-registry "${ENTITY_REG_TMP}" || true
-elif [[ -n "${HA_URL}" && -n "${HA_TOKEN}" ]]; then
-    # No readable registry file (e.g. a hardened target): fall back to the REST
-    # API of THIS profile — never a hardcoded host.
-    python3 "${HELPERS_DIR}/map_nmea_sensors.py" --api-url "${HA_URL}" --api-token "${HA_TOKEN}" || true
-else
-    python3 "${HELPERS_DIR}/map_nmea_sensors.py" --config-dir "${SCRIPT_DIR}/local-ha/config" || true
+    MAP_ARGS+=("--entity-registry" "${ENTITY_REG_TMP}")
+elif [[ "${HAVE_API}" == "0" ]]; then
+    MAP_ARGS+=("--config-dir" "${SCRIPT_DIR}/local-ha/config")
+fi
+if ! python3 "${HELPERS_DIR}/map_nmea_sensors.py" "${MAP_ARGS[@]}"; then
+    echo "ERROR: NMEA 2000 auto-discovery found no live entities for the required bus values." >&2
+    echo "       Check the gateway/integration on ${HA_HOST} (sensor.nmea_2000_gateway_state," >&2
+    echo "       messages per minute) and that stale duplicate entities are not the only match." >&2
+    exit 1
 fi
 
 # This build.py call is NOT the duplicate one: map_nmea_sensors.py has just

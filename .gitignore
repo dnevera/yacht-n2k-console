@@ -70,3 +70,7 @@ ha/sailing-dash/local-ha/config/secrets.yaml
 # from the tags pinned in ha/sailing-dash/deps.yaml into build/deps/.
 vendor/
 .cache/
+
+# Host-specific generated NMEA alias mapping (map_nmea_sensors.py output):
+# one instance PGN hashes must never be committed.
+ha/sailing-dash/src/yaml/sensors/derived_n2k.yaml

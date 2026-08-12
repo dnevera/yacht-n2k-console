@@ -1656,3 +1656,107 @@ def test_measured_series_are_averaged_over_the_model_step():
     card = {"entities": [{"filters": [{"fn": "x plotly_measured_average y"}, {"map_y": "y"}]}]}
     build.drop_measured_averaging(card)
     assert card["entities"][0]["filters"] == [{"map_y": "y"}]
+
+
+def test_discovery_binds_live_entities_not_stale_duplicates():
+    """Reinstalling the integration leaves dead twins of the same PGN behind.
+
+    On the vessel Pi5 the registry held both `wind_data_pk_f9e756…_wind_speed`
+    (unavailable since the reinstall) and the live Raymarine entity. The matcher
+    used to look at entity ids only and bound the dead one, so every
+    `sensor.boat_*` stayed unavailable while the bus carried 1500 msg/min — a
+    deploy that looked completely successful.
+    """
+    import map_nmea_sensors as m
+
+    dead = "sensor.wind_data_pk_dead_wind_speed"
+    live = "sensor.wind_data_raymarine_pk_live_wind_speed"
+    entities = [
+        dead,
+        live,
+        "sensor.speed_pk_dead_speed_water_referenced",
+        "sensor.speed_raymarine_pk_live_speed_water_referenced",
+        # Sits right next to STW and matches the same loose suffix, but carries
+        # the sensor type as TEXT ("Paddle wheel"), not a speed.
+        "sensor.speed_raymarine_pk_live_speed_water_referenced_type",
+    ]
+    states = {
+        dead: ("unavailable", "2026-08-12T13:01:56"),
+        live: ("4.8", "2026-08-12T13:10:16"),
+        "sensor.speed_pk_dead_speed_water_referenced": ("unavailable", "2026-08-12T13:01:56"),
+        "sensor.speed_raymarine_pk_live_speed_water_referenced": ("0.0", "2026-08-12T13:10:20"),
+        "sensor.speed_raymarine_pk_live_speed_water_referenced_type": (
+            "paddle wheel",
+            "2026-08-12T13:10:21",
+        ),
+    }
+
+    picked = m.match_entities(entities, live_states=states)
+    assert picked["wind_speed"] == live
+    assert picked["stw"] == "sensor.speed_raymarine_pk_live_speed_water_referenced"
+
+    # Without live states nothing can be told apart, so the mapping must still
+    # be produced (registry order) instead of failing.
+    assert m.match_entities(entities)["wind_speed"] in (dead, live)
+
+
+def test_discovery_never_binds_its_own_virtual_sensors():
+    """`sensor.boat_*` are OUR output; matching them creates a self-reference.
+
+    A target without PGN 127250 used to map heading onto
+    `sensor.boat_heading_magnetic` and variation onto
+    `sensor.boat_magnetic_variation` — template sensors reading themselves, so the
+    compass card could never leave "unavailable".
+    """
+    import map_nmea_sensors as m
+
+    picked = m.match_entities(
+        [
+            "sensor.boat_heading_magnetic",
+            "sensor.boat_magnetic_variation",
+            "sensor.wind_direction_history",
+            "sensor.boat_wind_speed",
+        ]
+    )
+    assert picked == {}, f"own virtual sensors must never be matched, got {picked}"
+
+
+def test_sensor_deploy_fails_loudly_when_discovery_finds_nothing():
+    """Discovery failure must abort the deploy, not ship the previous binding."""
+    text = open(os.path.join(HELPERS_DIR, "deploy_sensors.sh"), encoding="utf-8").read()
+    step = text.split("Step 0", 1)[1].split("Rebuilding artifacts", 1)[0]
+    # Comments explain the fix and mention the swallower by name; only real code counts.
+    code = "\n".join(
+        line for line in step.splitlines() if line.strip() and not line.strip().startswith("#")
+    )
+    assert "map_nmea_sensors.py" in code
+    assert "|| true" not in code, "a swallowed discovery error hides an empty dashboard"
+    step = code
+    assert "--strict" in step and "exit 1" in step
+
+    import map_nmea_sensors as m
+
+    assert set(m.REQUIRED_KEYS) >= {"wind_speed", "wind_angle", "latitude", "longitude"}
+
+
+def test_generated_alias_module_is_not_tracked_by_git():
+    """derived_n2k.yaml is host specific: generated per target, never committed."""
+    import subprocess
+
+    rel = "ha/sailing-dash/src/yaml/sensors/derived_n2k.yaml"
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", rel],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert tracked.returncode != 0, f"{rel} must not be tracked: it holds one vessel's PGN hashes"
+
+    ignored = subprocess.run(
+        ["git", "check-ignore", rel], cwd=PROJECT_ROOT, capture_output=True, text=True
+    )
+    assert ignored.returncode == 0, f"{rel} must be listed in .gitignore"
+
+    import build
+
+    assert os.path.isfile(build.ensure_derived_n2k()), "build.py must regenerate it when missing"
