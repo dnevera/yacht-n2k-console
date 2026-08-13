@@ -62,6 +62,16 @@ measured_averaging: model_step
 #   false - charts are static: no zoom, no buttons.
 # The Y axis always stays fixed, so the traces can never be dragged off scale.
 zoom_controls: true
+# Limits on how far the user can ZOOM IN/OUT on the time axis (mouse wheel,
+# pinch, the +/- modebar buttons). Panning is NEVER limited by these - only
+# the window's WIDTH is clamped, its position is left untouched. Either can
+# be omitted/set to null to leave that direction unlimited.
+#   forecast_min_scale - narrowest window zooming IN is allowed to reach, in
+#                         hours. E.g. 1 = cannot zoom in closer than 1 hour.
+#   forecast_max_scale - widest window zooming OUT is allowed to reach, in
+#                         days. E.g. 7 = cannot zoom out past a 7-day span.
+forecast_min_scale: 23
+forecast_max_scale: 5
 # Opacity (0..1) of the "Now" badge drawn on the dashed now line. Lower values
 # let the traces running underneath it stay visible. Default: 0.55.
 now_label_opacity: 0.55
@@ -117,7 +127,7 @@ colors:
 time_window:
   # How many hours of measured history (left of "Now") to show on the wind
   # and wave charts, read from Home Assistant's recorder. Default: 4.
-  history_hours: 12
+  history_hours: 24
   # How many days ahead (right of "Now") to request/show forecast data.
   # Converted internally to forecast_hours = forecast_days * 24 and used
   # both for the Open-Meteo REST query window and the chart's right edge.

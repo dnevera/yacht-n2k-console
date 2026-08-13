@@ -1286,14 +1286,21 @@ def test_line_smoothing_is_global_with_spline_as_default(tmp_path):
 
 
 def test_zoom_controls_unlock_only_the_time_axis(tmp_path):
-    """Zoom is on by default: X axis free, Y locked, +/-/reset column on right."""
+    """Zoom is on by default: X axis free, Y locked, +/-/reset column on right.
+
+    Wheel/trackpad/pinch zoom is deliberately OFF (`scrollZoom: False`) even
+    when zoom is enabled - zoom only happens through the modebar buttons,
+    which get an animated transition back.
+    """
     cards = [c for c in _plotly_chart_cards(_build_with_chart_config(tmp_path)) if "arrow_kind" in c]
     assert {c["arrow_kind"] for c in cards} == {"wind", "wave"}
     for card in cards:
-        assert card["config"]["scrollZoom"] is True
+        assert card["config"]["scrollZoom"] is False
         assert card["config"]["displayModeBar"] is True
-        assert card["config"]["modeBarButtons"] == [["zoomIn2d", "zoomOut2d", "resetScale2d"]]
+        assert card["config"]["modeBarButtons"].startswith("$fn ")
+        assert "plotly_zoom_step_buttons" not in card["config"]["modeBarButtons"][:4]
         assert card["layout"]["modebar"] == {"orientation": "v"}
+        assert card["layout"]["transition"] == {"duration": 300, "easing": "cubic-in-out"}
         assert card["layout"]["xaxis"]["fixedrange"] is False
         # The value axis must stay locked so traces cannot be dragged off scale.
         assert card["layout"]["yaxis"]["fixedrange"] is True
@@ -1309,7 +1316,60 @@ def test_zoom_controls_unlock_only_the_time_axis(tmp_path):
         assert card["config"]["displayModeBar"] is False
         assert "modeBarButtons" not in card["config"]
         assert "modebar" not in card["layout"]
+        assert "transition" not in card["layout"]
         assert card["layout"]["xaxis"]["fixedrange"] is True
+
+
+def test_resolve_zoom_scale_limits():
+    """`forecast_min_scale` (hours) / `forecast_max_scale` (days->hours)."""
+    assert build.resolve_zoom_scale_limits({}) == (None, None)
+    assert build.resolve_zoom_scale_limits(
+        {"forecast_min_scale": 1, "forecast_max_scale": 7}
+    ) == (1.0, 168.0)
+    # Non-positive / invalid values disable that bound only.
+    assert build.resolve_zoom_scale_limits({"forecast_min_scale": 0}) == (None, None)
+    assert build.resolve_zoom_scale_limits({"forecast_min_scale": "nonsense"}) == (
+        None,
+        None,
+    )
+    assert build.resolve_zoom_scale_limits({"forecast_max_scale": 2}) == (None, 48.0)
+
+
+def test_forecast_scale_limits_reach_both_charts_and_do_not_affect_panning(tmp_path):
+    """`forecast_min_scale`/`forecast_max_scale` are injected identically into
+    the wind and wave charts as `zoom_min_hours`/`zoom_max_hours` - read by
+    `plotly_zoom_step_buttons`/`patchZoomButtons` to gate/grey out the +/-
+    modebar buttons only. There is no more `layout.xaxis.range` override
+    (no resize/snap-back of the window), and nothing else about zoom/pan
+    (buttons array, dragmode) changes.
+    """
+    cards = [
+        c
+        for c in _plotly_chart_cards(
+            _build_with_chart_config(
+                tmp_path, "forecast_min_scale: 2\nforecast_max_scale: 3\n"
+            )
+        )
+        if "arrow_kind" in c
+    ]
+    assert {c["arrow_kind"] for c in cards} == {"wind", "wave"}
+    for card in cards:
+        assert card["zoom_min_hours"] == 2.0
+        assert card["zoom_max_hours"] == 72.0
+        assert "range" not in card["layout"]["xaxis"]
+        # Existing zoom mechanics untouched.
+        assert card["config"]["scrollZoom"] is False
+        assert card["layout"]["dragmode"] == "pan"
+
+    # Omitted entirely -> no override at all, panning/zoom fully unrestricted.
+    default_cards = [
+        c for c in _plotly_chart_cards(_build_with_chart_config(tmp_path)) if "arrow_kind" in c
+    ]
+    assert default_cards
+    for card in default_cards:
+        assert "range" not in card["layout"]["xaxis"]
+        assert "zoom_min_hours" not in card
+        assert "zoom_max_hours" not in card
 
 
 def _render_open_meteo_urls(model):

@@ -58,6 +58,8 @@ def load_config(config_path=None, template_path=None):
                     "line_smoothing",
                     "measured_averaging",
                     "zoom_controls",
+                    "forecast_min_scale",
+                    "forecast_max_scale",
                     "arrow_spacing_hours",
                     "arrow_length_scale",
                     "measured_arrows_on_line",
@@ -300,15 +302,60 @@ def resolve_line_smoothing(config):
     return name, LINE_SMOOTHINGS[name]
 
 
-def apply_zoom_controls(card, enabled):
+def resolve_zoom_scale_limits(config):
+    """Return `(min_hours, max_hours)` for `forecast_min_scale`/`forecast_max_scale`.
+
+    `forecast_min_scale` (hours) is the narrowest window the user can ZOOM IN
+    to; `forecast_max_scale` (days) is the widest window they can ZOOM OUT to
+    - converted to hours here since the chart's time axis is hour-based. Both
+    are optional; a missing/invalid value disables that particular bound
+    (`None`) without touching the other one or panning at all.
+    """
+    min_scale = config.get("forecast_min_scale")
+    max_scale = config.get("forecast_max_scale")
+    min_hours = None
+    if min_scale is not None:
+        try:
+            min_hours = float(min_scale)
+        except (TypeError, ValueError):
+            min_hours = None
+        if min_hours is not None and min_hours <= 0:
+            min_hours = None
+    max_hours = None
+    if max_scale is not None:
+        try:
+            max_hours = float(max_scale) * 24
+        except (TypeError, ValueError):
+            max_hours = None
+        if max_hours is not None and max_hours <= 0:
+            max_hours = None
+    return min_hours, max_hours
+
+
+def apply_zoom_controls(card, enabled, min_hours=None, max_hours=None):
     """Enable/disable time-axis zoom and the vertical zoom button column.
 
     Only the X axis is unlocked - the Y axis stays fixed, so dragging can never
-    detach the traces from the value scale. `dragmode: pan` keeps one-finger
-    panning on a phone (pinch still zooms the time axis), the mouse wheel zooms
-    in a browser, and the vertical +/-/reset button column works on touch
-    devices where no wheel exists. Plotly's own double-click handling stays off
-    so the card's `on_dblclick` reset keeps working.
+    detach the traces from the value scale. `dragmode: pan` keeps one-finger/
+    mouse panning working exactly as before. Zooming, however, is deliberately
+    NOT wired to the mouse wheel/trackpad/pinch any more - that input is where
+    every past "twitchy"/"inertia"/"pans while zooming" complaint came from,
+    because the OS and the browser inject their own momentum and multi-axis
+    deltas into a raw wheel event that Plotly cannot tell apart from a genuine
+    user gesture. Zoom is now available ONLY through the deterministic
+    +/-/reset buttons of the vertical modebar, which also get their animated
+    transition back (`layout.transition`) so a button press visibly eases
+    into the new range instead of snapping. Plotly's own double-click handling
+    stays off so the card's `on_dblclick` reset keeps working.
+
+    `min_hours`/`max_hours` (from `resolve_zoom_scale_limits()`) additionally
+    cap how far the user can ZOOM: handed to the card as `zoom_min_hours`/
+    `zoom_max_hours`, read only by `patchZoomButtons()` in
+    `plotly_touch_patch_shapes.js` to grey out and disable whichever +/-
+    modebar button is already at its limit. The window itself is never
+    resized/snapped back and panning is entirely unaffected - a single click
+    that crosses the limit is allowed through once, the *next* click on that
+    side is what gets blocked.
     """
     cfg = card.setdefault("config", {})
     layout = card.setdefault("layout", {})
@@ -320,15 +367,31 @@ def apply_zoom_controls(card, enabled):
         cfg.pop("modeBarButtons", None)
         cfg.pop("displaylogo", None)
         xaxis["fixedrange"] = True
+        xaxis.pop("range", None)
+        card.pop("zoom_min_hours", None)
+        card.pop("zoom_max_hours", None)
         layout.pop("modebar", None)
+        layout.pop("transition", None)
         return
-    cfg["scrollZoom"] = True
+    # Wheel/trackpad/pinch zoom is intentionally disabled - only the modebar
+    # buttons below can change the zoom level.
+    cfg["scrollZoom"] = False
     cfg["displayModeBar"] = True
     cfg["displaylogo"] = False
     cfg["doubleClick"] = False
-    cfg["modeBarButtons"] = [["zoomIn2d", "zoomOut2d", "resetScale2d"]]
+    # Custom zoomIn2d/zoomOut2d/resetScale2d - see plotly_zoom_step_buttons.js
+    # for why (gentler step; reset that tracks "now" like the dblclick reset).
+    cfg["modeBarButtons"] = f"{INCLUDE_PREFIX}plotly_zoom_step_buttons"
     layout["modebar"] = {"orientation": "v"}
+    layout["transition"] = {"duration": 300, "easing": "cubic-in-out"}
     xaxis["fixedrange"] = False
+    xaxis.pop("range", None)
+    if min_hours or max_hours:
+        card["zoom_min_hours"] = min_hours if min_hours else 0
+        card["zoom_max_hours"] = max_hours if max_hours else 0
+    else:
+        card.pop("zoom_min_hours", None)
+        card.pop("zoom_max_hours", None)
 
 
 def resolve_forecast_models(config):
@@ -755,6 +818,7 @@ def build_dashboard(config=None):
     _forecast_style_name, forecast_style = resolve_forecast_style(config)
     _line_smoothing_name, line_smoothing = resolve_line_smoothing(config)
     zoom_controls = bool(config.get("zoom_controls", DEFAULT_ZOOM_CONTROLS))
+    zoom_min_hours, zoom_max_hours = resolve_zoom_scale_limits(config)
     measured_averaging = resolve_measured_averaging(config)
     colors = resolve_colors(config)
 
@@ -812,7 +876,7 @@ def build_dashboard(config=None):
                             if not measured_averaging:
                                 drop_measured_averaging(card)
                             style_chart_series(card, colors, forecast_style, line_smoothing)
-                            apply_zoom_controls(card, zoom_controls)
+                            apply_zoom_controls(card, zoom_controls, zoom_min_hours, zoom_max_hours)
                         elif card.get("type") == "glance":
                             style_glance_tiles(card, colors)
                     filtered_cards.append(card)

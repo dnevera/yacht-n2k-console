@@ -192,4 +192,119 @@ t('window follows the model step (3h model merges into one bucket)',
 t('no forecast loaded falls back to a 1h window',
   avg(Object.assign({meta:{}},{hass:{states:{}}},{xs:[T(0),T(70)],ys:[4,6]})).ys.length===2);
 
+// 8. plotly_touch_patch_shapes.js no longer touches wheel events at all -
+// wheel/trackpad/pinch zoom is disabled entirely at the card config level
+// (`scrollZoom: false`), so the snippet must not install any wheel listener
+// or leave behind the old per-chart wheel-patch marker.
+class FakeGd extends EventTarget {
+  constructor() {
+    super();
+    this.layout = { xaxis: { range: [] } };
+    this._handlers = {};
+  }
+  querySelector(sel) {
+    if (sel === '[data-title="Zoom in"]') return this.zoomInBtn || (this.zoomInBtn = { style: {} });
+    if (sel === '[data-title="Zoom out"]') return this.zoomOutBtn || (this.zoomOutBtn = { style: {} });
+    return this;
+  }
+  on(event, cb) { (this._handlers[event] = this._handlers[event] || []).push(cb); }
+  emit(event) { (this._handlers[event] || []).forEach((cb) => cb()); }
+}
+const gd = new FakeGd();
+const shadowRoot = { querySelectorAll: (sel) => (sel === '.js-plotly-plot' ? [gd] : []) };
+const plotlyGraphEl = { shadowRoot };
+global.document = {
+  querySelectorAll: (sel) => (sel === 'plotly-graph' ? [plotlyGraphEl] : []),
+};
+const touchPatch = load('plotly_touch_patch_shapes.js');
+touchPatch({ getFromConfig: () => undefined });
+t('touch patch no longer installs a wheel-gesture patch', gd.__wheelGesturePatched === undefined);
+t('long-press touch patch is still installed', gd.__touchGestureLongPress === true);
+t('no zoom-limit config -> button-disable patch is not installed', gd.__zoomButtonLimitPatched === undefined);
+
+// 9. plotly_touch_patch_shapes.js: the +/- modebar buttons must grey out
+// (and stop accepting clicks) exactly when the current window width has
+// reached the configured zoom_min_hours/zoom_max_hours - and re-enable once
+// the user zooms/pans back away from the limit.
+const gd2 = new FakeGd();
+const shadowRoot2 = { querySelectorAll: (sel) => (sel === '.js-plotly-plot' ? [gd2] : []) };
+global.document = {
+  querySelectorAll: (sel) => (sel === 'plotly-graph' ? [{ shadowRoot: shadowRoot2 }] : []),
+};
+const zoomLimits = { zoom_min_hours: 1, zoom_max_hours: 24 };
+load('plotly_touch_patch_shapes.js')({ getFromConfig: (k) => zoomLimits[k] });
+t('zoom-limit config -> button-disable patch is installed', gd2.__zoomButtonLimitPatched === true);
+const t0ms = new Date(T(0)).getTime();
+gd2.layout.xaxis.range = [T(0), new Date(t0ms + 30 * 60000).toISOString()]; // 30 min < 1h min
+gd2.emit('plotly_relayout');
+t('zoom-in button disabled at the minimum span', gd2.zoomInBtn.style.pointerEvents === 'none');
+t('zoom-out button enabled well within bounds', gd2.zoomOutBtn.style.pointerEvents !== 'none');
+gd2.layout.xaxis.range = [T(0), new Date(t0ms + 25 * 3600000).toISOString()]; // 25h > 24h max
+gd2.emit('plotly_relayout');
+t('zoom-out button disabled at the maximum span', gd2.zoomOutBtn.style.pointerEvents === 'none');
+t('zoom-in button re-enabled once away from the minimum', gd2.zoomInBtn.style.pointerEvents !== 'none');
+
+// 10. plotly_zoom_step_buttons.js: custom zoomIn2d/zoomOut2d/resetScale2d
+// for `config.modeBarButtons`. A click resizes `gd.layout.xaxis.range` by a
+// gentler factor than Plotly's own hardcoded x0.5/x2, then drives the card
+// through its own public `enterBrowsingMode()`/`plot()` API - no resize/
+// snap-back once a configured zoom_min_hours/zoom_max_hours limit is hit,
+// the click is simply ignored on that side. The reset button clicks the
+// same hidden `button#reset` the dblclick handler uses.
+const zoomStepButtons = load('plotly_zoom_step_buttons.js');
+const makeGd = (rangeIso, resetHidden) => {
+  const resetBtn = { classList: { contains: () => !!resetHidden }, clicked: 0, click() { this.clicked++; } };
+  const host = {
+    browsing: false,
+    plotCalls: [],
+    enterBrowsingMode() { this.browsing = true; },
+    plot(opts) { this.plotCalls.push(opts); },
+    shadowRoot: { querySelector: (sel) => (sel === 'button#reset' ? resetBtn : null) },
+  };
+  return {
+    layout: { xaxis: { range: rangeIso.slice() } },
+    getRootNode: () => ({ host }),
+    host,
+    resetBtn,
+  };
+};
+const buttons = zoomStepButtons({ getFromConfig: () => undefined })[0];
+t('exposes exactly zoomIn2d/zoomOut2d/resetScale2d', buttons.map(b => b.name).join(',') === 'zoomIn2d,zoomOut2d,resetScale2d');
+
+const g1 = makeGd([T(0), new Date(new Date(T(0)).getTime() + 4 * 3600000).toISOString()]);
+const widthBefore = new Date(g1.layout.xaxis.range[1]) - new Date(g1.layout.xaxis.range[0]);
+buttons[0].click(g1); // zoomIn2d
+const widthAfterIn = new Date(g1.layout.xaxis.range[1]) - new Date(g1.layout.xaxis.range[0]);
+t('zoom in shrinks the window by a gentler factor than native x0.5',
+  Math.abs(widthAfterIn / widthBefore - 0.8) < 1e-6);
+t('zoom in drives the card via enterBrowsingMode + plot({should_fetch:true})',
+  g1.host.browsing === true && g1.host.plotCalls.length === 1 && g1.host.plotCalls[0].should_fetch === true);
+
+const g2 = makeGd([T(0), new Date(new Date(T(0)).getTime() + 4 * 3600000).toISOString()]);
+const widthBefore2 = new Date(g2.layout.xaxis.range[1]) - new Date(g2.layout.xaxis.range[0]);
+buttons[1].click(g2); // zoomOut2d
+const widthAfterOut = new Date(g2.layout.xaxis.range[1]) - new Date(g2.layout.xaxis.range[0]);
+t('zoom out widens the window by a gentler factor than native x2',
+  Math.abs(widthAfterOut / widthBefore2 - 1.25) < 1e-6);
+
+const limits = { zoom_min_hours: 1, zoom_max_hours: 24 };
+const limitedButtons = zoomStepButtons({ getFromConfig: (k) => limits[k] })[0];
+const gAtMin = makeGd([T(0), new Date(new Date(T(0)).getTime() + 60 * 60000).toISOString()]); // exactly 1h
+const rangeBeforeMin = gAtMin.layout.xaxis.range.slice();
+limitedButtons[0].click(gAtMin);
+t('zoom-in click at the configured minimum is a no-op (no resize/snap-back)',
+  JSON.stringify(gAtMin.layout.xaxis.range) === JSON.stringify(rangeBeforeMin) && gAtMin.host.plotCalls.length === 0);
+const gAtMax = makeGd([T(0), new Date(new Date(T(0)).getTime() + 24 * 3600000).toISOString()]); // exactly 24h
+const rangeBeforeMax = gAtMax.layout.xaxis.range.slice();
+limitedButtons[1].click(gAtMax);
+t('zoom-out click at the configured maximum is a no-op (no resize/snap-back)',
+  JSON.stringify(gAtMax.layout.xaxis.range) === JSON.stringify(rangeBeforeMax) && gAtMax.host.plotCalls.length === 0);
+
+const gReset = makeGd([T(0), T(60)]);
+buttons[2].click(gReset); // resetScale2d
+t('reset button clicks the same hidden reset button the dblclick handler uses', gReset.resetBtn.clicked === 1);
+const gResetHidden = makeGd([T(0), T(60)], true);
+buttons[2].click(gResetHidden);
+t('reset button does nothing while the card reset button is hidden', gResetHidden.resetBtn.clicked === 0);
+
 process.exit(ok?0:1);
