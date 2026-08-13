@@ -49,6 +49,8 @@ def load_baseline(config_path, template_path):
                 "line_smoothing",
                 "measured_averaging",
                 "zoom_controls",
+                "forecast_min_scale",
+                "forecast_max_scale",
                 "now_label_opacity",
                 "forecast_history_arrow_opacity",
             ):
@@ -232,6 +234,18 @@ def run_wizard(config, non_interactive=False):
         "Allow zoom/pan along the time axis (with +/-/reset buttons)",
         config.get("zoom_controls", True),
     )
+    config["forecast_min_scale"] = prompt_float(
+        "Narrowest window zoom-IN is allowed to reach, hours (0 = unlimited)",
+        config.get("forecast_min_scale", 1),
+        min_val=0.0,
+        max_val=8760.0,
+    )
+    config["forecast_max_scale"] = prompt_float(
+        "Widest window zoom-OUT is allowed to reach, days (0 = unlimited)",
+        config.get("forecast_max_scale", 7),
+        min_val=0.0,
+        max_val=365.0,
+    )
     config["now_label_opacity"] = prompt_float(
         "Opacity of the 'Now' label (0..1)",
         config.get("now_label_opacity", 0.55),
@@ -298,6 +312,8 @@ def main():
     parser.add_argument("--non-interactive", "--yes", "-y", action="store_true", help="Run in non-interactive mode")
     parser.add_argument("--history-hours", type=int, help="Override history time window (hours)")
     parser.add_argument("--forecast-days", type=int, help="Override forecast time window (days)")
+    parser.add_argument("--forecast-min-scale", type=float, help="Narrowest zoom-in window (hours), 0 = unlimited")
+    parser.add_argument("--forecast-max-scale", type=float, help="Widest zoom-out window (days), 0 = unlimited")
 
     args = parser.parse_args()
 
@@ -307,6 +323,10 @@ def main():
         config.setdefault("time_window", {})["history_hours"] = args.history_hours
     if args.forecast_days is not None:
         config.setdefault("time_window", {})["forecast_days"] = args.forecast_days
+    if args.forecast_min_scale is not None:
+        config["forecast_min_scale"] = args.forecast_min_scale
+    if args.forecast_max_scale is not None:
+        config["forecast_max_scale"] = args.forecast_max_scale
 
     config = run_wizard(config, non_interactive=args.non_interactive)
 

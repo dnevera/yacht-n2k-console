@@ -171,7 +171,7 @@ template:
     unique_id: chart_time_window
     icon: mdi:chart-timeline-variant
     attributes:
-      history_hours: '{{ 12 }}'
+      history_hours: '{{ 24 }}'
       forecast_hours: '{{ 120 }}'
     state: '{{ state_attr(''sensor.chart_time_window'', ''history_hours'') }}h back / {{ state_attr(''sensor.chart_time_window'', ''forecast_hours'') }}h ahead
 
