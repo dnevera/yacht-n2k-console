@@ -1,0 +1,36 @@
+# AIS Dashboard Build & Deployment Configuration
+#
+# Copy this file to `config.yaml` (in this same directory) and edit it to
+# customize your installation. `helpers/build.py` reads `config.yaml` and
+# falls back to the defaults below for any missing key, so this file is
+# always a safe, complete reference of every available option.
+
+# ── Map card (src/yaml/dashboard/sections/01_ais_map.yaml) ──────────────────
+map:
+  # Initial zoom level of the `type: map` card (higher = more zoomed in).
+  default_zoom: 12
+  # Aspect ratio of the map card, as accepted by HA's `type: map` card.
+  aspect_ratio: 16x9
+
+# ── Stale-target timeout ─────────────────────────────────────────────────────
+# Mirrors (and is deployed into) the `ais_targets` custom component's own
+# `stale_timeout` config-entry option (see custom_components/ais_targets/
+# README.md) — kept here too so the whole installation's timeout lives in one
+# reviewable place. `deploy.sh --install` is the one place that actually
+# pushes this value into the live config entry (best effort; the option can
+# also be changed later from the HA UI, which then wins).
+target_stale_timeout_minutes: 10
+
+# ── Detail/list card (native `entities` card, one row per tracked vessel) ───
+# Which fields to show for each `geo_location.ais_*` entity, and in what
+# order. Every id below maps 1:1 to an attribute exposed by the ais_targets
+# integration (see custom_components/ais_targets/README.md); unknown ids are
+# ignored by helpers/build.py.
+detail_fields:
+  - mmsi
+  - vessel_name
+  - callsign
+  - ship_type
+  - length
+  - beam
+  - destination

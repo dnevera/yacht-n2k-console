@@ -846,7 +846,7 @@ class HAProvisioner:
             "ip": host,
             "port": port,
             "ms_between_updates": 5000,
-            "exclude_AIS": True,
+            "exclude_AIS": False,
         }
         entry_version = 2
 

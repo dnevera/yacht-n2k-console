@@ -1,0 +1,5 @@
+views:
+  - type: sections
+    title: AIS
+    icon: mdi:radar
+    sections:
