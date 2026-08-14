@@ -78,3 +78,16 @@ table:
   # instead of squeezing/clipping its single-line cells.
   # Placeholder: ${AIS_TABLE_MIN_WIDTH}
   min_width_px: 1100
+
+# ── Selected-target detail card ─────────────────────────────────────────────
+# Clicking a vessel (in the table OR its marker on the map) selects it into
+# input_text.ais_selected_mmsi and this overlay shows every decoded field.
+# The map click is routed here by src/js/ais-select-bridge.js: Home Assistant
+# has NO more-info control for `geo_location`, so its own dialog is empty.
+detail:
+  # Width of the overlay, as a CSS length — same convention as the table
+  # widths above. It is pinned to the bottom-left of the map container, capped
+  # by `max-width: calc(100vw - 48px)` and never taller than the container
+  # (it scrolls instead of being cut off).
+  # Placeholder: ${AIS_DETAIL_WIDTH}
+  width: 360px

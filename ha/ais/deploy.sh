@@ -184,7 +184,7 @@ patch_pgn_include() {
 # name+distance side-bar; the collapsed/expanded state is held by
 # input_boolean.ais_table_expanded, which lives in .storage/input_boolean.
 provision_helpers() {
-    echo "-- Step: AIS dashboard helpers (table overlay toggle) --"
+    echo "-- Step: AIS dashboard helpers (table overlay toggle, selected target) --"
     local tmp_dir remote_path local_copy
     tmp_dir="$(mktemp -d /tmp/ais_helpers.XXXXXX)"
     trap 'rm -rf "${tmp_dir}"' RETURN
@@ -192,6 +192,11 @@ provision_helpers() {
     local_copy="${tmp_dir}/input_boolean"
     local reg_remote="/config/.storage/core.entity_registry"
     local reg_copy="${tmp_dir}/core.entity_registry"
+    # input_text.ais_selected_mmsi holds the target whose detail card is shown
+    # (a geo_location entity's more-info dialog renders NOTHING in HA, so the
+    # table selects into this helper instead of opening an empty dialog).
+    local text_remote="/config/.storage/input_text"
+    local text_copy="${tmp_dir}/input_text"
 
     # A missing store is normal on an instance without any UI helper yet —
     # provision_helpers.py then creates a fresh, minimally-valid document.
@@ -200,9 +205,11 @@ provision_helpers() {
     # entity_id by an older revision (input_boolean.ais_targets) gets dropped
     # and re-registered as input_boolean.ais_table_expanded.
     ha_cat "${reg_remote}" > "${reg_copy}" 2>/dev/null || rm -f "${reg_copy}"
+    ha_cat "${text_remote}" > "${text_copy}" 2>/dev/null || rm -f "${text_copy}"
 
     local report_status=0
     python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" \
+        --input-text "${text_copy}" \
         --entity-registry "${reg_copy}" || report_status=$?
 
     if [[ "${report_status}" -eq 0 ]]; then
@@ -214,9 +221,14 @@ provision_helpers() {
     fi
 
     python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" \
+        --input-text "${text_copy}" \
         --entity-registry "${reg_copy}" --write
     ha_cp_to_container_if_changed "${local_copy}" "${remote_path}" "input_boolean (AIS table toggle)" \
         && echo "input_boolean" >> "${AIS_CHANGE_FLAG}"
+    if [[ -f "${text_copy}" ]]; then
+        ha_cp_to_container_if_changed "${text_copy}" "${text_remote}" "input_text (AIS selected target)" \
+            && echo "input_text" >> "${AIS_CHANGE_FLAG}"
+    fi
     if [[ -f "${reg_copy}" ]]; then
         ha_cp_to_container_if_changed "${reg_copy}" "${reg_remote}" "core.entity_registry (AIS toggle slug)" \
             && echo "entity_registry" >> "${AIS_CHANGE_FLAG}"
@@ -278,6 +290,22 @@ deploy_card_deps() {
     type: module
 EOF
     done
+
+    # Our own module: turns a click on an AIS marker on the map into a target
+    # selection for the detail card (geo_location has no more-info control in
+    # HA, so the stock dialog is empty). Versioned by content hash so the
+    # browser picks up an edit without a manual cache purge.
+    local bridge_src="${SCRIPT_DIR}/src/js/ais-select-bridge.js"
+    if [[ -f "${bridge_src}" ]]; then
+        local bridge_ver
+        bridge_ver="$(shasum -a 256 "${bridge_src}" | cut -c1-8)"
+        ha_cp_to_container_if_changed "${bridge_src}" "/config/www/ais-select-bridge.js" "ais-select-bridge.js" \
+            && echo "ais-select-bridge.js" >> "${AIS_CHANGE_FLAG}"
+        cat >> "${resources_yaml}" <<EOF
+  - url: /local/ais-select-bridge.js?v=${bridge_ver}
+    type: module
+EOF
+    fi
 
     ha_cat "/config/.storage/lovelace_resources" > "${current_json}" 2>/dev/null || echo "{}" > "${current_json}"
 

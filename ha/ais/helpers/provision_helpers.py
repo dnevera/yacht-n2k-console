@@ -3,16 +3,26 @@
 provision_helpers.py — idempotently ensure the Lovelace helpers the AIS
 dashboard needs exist in a live Home Assistant instance.
 
-Right now that is a single toggle, `input_boolean.ais_table_expanded`, which
-drives the target-list overlay on the AIS map: OFF renders the compact
-side-bar (vessel name + distance), ON expands it into the full table (see
-src/yaml/dashboard/sections/01_ais_map.yaml). UI-created helpers live in
-`.storage/input_boolean`, so this script merges the entry into that document —
-same read / compute / write-only-if-changed convention as
-patch_pgn_include.py and ha/sailing-dash/helpers/merge_lovelace_resources.py.
+Two helpers are provisioned:
+
+  * `input_boolean.ais_table_expanded` — drives the target-list overlay on the
+    AIS map: OFF renders the compact side-bar (vessel name + distance), ON
+    expands it into the full table.
+  * `input_text.ais_selected_mmsi` — MMSI of the target whose detail card is
+    shown. Home Assistant renders NOTHING inside the more-info dialog of a
+    `geo_location` entity (the domain has no more-info control and
+    `more-info-default` renders `nothing`), so clicking a target used to show
+    its bare state only. The table therefore SELECTS the target into this
+    helper and the dashboard renders a full detail card from it.
+
+UI-created helpers live in `.storage/<domain>`, so this script merges the
+entries into those documents — same read / compute / write-only-if-changed
+convention as patch_pgn_include.py and
+ha/sailing-dash/helpers/merge_lovelace_resources.py.
 
 USAGE
     python3 provision_helpers.py <.storage/input_boolean path> [--write] \
+        [--input-text <.storage/input_text path>] \
         [--entity-registry <.storage/core.entity_registry path>]
 
     Without --write: report only; exit 0 if nothing needs to change, 2 if it
@@ -47,38 +57,77 @@ HELPER_CONFIG = {
     "name": "AIS table expanded",
     "icon": "mdi:table-eye",
 }
-EMPTY_DOC = {
-    "version": 1,
-    "minor_version": 1,
-    "key": "input_boolean",
-    "data": {"items": []},
+# Selected-target helper: holds the MMSI whose detail card is rendered.
+# `max` is generous on purpose — an MMSI is 9 digits, but the helper is also
+# cleared to an empty string by the detail card's close button.
+SELECTED_ID = "ais_selected_mmsi"
+SELECTED_ENTITY_ID = f"input_text.{SELECTED_ID}"
+SELECTED_CONFIG = {
+    "id": SELECTED_ID,
+    # Must slugify to SELECTED_ID — see the module docstring.
+    "name": "AIS selected mmsi",
+    "icon": "mdi:ferry",
+    "min": 0,
+    "max": 16,
+    # `mode` is MANDATORY in the storage schema: without it HA aborts the whole
+    # input_text component with "Error during setup of component input_text:
+    # 'mode'", so the helper (and the detail card that depends on it) never
+    # appears.
+    "mode": "text",
 }
 
 
-def compute_patch(doc: dict) -> tuple[bool, list[str]]:
+def _empty_doc(key: str) -> dict:
+    return {
+        "version": 1,
+        "minor_version": 1,
+        "key": key,
+        "data": {"items": []},
+    }
+
+
+EMPTY_DOC = _empty_doc("input_boolean")
+
+
+def compute_patch(
+    doc: dict, config: dict | None = None, entity_id: str | None = None
+) -> tuple[bool, list[str]]:
     """Return `(changed, messages)`, mutating `doc` in place."""
+    config = config or HELPER_CONFIG
+    entity_id = entity_id or HELPER_ENTITY_ID
+    helper_id = config["id"]
     messages: list[str] = []
     data = doc.setdefault("data", {})
     items = data.setdefault("items", [])
 
     for item in items:
-        if isinstance(item, dict) and item.get("id") == HELPER_ID:
-            if item.get("name") == HELPER_CONFIG["name"]:
-                messages.append(f"{HELPER_ENTITY_ID} already exists — no change.")
+        if isinstance(item, dict) and item.get("id") == helper_id:
+            # Every key is compared, not just `name`: an entry written by an
+            # older revision can be missing a MANDATORY key (input_text without
+            # `mode` aborts the whole component at startup), and that must be
+            # repaired in place rather than reported as "already exists".
+            missing = {k: v for k, v in config.items() if item.get(k) != v}
+            if not missing:
+                messages.append(f"{entity_id} already exists — no change.")
                 return False, messages
-            item["name"] = HELPER_CONFIG["name"]
+            item.update(missing)
             messages.append(
-                f"Renamed the overlay toggle to '{HELPER_CONFIG['name']}' so it "
-                f"slugifies to {HELPER_ENTITY_ID}."
+                f"Updated {entity_id} ({', '.join(sorted(missing))}) — the name "
+                "must slugify to the entity_id the dashboard references."
             )
             return True, messages
 
-    items.append(dict(HELPER_CONFIG))
-    messages.append(f"Added {HELPER_ENTITY_ID} (AIS table overlay toggle).")
+    items.append(dict(config))
+    messages.append(f"Added {entity_id}.")
     return True, messages
 
 
-def compute_registry_patch(doc: dict) -> tuple[bool, list[str]]:
+def compute_registry_patch(
+    doc: dict,
+    platform: str = "input_boolean",
+    helper_id: str = HELPER_ID,
+    entity_id: str = HELPER_ENTITY_ID,
+) -> tuple[bool, list[str]]:
     """Drop a mis-slugged registry row for our helper, so HA re-registers it
     under HELPER_ENTITY_ID on the next start. Mutates `doc` in place."""
     messages: list[str] = []
@@ -90,19 +139,19 @@ def compute_registry_patch(doc: dict) -> tuple[bool, list[str]]:
         e
         for e in entities
         if isinstance(e, dict)
-        and e.get("platform") == "input_boolean"
-        and e.get("unique_id") == HELPER_ID
-        and e.get("entity_id") != HELPER_ENTITY_ID
+        and e.get("platform") == platform
+        and e.get("unique_id") == helper_id
+        and e.get("entity_id") != entity_id
     ]
     if not stale:
-        messages.append(f"entity registry: no stale row for {HELPER_ID}.")
+        messages.append(f"entity registry: no stale row for {helper_id}.")
         return False, messages
 
     for entry in stale:
         entities.remove(entry)
         messages.append(
             f"entity registry: removed mis-slugged row {entry.get('entity_id')} "
-            f"— HA will re-register it as {HELPER_ENTITY_ID}."
+            f"— HA will re-register it as {entity_id}."
         )
     return True, messages
 
@@ -114,6 +163,10 @@ def main() -> int:
         "--write",
         action="store_true",
         help="patch the file in place instead of only reporting",
+    )
+    parser.add_argument(
+        "--input-text",
+        help="path to .storage/input_text (selected-target helper)",
     )
     parser.add_argument(
         "--entity-registry",
@@ -137,6 +190,26 @@ def main() -> int:
     if not os.path.exists(args.input_boolean_path):
         changed = True
 
+    text_doc = None
+    text_changed = False
+    if args.input_text:
+        if os.path.exists(args.input_text):
+            with open(args.input_text, "r", encoding="utf-8") as f:
+                text_doc = json.load(f)
+        else:
+            text_doc = _empty_doc("input_text")
+            text_changed = True
+            print(
+                f"{args.input_text} does not exist yet — a fresh input_text "
+                "store will be created."
+            )
+        patched, text_messages = compute_patch(
+            text_doc, SELECTED_CONFIG, SELECTED_ENTITY_ID
+        )
+        text_changed = text_changed or patched
+        for message in text_messages:
+            print(message)
+
     reg_doc = None
     reg_changed = False
     if args.entity_registry and os.path.exists(args.entity_registry):
@@ -145,8 +218,14 @@ def main() -> int:
         reg_changed, reg_messages = compute_registry_patch(reg_doc)
         for message in reg_messages:
             print(message)
+        sel_changed, sel_messages = compute_registry_patch(
+            reg_doc, "input_text", SELECTED_ID, SELECTED_ENTITY_ID
+        )
+        reg_changed = reg_changed or sel_changed
+        for message in sel_messages:
+            print(message)
 
-    if not changed and not reg_changed:
+    if not changed and not text_changed and not reg_changed:
         return 0
 
     if args.write:
@@ -155,6 +234,11 @@ def main() -> int:
                 json.dump(doc, f, ensure_ascii=False, indent=2)
                 f.write("\n")
             print(f"Wrote {args.input_boolean_path}")
+        if text_changed and text_doc is not None:
+            with open(args.input_text, "w", encoding="utf-8") as f:
+                json.dump(text_doc, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            print(f"Wrote {args.input_text}")
         if reg_changed and reg_doc is not None:
             with open(args.entity_registry, "w", encoding="utf-8") as f:
                 json.dump(reg_doc, f, ensure_ascii=False, indent=2)

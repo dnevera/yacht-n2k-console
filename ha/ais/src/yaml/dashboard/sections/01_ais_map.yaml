@@ -20,8 +20,17 @@
 # stack's shadow root.
 - type: custom:mod-card
   card_mod:
+    # The wrapper is only a positioning context — it must not look like a card
+    # of its own (that drew a second border around the map).
     style: |
-      ha-card { position: relative; margin: 12px; overflow: hidden; }
+      ha-card {
+        position: relative;
+        margin: 12px;
+        overflow: hidden;
+        background: none;
+        border: none;
+        box-shadow: none;
+      }
   card:
     type: vertical-stack
     cards:
@@ -56,7 +65,13 @@
               display: block;
               height: ${AIS_MAP_HEIGHT};
             }
-            ha-card { height: 100%; }
+            /* Same rounding as every other card on the instance, and the
+               leaflet canvas is clipped to it (overflow: hidden). */
+            ha-card {
+              height: 100%;
+              border-radius: var(--ha-card-border-radius, 12px);
+              overflow: hidden;
+            }
             #root {
               padding-bottom: 0 !important;
               height: 100% !important;
@@ -123,7 +138,13 @@
           # attribute-less "restored"/unavailable ghost rows left over in the
           # entity registry by older versions of the integration.
           strict: true
-          clickable: true
+          # `clickable` (row -> hass-more-info) is deliberately OFF: Home
+          # Assistant has NO more-info control for the `geo_location` domain
+          # (more-info-default renders `nothing`), so that dialog showed the
+          # bare state and nothing else. Instead every cell SELECTS the target
+          # into input_text.ais_selected_mmsi and the detail card below renders
+          # its full data.
+          clickable: false
           sort_by: ${AIS_SORT_BY}
           card_mod:
             # Width comes from config (`table.collapsed_width`), exactly like
@@ -141,38 +162,55 @@
                 width: ${AIS_TABLE_COLLAPSED_WIDTH};
                 max-width: calc(100vw - 48px);
               }
+              /* The ha-card is the ONE scroll container, on BOTH axes. An
+                 earlier revision scrolled the tbody vertically instead, so
+                 with a horizontally scrolled table the vertical scrollbar sat
+                 far off-screen to the right and was unreachable. */
               ha-card {
-                max-height: 100%;
+                max-height: min(calc(${AIS_ROWS_SCROLL_COMPACT_PX}px + 56px), 100%);
                 overflow: auto;
+                border-radius: var(--ha-card-border-radius, 12px);
               }
           css:
-            # N rows visible, the rest scrollable: the tbody becomes its own
-            # scroll container. `max_rows` is NOT used on purpose — it
-            # truncates the extra targets instead of scrolling them. thead/tr
-            # need `display: table` so the columns stay aligned once tbody is
-            # no longer a table-row-group. The min() also caps it to the
-            # viewport, so a large row count can't overflow the window.
-            tbody: "display: block; max-height: min(${AIS_ROWS_SCROLL_COMPACT_PX}px, calc(100vh - 260px)); overflow-y: auto;"
-            "thead, tbody tr": "display: table; width: 100%; table-layout: fixed;"
-            # Every cell stays on ONE line (long vessel names/destinations
-            # used to wrap and make rows two lines tall); the "+" suffix
-            # APPENDS to the card's own default rule instead of replacing it.
-            "tr td+": " white-space: nowrap; text-overflow: ellipsis;"
-            "th+": " white-space: nowrap;"
-            # `table-layout: fixed` above splits the width EVENLY, which clipped
-            # the vessel name. The name column gets its own width (never less
-            # than the name needs) — `min-width` alone is ignored under a fixed
-            # layout, so `width` is set too.
-            "thead th:first-child, tbody td:first-child+": " width: ${AIS_VESSEL_COL_WIDTH}; min-width: ${AIS_VESSEL_COL_WIDTH};"
+            "table+": " border-collapse: separate; border-spacing: 0;"
+            # Sticky header: the rows scroll under it inside the ha-card.
+            "thead th+": " position: sticky; top: 0; z-index: 1; background: var(--card-background-color, var(--ha-card-background)); white-space: nowrap; padding: 6px 10px;"
+            # Horizontal padding for the cell content (it used to touch the
+            # card edges); every cell stays on ONE line so long names don't
+            # make rows two lines tall. The "+" suffix APPENDS to the card's
+            # own default rule instead of replacing it.
+            "tr td+": " white-space: nowrap; padding: 6px 10px;"
+            # The vessel name must never be clipped — the column gets its own
+            # (configurable) minimum width.
+            "thead th:first-child, tbody td:first-child+": " min-width: ${AIS_VESSEL_COL_WIDTH};"
           columns:
+            # Clicking ANY cell selects that vessel: flex-table-card resolves
+            # `col[N]` against the row's Nth column value, so the hidden MMSI
+            # column below is what gets written into the helper. The anchor
+            # keeps the four identical actions in sync (build.py resolves YAML
+            # anchors, the deployed dashboard has them expanded).
             - name: Vessel
               data: name
+              tap_action: &select_target_compact
+                action: perform-action
+                perform_action: input_text.set_value
+                target:
+                  entity_id: input_text.ais_selected_mmsi
+                data:
+                  value: "col[3]"
             - name: Dist (km)
               data: state
               align: right
+              tap_action: *select_target_compact
             - name: SOG (kn)
               data: sog
               align: right
+              tap_action: *select_target_compact
+            # Hidden: only carries the MMSI for the `col[3]` reference above.
+            - name: MMSI
+              data: mmsi
+              hidden: true
+              tap_action: *select_target_compact
 
       # ── Expanded overlay: the full table ─────────────────────────────────
       - type: conditional
@@ -190,7 +228,10 @@
           entities:
             include: geo_location.ais_*
           strict: true
-          clickable: true
+          # See the collapsed table: geo_location has no more-info control in
+          # HA, so a row click opened an empty dialog. Cells select the target
+          # into input_text.ais_selected_mmsi instead.
+          clickable: false
           sort_by: ${AIS_SORT_BY}
           card_mod:
             # Width comes from config (`table.width`), exactly like the map's
@@ -209,52 +250,176 @@
                 width: ${AIS_TABLE_WIDTH};
                 max-width: calc(100vw - 48px);
               }
+              /* One scroll container on BOTH axes — see the collapsed table. */
               ha-card {
-                max-height: 100%;
+                max-height: min(calc(${AIS_ROWS_SCROLL_PX}px + 56px), 100%);
                 overflow: auto;
+                border-radius: var(--ha-card-border-radius, 12px);
               }
           css:
-            tbody: "display: block; max-height: min(${AIS_ROWS_SCROLL_PX}px, calc(100vh - 260px)); overflow-y: auto;"
-            "thead, tbody tr": "display: table; width: 100%; table-layout: fixed;"
             # All 13 columns need room: below this width the table stops
             # squeezing and the ha-card scrolls horizontally instead (cells
             # are nowrap, so squeezing would just clip the text).
-            "table+": " min-width: ${AIS_TABLE_MIN_WIDTH}px;"
-            # Every cell stays on ONE line (long vessel names/destinations
-            # used to wrap and make rows two lines tall); the "+" suffix
-            # APPENDS to the card's own default rule instead of replacing it.
-            "tr td+": " white-space: nowrap; text-overflow: ellipsis;"
-            "th+": " white-space: nowrap;"
-            # See the collapsed table above: under `table-layout: fixed` the
-            # vessel name would be clipped by the even column split, so the
-            # name column keeps its own (configurable) width.
-            "thead th:first-child, tbody td:first-child+": " width: ${AIS_VESSEL_COL_WIDTH}; min-width: ${AIS_VESSEL_COL_WIDTH};"
+            "table+": " min-width: ${AIS_TABLE_MIN_WIDTH}px; border-collapse: separate; border-spacing: 0;"
+            "thead th+": " position: sticky; top: 0; z-index: 1; background: var(--card-background-color, var(--ha-card-background)); white-space: nowrap; padding: 6px 10px;"
+            "tr td+": " white-space: nowrap; padding: 6px 10px;"
+            "thead th:first-child, tbody td:first-child+": " min-width: ${AIS_VESSEL_COL_WIDTH};"
           columns:
+            # `col[5]` = the MMSI column below (index in THIS list); clicking
+            # any cell selects that vessel for the detail card.
             - name: Vessel
               data: name
+              tap_action: &select_target_full
+                action: perform-action
+                perform_action: input_text.set_value
+                target:
+                  entity_id: input_text.ais_selected_mmsi
+                data:
+                  value: "col[5]"
             - name: Dist (km)
               data: state
               align: right
+              tap_action: *select_target_full
             - name: SOG (kn)
               data: sog
               align: right
+              tap_action: *select_target_full
             - name: Length (m)
               data: length
+              tap_action: *select_target_full
             - name: Beam (m)
               data: beam
+              tap_action: *select_target_full
             - name: MMSI
               data: mmsi
+              tap_action: *select_target_full
             - name: Callsign
               data: callsign
+              tap_action: *select_target_full
             - name: Type
               data: ship_type
+              tap_action: *select_target_full
             - name: Destination
               data: destination
+              tap_action: *select_target_full
             - name: COG (°)
               data: cog
+              tap_action: *select_target_full
             - name: Heading (°)
               data: heading
+              tap_action: *select_target_full
             - name: Nav Status
               data: nav_status
+              tap_action: *select_target_full
             - name: Updated
               data: last_seen
+              tap_action: *select_target_full
+
+      # ── Detail card of the selected target ────────────────────────────────
+      # WHY THIS CARD EXISTS: Home Assistant ships no more-info control for the
+      # `geo_location` domain — `more-info-default` literally renders `nothing`
+      # — so clicking a target (in the table OR its marker on the map) only
+      # ever showed its state (the distance) and the history graph. All the
+      # vessel data lives in the entity's attributes, which that dialog never
+      # displays. This overlay renders them in full for whichever target is
+      # selected in input_text.ais_selected_mmsi.
+      - type: conditional
+        conditions:
+          # Both are needed: the helper is "" once cleared by the Close button,
+          # but "unknown" until it has ever been set (fresh install).
+          - condition: state
+            entity: input_text.ais_selected_mmsi
+            state_not: ""
+          - condition: state
+            entity: input_text.ais_selected_mmsi
+            state_not: "unknown"
+        card:
+          # custom:mod-card again: card-mod cannot style stack cards, so the
+          # stack gets a real ha-card wrapper to position the overlay by.
+          type: custom:mod-card
+          card_mod:
+            # Same geometry rules as the table overlay: pinned inside the map
+            # container with the 12px gutters kept, width configurable as a
+            # plain CSS length, and never taller than the container (the card
+            # scrolls instead of being cut off).
+            style: |
+              :host {
+                position: absolute;
+                left: 12px;
+                bottom: 12px;
+                top: 84px;
+                z-index: 3;
+                width: ${AIS_DETAIL_WIDTH};
+                max-width: calc(100vw - 48px);
+                display: flex;
+                align-items: flex-end;
+              }
+              ha-card {
+                max-height: 100%;
+                overflow: auto;
+                background: none;
+                border: none;
+                box-shadow: none;
+              }
+          card:
+            type: vertical-stack
+            cards:
+              - type: markdown
+                card_mod:
+                  # Rounded like every other card on the instance.
+                  style: |
+                    ha-card {
+                      border-radius: var(--ha-card-border-radius, 12px);
+                    }
+                    ha-markdown { padding: 12px 16px !important; }
+                # Jinja tag trim markers (`{%-`/`-%}`) are mandatory here: a
+                # blank line between table rows breaks the GFM table apart and
+                # the rest renders as raw `| … |` text.
+                content: |
+                  {%- set m = states('input_text.ais_selected_mmsi') -%}
+                  {%- set e = 'geo_location.ais_' ~ m -%}
+                  {%- if state_attr(e, 'mmsi') is none -%}
+                  ### AIS {{ m }}
+                  Target is no longer being received.
+                  {%- else -%}
+                  ### {{ state_attr(e, 'friendly_name') }}
+                  | Field | Value |
+                  |---|---|
+                  | MMSI | {{ state_attr(e, 'mmsi') }} |
+                  | Name | {{ state_attr(e, 'vessel_name') }} |
+                  | Callsign | {{ state_attr(e, 'callsign') }} |
+                  | Type | {{ state_attr(e, 'ship_type') }} |
+                  | Length / Beam (m) | {{ state_attr(e, 'length') }} / {{ state_attr(e, 'beam') }} |
+                  | Destination | {{ state_attr(e, 'destination') }} |
+                  | ETA | {{ state_attr(e, 'eta') }} |
+                  | Nav status | {{ state_attr(e, 'nav_status') }} |
+                  | Distance (km) | {{ states(e) }} |
+                  | SOG (kn) | {{ state_attr(e, 'sog') }} |
+                  | COG (°) | {{ state_attr(e, 'cog') }} |
+                  | Heading (°) | {{ state_attr(e, 'heading') }} |
+                  | Rate of turn (°/min) | {{ state_attr(e, 'rate_of_turn') }} |
+                  | Position | {{ state_attr(e, 'latitude') }}, {{ state_attr(e, 'longitude') }} |
+                  | Updated | {{ state_attr(e, 'last_seen') }} |
+                  {%- endif -%}
+              # A `button` card renders an oversized icon block; the tile card
+              # is a single compact row, and it is shrunk further here.
+              - type: tile
+                entity: input_text.ais_selected_mmsi
+                name: Close
+                icon: mdi:close
+                hide_state: true
+                vertical: false
+                tap_action:
+                  action: perform-action
+                  perform_action: input_text.set_value
+                  target:
+                    entity_id: input_text.ais_selected_mmsi
+                  data:
+                    value: ""
+                card_mod:
+                  style: |
+                    ha-card {
+                      border-radius: var(--ha-card-border-radius, 12px);
+                      margin-top: 8px;
+                    }
+                    ha-tile-info { font-size: 13px; }
