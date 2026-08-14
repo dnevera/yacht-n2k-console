@@ -162,27 +162,40 @@
                 width: ${AIS_TABLE_COLLAPSED_WIDTH};
                 max-width: calc(100vw - 48px);
               }
-              /* The ha-card is the ONE scroll container, on BOTH axes. An
+              /* The card KEEPS its rounded corners (overflow: hidden clips the
+                 table to them); scrolling lives on the content <div> instead —
+                 with `overflow: auto` on ha-card itself the table painted over
+                 the corners and they looked square. */
+              ha-card {
+                max-height: min(calc(${AIS_ROWS_SCROLL_COMPACT_PX}px + 56px), 100%);
+                overflow: hidden;
+                border-radius: var(--ha-card-border-radius, 12px);
+                display: flex;
+                flex-direction: column;
+              }
+              /* The content div is the ONE scroll container, on BOTH axes. An
                  earlier revision scrolled the tbody vertically instead, so
                  with a horizontally scrolled table the vertical scrollbar sat
                  far off-screen to the right and was unreachable. */
-              ha-card {
-                max-height: min(calc(${AIS_ROWS_SCROLL_COMPACT_PX}px + 56px), 100%);
+              ha-card > div {
                 overflow: auto;
-                border-radius: var(--ha-card-border-radius, 12px);
+                min-height: 0;
               }
           css:
-            "table+": " border-collapse: separate; border-spacing: 0;"
+            # The card's own default `padding: 16px` on the table is dropped:
+            # under horizontal scroll it produced an uneven gutter. Side
+            # spacing comes from the first/last cell padding below instead.
+            "table+": " border-collapse: separate; border-spacing: 0; padding: 0;"
             # Sticky header: the rows scroll under it inside the ha-card.
-            "thead th+": " position: sticky; top: 0; z-index: 1; background: var(--card-background-color, var(--ha-card-background)); white-space: nowrap; padding: 6px 10px;"
+            "thead th+": " position: sticky; top: 0; z-index: 1; background: var(--card-background-color, var(--ha-card-background)); white-space: nowrap; padding: 8px 10px;"
             # Horizontal padding for the cell content (it used to touch the
             # card edges); every cell stays on ONE line so long names don't
             # make rows two lines tall. The "+" suffix APPENDS to the card's
             # own default rule instead of replacing it.
-            "tr td+": " white-space: nowrap; padding: 6px 10px;"
-            # The vessel name must never be clipped — the column gets its own
-            # (configurable) minimum width.
-            "thead th:first-child, tbody td:first-child+": " min-width: ${AIS_VESSEL_COL_WIDTH};"
+            "tr td+": " white-space: nowrap; padding: 8px 10px;"
+            # Outer gutters, so the content never touches the rounded edges.
+            "thead th:first-child, tbody td:first-child+": " min-width: ${AIS_VESSEL_COL_WIDTH}; padding-left: 16px;"
+            "thead th:last-child, tbody td:last-child+": " padding-right: 16px;"
           columns:
             # Clicking ANY cell selects that vessel: flex-table-card resolves
             # `col[N]` against the row's Nth column value, so the hidden MMSI
@@ -250,20 +263,28 @@
                 width: ${AIS_TABLE_WIDTH};
                 max-width: calc(100vw - 48px);
               }
-              /* One scroll container on BOTH axes — see the collapsed table. */
+              /* Rounded corners clip the table; the scroll (both axes) lives
+                 on the content div — see the collapsed table above. */
               ha-card {
                 max-height: min(calc(${AIS_ROWS_SCROLL_PX}px + 56px), 100%);
-                overflow: auto;
+                overflow: hidden;
                 border-radius: var(--ha-card-border-radius, 12px);
+                display: flex;
+                flex-direction: column;
+              }
+              ha-card > div {
+                overflow: auto;
+                min-height: 0;
               }
           css:
             # All 13 columns need room: below this width the table stops
             # squeezing and the ha-card scrolls horizontally instead (cells
             # are nowrap, so squeezing would just clip the text).
-            "table+": " min-width: ${AIS_TABLE_MIN_WIDTH}px; border-collapse: separate; border-spacing: 0;"
-            "thead th+": " position: sticky; top: 0; z-index: 1; background: var(--card-background-color, var(--ha-card-background)); white-space: nowrap; padding: 6px 10px;"
-            "tr td+": " white-space: nowrap; padding: 6px 10px;"
-            "thead th:first-child, tbody td:first-child+": " min-width: ${AIS_VESSEL_COL_WIDTH};"
+            "table+": " min-width: ${AIS_TABLE_MIN_WIDTH}px; border-collapse: separate; border-spacing: 0; padding: 0;"
+            "thead th+": " position: sticky; top: 0; z-index: 1; background: var(--card-background-color, var(--ha-card-background)); white-space: nowrap; padding: 8px 10px;"
+            "tr td+": " white-space: nowrap; padding: 8px 10px;"
+            "thead th:first-child, tbody td:first-child+": " min-width: ${AIS_VESSEL_COL_WIDTH}; padding-left: 16px;"
+            "thead th:last-child, tbody td:last-child+": " padding-right: 16px;"
           columns:
             # `col[5]` = the MMSI column below (index in THIS list); clicking
             # any cell selects that vessel for the detail card.
