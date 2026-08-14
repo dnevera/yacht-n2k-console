@@ -53,6 +53,60 @@ _OWN_BOAT_ICON = "⛵"
 
 
 
+# ── marker glyph / icon per target type ─────────────────────────────────────
+# The map marker label is PLAIN TEXT (ha-entity-marker escapes HTML), so the
+# per-type "icon" on the map is a unicode glyph prefixed to the label. The mdi
+# icon alongside it is what more-info and any entity list render. Keys are
+# matched as a case-insensitive PREFIX of the decoded SHIP_TYPE lookup value of
+# nmea2000 (e.g. "Cargo ship (hazard cat X)" matches "cargo"), so the many
+# "(hazard cat …)" variants need no separate entries.
+_TYPE_MARKS: tuple[tuple[str, str, str], ...] = (
+    ("sailing", "⛵", "mdi:sail-boat"),
+    ("pleasure", "🛥", "mdi:ferry"),
+    ("passenger", "🛳", "mdi:ferry"),
+    ("cargo", "🚢", "mdi:ferry"),
+    ("tanker", "🛢", "mdi:ferry"),
+    ("tug", "🚤", "mdi:ferry"),
+    ("towing", "🚛", "mdi:ferry"),
+    ("port tender", "🚤", "mdi:ferry"),
+    ("pilot", "🧭", "mdi:ferry"),
+    ("fishing", "🎣", "mdi:fish"),
+    ("engaged in fishing", "🎣", "mdi:fish"),
+    ("high speed craft", "⚡", "mdi:speedboat"),
+    ("wing in ground", "🛩", "mdi:airplane"),
+    ("sar", "🚁", "mdi:helicopter"),
+    ("medical", "🚑", "mdi:medical-bag"),
+    ("law enforcement", "🚓", "mdi:police-badge"),
+    ("engaged in military operations", "🎖", "mdi:shield"),
+    ("engaged in dredging", "🏗", "mdi:excavator"),
+    ("engaged in diving", "🤿", "mdi:diving-scuba"),
+    ("anti-pollution", "♻", "mdi:recycle"),
+)
+_DEFAULT_GLYPH = "🚢"
+_DEFAULT_ICON = "mdi:ferry"
+
+# Nav status the transceiver never sent (Class B position reports carry no
+# navStatus field at all, and Class A may report it as unavailable). The wording
+# is reused VERBATIM from the library's NAV_STATUS lookup so the column never
+# mixes vocabularies.
+_NAV_MOORED = "Moored"
+_NAV_UNDER_WAY_ENGINE = "Under way using engine"
+_NAV_UNDER_WAY_SAILING = "Under way sailing"
+# Below this SOG (knots) a target counts as not moving — the same threshold AIS
+# itself uses to distinguish a moored/anchored vessel from one under way.
+_MOORED_SOG_KN = 0.2
+
+
+def _type_marks(ship_type: Any) -> tuple[str, str]:
+    """(glyph, mdi icon) for a decoded SHIP_TYPE value."""
+    text = str(ship_type or "").strip().lower()
+    if text and text not in ("unavailable", "none", "—"):
+        for prefix, glyph, icon in _TYPE_MARKS:
+            if text.startswith(prefix):
+                return glyph, icon
+    return _DEFAULT_GLYPH, _DEFAULT_ICON
+
+
 def _valid_origin(lat: Any, lon: Any) -> tuple[float, float] | None:
     """Sanity-check a candidate distance origin.
 
@@ -133,6 +187,10 @@ class AisTarget(GeolocationEvent):
         self._attr_name = f"{_OWN_BOAT_ICON} {name}" if self._is_own_ship else name
         self._attr_latitude = reading.latitude
         self._attr_longitude = reading.longitude
+        # Icon by target type (more-info / entity lists). The map marker gets
+        # the matching unicode glyph through `map_label` instead, because the
+        # marker label is plain text.
+        self._attr_icon = _type_marks(self._static("ship_type"))[1]
         # A GeolocationEvent's state IS its distance, so leaving it unset
         # parks every live target at state `unknown` (which in turn made a
         # state-based auto-entities filter wipe the whole detail table).
@@ -173,6 +231,34 @@ class AisTarget(GeolocationEvent):
         self._apply(reading)
         self.async_write_ha_state()
 
+    def _nav_status(self) -> str:
+        """Navigational status, filling in what the transceiver never sent.
+
+        Class B position reports carry NO navStatus field at all (and Class A
+        may report it as unavailable), which left the column empty for most
+        targets. When it is missing we derive it from speed over ground, using
+        the AIS vocabulary verbatim: not moving -> "Moored", moving -> "Under
+        way sailing" for a sailing vessel, otherwise "Under way using engine".
+        With no speed either, nothing is claimed.
+        """
+        nav = self._reading.nav_status
+        if nav is not None and str(nav).strip().lower() not in (
+            "",
+            "unavailable",
+            "unknown",
+            "undefined",
+        ):
+            return str(nav)
+        sog = self._reading.sog
+        if not isinstance(sog, (int, float)):
+            return "\u2014"
+        if sog < _MOORED_SOG_KN:
+            return _NAV_MOORED
+        ship_type = str(self._static("ship_type") or "").strip().lower()
+        if ship_type.startswith("sailing"):
+            return _NAV_UNDER_WAY_SAILING
+        return _NAV_UNDER_WAY_ENGINE
+
     def _initials(self) -> str:
         """Two-letter marker badge, exactly like HA's own default.
 
@@ -202,7 +288,8 @@ class AisTarget(GeolocationEvent):
         length = self._static("length")
         if isinstance(length, (int, float)):
             parts.append(f"{length:.0f}m")
-        label = self._initials()
+        glyph = _type_marks(self._static("ship_type"))[0]
+        label = f"{glyph}{self._initials()}"
         if parts:
             label = f"{label} {' '.join(parts)}"
         return label
@@ -236,7 +323,7 @@ class AisTarget(GeolocationEvent):
             "sog": disp(r.sog),
             "cog": disp(r.cog),
             "heading": disp(r.heading),
-            "nav_status": disp(r.nav_status),
+            "nav_status": self._nav_status(),
             "rate_of_turn": disp(r.rate_of_turn),
             # Identity fields fall back to the configured own-boat values (for
             # our MMSI only) when the bus has not delivered static data.
