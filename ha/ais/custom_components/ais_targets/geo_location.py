@@ -13,6 +13,7 @@ never polluted with transient per-MMSI devices.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 import logging
 from typing import Any
@@ -23,6 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
+from homeassistant.util.location import distance
 
 from .ais_bus import AisBusClient, AisTargetReading
 from .const import (
@@ -78,6 +80,23 @@ class AisTarget(GeolocationEvent):
             self._attr_name = reading.vessel_name or f"AIS {reading.mmsi}"
         self._attr_latitude = reading.latitude
         self._attr_longitude = reading.longitude
+        # A GeolocationEvent's state IS its distance, so leaving it unset
+        # parks every live target at state `unknown` (which in turn made a
+        # state-based auto-entities filter wipe the whole detail table).
+        self._attr_distance = self._distance_km(reading)
+
+    def _distance_km(self, reading: AisTargetReading) -> float | None:
+        hass = getattr(self, "hass", None)
+        if hass is None or reading.latitude is None or reading.longitude is None:
+            return None
+        home_lat = hass.config.latitude
+        home_lon = hass.config.longitude
+        if home_lat is None or home_lon is None:
+            return None
+        return round(
+            distance(home_lat, home_lon, reading.latitude, reading.longitude) / 1000,
+            2,
+        )
 
     def update_from_reading(
         self, reading: AisTargetReading, is_own_ship: bool
@@ -151,6 +170,13 @@ class AisTargetsManager:
         self._client = client
         self._async_add_entities = async_add_entities
         self._entities: dict[int, AisTarget] = {}
+        # Entity objects whose HA removal is still in flight. Re-adding an
+        # entity_id that HA has not finished removing makes the platform
+        # refuse the add ("entity id already exists"), after which the row is
+        # present in the table but carries no attributes at all — which is
+        # exactly the "after a while everything turns into undefined" symptom.
+        self._removing: set[int] = set()
+        self._refresh_lock = asyncio.Lock()
         self._unsub_interval = None
 
     @property
@@ -193,6 +219,12 @@ class AisTargetsManager:
         await self._async_refresh_now()
 
     async def _async_refresh_now(self) -> None:
+        # Refreshes must never overlap: two concurrent passes could add and
+        # remove the same entity_id at the same time.
+        async with self._refresh_lock:
+            await self._async_refresh_locked()
+
+    async def _async_refresh_locked(self) -> None:
         try:
             snapshot = self._client.snapshot()
         except Exception:  # noqa: BLE001 - a refresh glitch must never crash HA
@@ -203,7 +235,6 @@ class AisTargetsManager:
         stale_before = now - self.stale_timeout
         own_mmsi = self.own_mmsi
 
-        new_entities: list[AisTarget] = []
         seen: set[int] = set()
         for mmsi, reading in snapshot.items():
             # Only plottable, non-stale targets get an entity.
@@ -212,26 +243,49 @@ class AisTargetsManager:
             if reading.last_seen is not None and reading.last_seen < stale_before:
                 continue
             seen.add(mmsi)
-            is_own = own_mmsi is not None and mmsi == own_mmsi
 
+        # 1) Expire first, and AWAIT the removals — doing this before any add
+        #    guarantees a vessel that briefly went stale and came straight
+        #    back can re-register its entity_id cleanly.
+        for mmsi in list(self._entities):
+            entity = self._entities[mmsi]
+            if mmsi in seen and entity.last_seen >= stale_before:
+                continue
+            del self._entities[mmsi]
+            self._client.drop(mmsi)
+            self._removing.add(mmsi)
+            try:
+                await entity.async_remove(force_remove=True)
+            except Exception:  # noqa: BLE001 - removal must never break a tick
+                _LOGGER.debug(
+                    "ais_targets: removing %s failed", entity.entity_id, exc_info=True
+                )
+            finally:
+                self._removing.discard(mmsi)
+
+        # 2) Then update the survivors and add the newcomers.
+        new_entities: list[AisTarget] = []
+        for mmsi in seen:
+            reading = snapshot[mmsi]
+            is_own = own_mmsi is not None and mmsi == own_mmsi
             existing = self._entities.get(mmsi)
-            if existing is None:
-                entity = AisTarget(reading, is_own)
-                self._entities[mmsi] = entity
-                new_entities.append(entity)
-            else:
+            if existing is not None:
                 existing.update_from_reading(reading, is_own)
+                continue
+            if self.hass.states.get(f"geo_location.ais_{mmsi}") is not None:
+                # A leftover state object from a previous incarnation of this
+                # target is still in the state machine; adding a second entity
+                # for the same entity_id would be rejected and leave an
+                # attribute-less ghost row in the table. Clear it first and
+                # pick the target up on the next tick.
+                self.hass.states.async_remove(f"geo_location.ais_{mmsi}")
+                continue
+            entity = AisTarget(reading, is_own)
+            self._entities[mmsi] = entity
+            new_entities.append(entity)
 
         if new_entities:
             self._async_add_entities(new_entities)
-
-        # Expire targets that are gone or stale, both from HA and the client.
-        for mmsi in list(self._entities):
-            entity = self._entities[mmsi]
-            if mmsi not in seen or entity.last_seen < stale_before:
-                del self._entities[mmsi]
-                self._client.drop(mmsi)
-                self.hass.async_create_task(entity.async_remove(force_remove=True))
 
 
 async def async_setup_entry(

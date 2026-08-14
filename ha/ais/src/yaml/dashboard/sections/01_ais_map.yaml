@@ -67,4 +67,16 @@
       filter:
         include:
           - entity_id: "geo_location.ais_*"
-        exclude: []
+        exclude:
+          # Ghost rows: leftover entity_registry rows for geo_location.ais_*
+          # (from older versions of the integration, which set a unique_id)
+          # are "restored" by HA as attribute-less `unavailable` states, match
+          # the entity_id mask and render a full row of `undefined` cells.
+          #
+          # NOTE: do NOT exclude `unknown` here. A GeolocationEvent's state is
+          # its `distance`, which we never set, so EVERY live target sits at
+          # state `unknown` — excluding it emptied the whole table while the
+          # map (which reads latitude/longitude, not state) stayed correct.
+          - state: "unavailable"
+          - attributes:
+              restored: true
