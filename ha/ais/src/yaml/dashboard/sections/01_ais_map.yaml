@@ -69,7 +69,7 @@
                leaflet canvas is clipped to it (overflow: hidden). */
             ha-card {
               height: 100%;
-              border-radius: var(--ha-card-border-radius, 12px);
+              border-radius: ${AIS_CARD_RADIUS};
               overflow: hidden;
             }
             #root {
@@ -157,7 +157,7 @@
                 position: absolute;
                 top: 84px;
                 right: 12px;
-                bottom: 12px;
+                height: calc(${AIS_MAP_HEIGHT} - 96px);
                 z-index: 2;
                 width: ${AIS_TABLE_COLLAPSED_WIDTH};
                 max-width: calc(100vw - 48px);
@@ -176,11 +176,11 @@
             # visible corners. `:host` (not the card's own
             # `.type-custom-flex-table-card` rule) — a class selector inside a
             # shadow root can never match its own host element.
-            ":host": " border-radius: var(--ha-card-border-radius, 12px); overflow: hidden; display: block;"
+            ":host": " border-radius: ${AIS_CARD_RADIUS}; overflow: hidden; display: block;"
             # Scroll on BOTH axes lives on ha-card. An earlier revision scrolled
             # the tbody, so with a horizontally scrolled table the vertical
             # scrollbar sat far off-screen to the right and was unreachable.
-            "ha-card": " max-height: 100%; overflow: auto; border-radius: var(--ha-card-border-radius, 12px); box-shadow: none;"
+            "ha-card": " max-height: 100%; overflow: auto; border-radius: ${AIS_CARD_RADIUS}; box-shadow: none;"
             # The card's own default `padding: 16px` on the table is dropped:
             # under horizontal scroll it produced an uneven gutter. Side
             # spacing comes from the first/last cell padding below instead.
@@ -257,7 +257,7 @@
                 position: absolute;
                 top: 84px;
                 right: 12px;
-                bottom: 12px;
+                height: calc(${AIS_MAP_HEIGHT} - 96px);
                 z-index: 2;
                 width: ${AIS_TABLE_WIDTH};
                 max-width: calc(100vw - 48px);
@@ -269,8 +269,8 @@
                 max-height: min(calc(${AIS_ROWS_SCROLL_PX}px + 56px), 100%);
               }
           css:
-            ":host": " border-radius: var(--ha-card-border-radius, 12px); overflow: hidden; display: block;"
-            "ha-card": " max-height: 100%; overflow: auto; border-radius: var(--ha-card-border-radius, 12px); box-shadow: none;"
+            ":host": " border-radius: ${AIS_CARD_RADIUS}; overflow: hidden; display: block;"
+            "ha-card": " max-height: 100%; overflow: auto; border-radius: ${AIS_CARD_RADIUS}; box-shadow: none;"
             # All 13 columns need room: below this width the table stops
             # squeezing and the ha-card scrolls horizontally instead (cells
             # are nowrap, so squeezing would just clip the text).
@@ -363,8 +363,13 @@
               :host {
                 position: absolute;
                 left: 12px;
-                bottom: 12px;
                 top: 84px;
+                /* Height is derived from the MAP height, not from the stack
+                   container: the container is ~24px taller than the map (the
+                   collapsed, zero-height wrappers of the other overlays still
+                   contribute the stack's row gaps), so `bottom: 12px` pushed
+                   the Close button below the map's bottom edge. */
+                height: calc(${AIS_MAP_HEIGHT} - 96px);
                 z-index: 3;
                 width: ${AIS_DETAIL_WIDTH};
                 max-width: calc(100vw - 48px);
@@ -394,8 +399,8 @@
                   # stays pinned outside it and is always reachable).
                   style: |
                     ha-card {
-                      border-radius: var(--ha-card-border-radius, 12px);
-                      max-height: calc(100vh - 280px);
+                      border-radius: ${AIS_CARD_RADIUS};
+                      max-height: calc(${AIS_MAP_HEIGHT} - 180px);
                       overflow: auto;
                     }
                     ha-markdown { padding: 12px 16px !important; }
@@ -446,7 +451,7 @@
                 card_mod:
                   style: |
                     ha-card {
-                      border-radius: var(--ha-card-border-radius, 12px);
+                      border-radius: ${AIS_CARD_RADIUS};
                       margin-top: 8px;
                     }
                     ha-tile-info { font-size: 13px; }

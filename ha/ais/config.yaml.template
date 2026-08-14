@@ -71,7 +71,7 @@ table:
   # vessel names. Make this at least as wide as the longest name you want to
   # see in full.
   # Placeholder: ${AIS_VESSEL_COL_WIDTH}
-  vessel_column_width: 160px
+  vessel_column_width: 150px
   # Minimum width of the expanded table, in px. The overlay itself is pinned to
   # the map container's box (never wider than the window, 12px gutters kept);
   # once that box is narrower than this value the table scrolls HORIZONTALLY
@@ -91,3 +91,12 @@ detail:
   # (it scrolls instead of being cut off).
   # Placeholder: ${AIS_DETAIL_WIDTH}
   width: 360px
+
+# ── Card styling ────────────────────────────────────────────────────────────
+style:
+  # Corner radius of the map, the target tables and the detail card.
+  # A LITERAL length on purpose: the theme in use sets
+  # `--ha-card-border-radius: 0`, so `var(--ha-card-border-radius, 12px)` never
+  # fell back to 12px and every card rendered with square corners.
+  # Placeholder: ${AIS_CARD_RADIUS}
+  card_radius: 12px

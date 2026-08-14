@@ -86,6 +86,12 @@ def build_placeholders(config):
         "AIS_MAP_HEIGHT": str(map_cfg.get("height", "calc(100vh - 104px)")),
         "AIS_MARKER_SIZE": str(map_cfg.get("marker_size", "52px")),
         "AIS_MARKER_FONT_SIZE": str(map_cfg.get("marker_font_size", "10px")),
+        # Explicit radius, NOT `var(--ha-card-border-radius, 12px)`: the theme
+        # in use defines that variable as `0`, so the fallback never applied
+        # and every card on this dashboard rendered with square corners.
+        "AIS_CARD_RADIUS": str(
+            (config.get("style") or {}).get("card_radius", "12px")
+        ),
         "AIS_SORT_BY": str(tbl_cfg.get("default_sort", "state+")),
         # The table body is its own scroll container: N rows visible, the rest
         # reachable by scrolling (flex-table-card's `max_rows` would truncate).
