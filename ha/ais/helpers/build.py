@@ -149,6 +149,31 @@ def map_height_css(height_px):
     return f"min({height_px}px, calc(100vh - {reserved}px))"
 
 
+def map_style(height_px):
+    """card_mod style forcing a fixed map height.
+
+    THE bug behind "the map is huge and the page scrolls": hui-map-card's
+    _computePadding() sets an INLINE `#root { padding-bottom: 100% }` whenever
+    the card is not a direct panel/grid child (ours lives inside a stack), which
+    makes the map SQUARE — on an edge-to-edge panel that is ~viewport-width tall.
+    Also, the map element is `ha-map`, not `#map`, so the previous `#map` rule
+    never matched anything. Both are fixed here: `:host` gives the card element a
+    real height and the inline padding is overridden back to 0."""
+    height = map_height_css(height_px)
+    return (
+        ":host {\n"
+        "  display: block;\n"
+        f"  height: {height};\n"
+        "}\n"
+        "ha-card { height: 100%; }\n"
+        "#root {\n"
+        "  padding-bottom: 0 !important;\n"
+        "  height: 100% !important;\n"
+        "}\n"
+        "ha-map { height: 100% !important; }\n"
+    )
+
+
 OVERLAY_TOP_PX = 12
 OVERLAY_TABLE_TOP_PX = 84
 COLLAPSED_WIDTH = "300px"
@@ -223,13 +248,7 @@ def _patch_cards(cards, default_zoom, height_px, detail_fields, depth=0):
         card_id = card.pop("id", None)
         if card_id == "map" and card.get("type") == "map":
             card["default_zoom"] = default_zoom
-            height = map_height_css(height_px)
-            card["card_mod"] = {
-                "style": (
-                    f"ha-card {{ height: {height}; }}\n"
-                    f"#map {{ height: {height} !important; }}\n"
-                )
-            }
+            card["card_mod"] = {"style": map_style(height_px)}
         elif card_id == "overlay_toggle":
             card["card_mod"] = {"style": overlay_toggle_style()}
         elif card_id == "detail_list_compact":

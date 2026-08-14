@@ -33,9 +33,21 @@
           - ais_targets
         default_zoom: 12
         card_mod:
+          # hui-map-card sets an INLINE `#root { padding-bottom: 100% }` when it
+          # is not a direct panel/grid child (ours is inside a stack), i.e. the
+          # map makes itself SQUARE — viewport-wide => viewport-tall => scroll.
+          # Also the map element is `ha-map`, not `#map`. Override both.
           style: |
-            ha-card { height: min(480px, calc(100vh - 104px)); }
-            #map { height: min(480px, calc(100vh - 104px)) !important; }
+            :host {
+              display: block;
+              height: min(480px, calc(100vh - 104px));
+            }
+            ha-card { height: 100%; }
+            #root {
+              padding-bottom: 0 !important;
+              height: 100% !important;
+            }
+            ha-map { height: 100% !important; }
 
       # ── Overlay header: expand/collapse toggle (always visible) ───────────
       # A `tile` card, not `entities`: entities always renders a full card with
