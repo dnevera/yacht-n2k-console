@@ -71,7 +71,7 @@ graph LR
 - В нормальном потоке лежит **только карта** (высота ограничена вьюпортом, полная ширина контента).
 - Список целей рендерится **оверлеем** поверх правой части карты: каждая карточка оверлея позиционируется своим собственным `card_mod` (`:host { position: absolute; top/right; z-index }`), заданным прямо в шаблоне.
 - Два взаимоисключающих `conditional`-карточки по состоянию `input_boolean.ais_table_expanded`:
-  - **`off` (по умолчанию)** — компактный сайдбар (ширина из `table.collapsed_width`): только `Vessel` и `Dist (km)`.
+  - **`off` (по умолчанию)** — компактный сайдбар (ширина из `table.collapsed_width`): `Vessel`, `Dist (km)` и `SOG (kn)`.
   - **`on`** — полная таблица со всеми колонками, ширина из `table.width`.
 
 ### Габариты оверлея: не шире и не выше окна
@@ -158,13 +158,13 @@ graph LR
 |---|---|
 | Vessel | `name` |
 | Dist (km) | `state` |
+| SOG (kn) | `sog` — сразу после расстояния (скорость цели читается вместе с дистанцией) |
 | MMSI | `mmsi` |
 | Callsign | `callsign` |
 | Type | `ship_type` |
 | Length (m) | `length` |
 | Beam (m) | `beam` |
 | Destination | `destination` |
-| SOG (kn) | `sog` |
 | COG (°) | `cog` |
 | Heading (°) | `heading` |
 | Nav Status | `nav_status` |
@@ -223,6 +223,19 @@ ha-card { height: 100%; }
 #root { padding-bottom: 0 !important; height: 100% !important; }
 ha-map { height: 100% !important; }
 ```
+
+### Подпись маркера на карте
+
+По умолчанию `ha-map` подписывает маркер `geo_location` **инициалами** имени (первые буквы слов, максимум 3 символа) — то есть ни имени, ни данных о судне на карте фактически не видно. Читаемую подпись даёт только режим `label_mode: attribute`, поэтому источник карты задан объектом:
+
+```yaml
+geo_location_sources:
+  - source: ais_targets
+    label_mode: attribute
+    attribute: map_label
+```
+
+Атрибут `map_label` формирует интеграция (`AisTarget._map_label()`) в виде `имя · SOG kn · длина m`. Недоступные поля просто опускаются (на карте не должно быть прочерков), ширина/beam в подпись намеренно не входит — по требованию только длина.
 
 ### Ширина колонки с именем судна
 

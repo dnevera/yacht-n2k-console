@@ -37,7 +37,13 @@
         # source of truth for our own position on this map.
         entities: []
         geo_location_sources:
-          - ais_targets
+          # `label_mode: attribute` is the ONLY way to get a readable marker
+          # label: by default the card labels a geo_location marker with the
+          # first letters of its name (3 chars max). The `map_label` attribute
+          # is built by the integration as "name · SOG kn · length m".
+          - source: ais_targets
+            label_mode: attribute
+            attribute: map_label
         default_zoom: ${AIS_MAP_ZOOM}
         card_mod:
           # hui-map-card sets an INLINE `#root { padding-bottom: 100% }` when it
@@ -155,6 +161,9 @@
             - name: Dist (km)
               data: state
               align: right
+            - name: SOG (kn)
+              data: sog
+              align: right
 
       # ── Expanded overlay: the full table ─────────────────────────────────
       - type: conditional
@@ -217,20 +226,21 @@
             - name: Dist (km)
               data: state
               align: right
+            - name: SOG (kn)
+              data: sog
+              align: right
+            - name: Length (m)
+              data: length
+            - name: Beam (m)
+              data: beam
             - name: MMSI
               data: mmsi
             - name: Callsign
               data: callsign
             - name: Type
               data: ship_type
-            - name: Length (m)
-              data: length
-            - name: Beam (m)
-              data: beam
             - name: Destination
               data: destination
-            - name: SOG (kn)
-              data: sog
             - name: COG (°)
               data: cog
             - name: Heading (°)

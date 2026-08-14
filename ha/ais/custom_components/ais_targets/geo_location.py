@@ -173,6 +173,24 @@ class AisTarget(GeolocationEvent):
         self._apply(reading)
         self.async_write_ha_state()
 
+    def _map_label(self) -> str:
+        """Marker label for the map card.
+
+        The map card renders a geo_location marker with the entity name's
+        INITIALS (3 chars max) unless the source is configured with
+        `label_mode: attribute`, so the readable label lives here: vessel name
+        plus its speed and length. Fields that are unavailable are simply left
+        out instead of showing a dash on the map.
+        """
+        parts: list[str] = [str(self._attr_name)]
+        sog = self._reading.sog
+        if isinstance(sog, (int, float)):
+            parts.append(f"{sog:.1f}kn")
+        length = self._static("length")
+        if isinstance(length, (int, float)):
+            parts.append(f"{length:.0f}m")
+        return " · ".join(parts)
+
     @property
     def last_seen(self) -> datetime:
         return self._reading.last_seen or dt_util.utcnow()
@@ -214,6 +232,8 @@ class AisTarget(GeolocationEvent):
             "destination": disp(r.destination),
             "eta": disp(r.eta),
             "is_own_ship": self._is_own_ship,
+            # Consumed by the map card via `label_mode: attribute`.
+            "map_label": self._map_label(),
             # Plain LOCAL wall-clock time: the table's "Updated" column is read
             # at a glance while sailing, and a full UTC ISO timestamp is both
             # unreadable there and off by the local UTC offset. The machine
