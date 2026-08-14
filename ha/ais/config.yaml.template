@@ -44,7 +44,7 @@ table:
   # a ⛵ icon in front of its name when the decoded MMSI matches the
   # integration's `own_mmsi` option.
   # Placeholder: ${AIS_SORT_BY}
-  default_sort: destination+
+  default_sort: state+
   # How many target rows are visible before the list starts scrolling, in the
   # expanded (full table) and the collapsed (side-bar) states. The table body
   # becomes its own scroll container, so extra targets are reachable by
@@ -64,14 +64,14 @@ table:
   # the 12px gutters.
   # Placeholders: ${AIS_TABLE_WIDTH} / ${AIS_TABLE_COLLAPSED_WIDTH}
   width: calc(50vw - 48px)
-  collapsed_width: 320px
+  collapsed_width: 340px
   # Width of the vessel-name column, as a CSS length. The table uses
   # `table-layout: fixed` (needed to keep header/body columns aligned while the
   # body scrolls), which otherwise splits the width evenly and CLIPS long
   # vessel names. Make this at least as wide as the longest name you want to
   # see in full.
   # Placeholder: ${AIS_VESSEL_COL_WIDTH}
-  vessel_column_width: 180px
+  vessel_column_width: 160px
   # Minimum width of the expanded table, in px. The overlay itself is pinned to
   # the map container's box (never wider than the window, 12px gutters kept);
   # once that box is narrower than this value the table scrolls HORIZONTALLY
