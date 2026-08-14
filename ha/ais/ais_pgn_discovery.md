@@ -58,30 +58,24 @@
 
 ```
 [N2K Bus / Alltek AIS]
-       │ (CAN Frames / Port 4001)
+       │ (CAN Frames)
        ▼
 [ydnu02 / TCP Gateway]
-       │ (Raw N2K stream)
+       │ (Raw N2K stream via TCP :4001)
        ▼
-[HA Integration: nmea2000] ─── (pgn_include: 129038, 129039, 129040, 129041, 129793, 129794, 129809, 129810)
+[Custom Component: ais_targets] ─── (Прямой TCP-клиент ais_bus.py, декодирование PGN в RAM)
        │
-       ▼ (Формирование уникальных primary_key по MMSI)
-[hass.states: sensor.ais_*]
+       ▼ (Группировка по MMSI, конвертация м/с→kn, рад→deg, таймаут 10 мин)
+[Entities: geo_location.ais_<mmsi>] ─── (Временные объекты в RAM, 0 записей в реестре HA)
        │
-       ▼
-[Custom Component: ais_targets] ─── (Группировка по MMSI, таймаут устаревания 10 мин)
-       │
-       ▼
-[Entities: geo_location.ais_<mmsi>]
-       │
-       ▼
-[HA Dashboard: ha/ais/] ─── (Карта Lovelace + список судов)
+       ├──► [HA Dashboard: Map] ─── (geo_location_sources: ['ais_targets'])
+       └──► [HA Dashboard: Table] ─── (custom:auto-entities + custom:flex-table-card)
 ```
 
-1. **Ключевая уникальность устройств:** В форке библиотеки `nmea2000` (`message.py`) поле `userId` / `mmsiOfVesselOfOrigin` помечено флагом `part_of_primary_key=True`. Благодаря этому каждая AIS-цель автоматически получает уникальный `primary_key` и свой хэш устройства в Home Assistant.
-2. **Разрешённые PGN (pgn_include):** В `.storage/core.config_entries` для интеграции `nmea2000` добавлены все 8 AIS PGN.
-3. **Кастомный компонент `ais_targets`:** Мониторит появление сырых сущностей, объединяет позиционные отчёты и статические данные по MMSI, создает сущности `geo_location.ais_<mmsi>` и авто-удаляет устаревшие цели по истечении настраиваемого таймаута (10 минут).
-4. **Дашборд `ha/ais/`:** Отображает собственное судно (`device_tracker.nevera`) и все динамические метки судов через источник `geo_location_sources: ['ais_targets']`.
+1. **Прямое чтение TCP-потока:** Компонент `ais_targets` открывает асинхронный TCP-сокет к порту 4001 шлюза YDNU-02 и декодирует PGN с помощью библиотеки `nmea2000` непосредственно в памяти процесса Home Assistant.
+2. **Исключение из интеграции `nmea2000`:** AIS PGN намеренно исключены из `pgn_include` штатной интеграции `nmea2000`, благодаря чему `core.device_registry` и `core.entity_registry` остаются чистыми от транзитных судов.
+3. **Уникальность по MMSI:** Поле `userId` (MMSI) служит ключом группировки всех входящих динамических (129038/129039) и статических (129794/129809/129810) сообщений.
+4. **Дашборд `ha/ais/`:** Карта `type: map` отрисовывает цели через источник `geo_location_sources: ['ais_targets']`, а таблица `custom:auto-entities` + `custom:flex-table-card` показывает полные характеристики целей с кликабельным переходом к mini-map через `more-info`.
 
 ---
 

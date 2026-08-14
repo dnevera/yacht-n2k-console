@@ -1,5 +1,12 @@
 views:
-  - type: sections
+  - type: panel
     title: AIS
     icon: mdi:radar
-    sections:
+    # `panel` is the only Lovelace view type that renders truly edge-to-edge
+    # (no centered max-width column, unlike `sections`/`masonry`, which the
+    # user reported as still not full width even with `grid_options: full`).
+    # It only ever shows ONE top-level card, so everything (heading, map,
+    # table) is wrapped in a single vertical-stack card below. The map's
+    # height stays fixed via card_mod (see 01_ais_map.yaml / build.py) so the
+    # panel's edge-to-edge width doesn't also mean edge-to-edge height.
+    cards:

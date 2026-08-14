@@ -1,102 +1,114 @@
 """Constants for the ais_targets integration.
 
 --------------------------------------------------------------------------
-NOTE ON ENTITY/ATTRIBUTE SHAPE — MUST BE RE-VERIFIED AGAINST A LIVE HA BUS
+ARCHITECTURE (2026-08-13 re-architecture)
 --------------------------------------------------------------------------
-This environment has no access to a live NMEA 2000 bus or a running Home
-Assistant instance, so the exact entity_id / attribute layout produced by
-the `nmea2000` custom integration for AIS PGNs (129038/129039/129040 for
-position reports, 129794 for static & voyage data) could not be observed
-directly and is inferred from this project's documented naming pattern for
-other nmea2000-decoded sensors (e.g. `sensor.wind_data_raymarine_20_442559_
-pk_a00872..._wind_speed` in ha/sailing-dash): each decoded PGN *field*
-becomes its own HA entity, sharing a "group" prefix (message id + a hash
-derived from the source/primary_key) and ending in a "_<field_name>" suffix.
-The MMSI itself (the field flagged `part_of_primary_key=True` in the fork,
-named `userId`/`mmsiOfVesselOfOrigin` in nmea2000/pgns.py) is expected to be
-exposed as the *value* of one such field entity, not necessarily as an
-attribute shared by the sibling fields.
+`ais_targets` does NOT read the `nmea2000` HA integration's entities anymore.
+Letting that integration decode AIS floods HA's device/entity registry (and
+the recorder DB) with one throwaway device + a batch of sensors per passing
+MMSI. Instead this component opens a plain TCP socket to the YDNU-02 gateway
+(the same raw `TIME R CANID DATA...` stream `ydnu02/pgn_decoder.py` parses),
+decodes AIS PGNs in-process with the `nmea2000` library, and keeps a per-MMSI
+in-memory target table. The only things it ever registers in HA are the live
+`geo_location.ais_<mmsi>` entities, which are transient by design.
 
-`geo_location.py` therefore groups entities defensively, by BOTH:
-  1. entity_id suffix matching against the field-name tables below, and
-  2. an `mmsi` (or `user_id`/`mmsi_of_vessel_of_origin`) attribute, if the
-     integration happens to expose one directly on a field's state.
-Anything that cannot be matched is logged (DEBUG/WARNING) and skipped
-rather than raising. This MUST be re-checked against a real AIS receiver on
-a live bus before this integration is trusted in production — see
-custom_components/ais_targets/README.md.
+Field ids below were verified against the installed `nmea2000` fork's
+`pgns.py` decoders (decode_pgn_129038/129039/129040/129794/129809/129810).
 --------------------------------------------------------------------------
 """
 
 DOMAIN = "ais_targets"
 
-CONF_SCAN_INTERVAL = "scan_interval"
+# ── Config-entry option keys (single source of truth, set via the UI) ───────
+CONF_GW_HOST = "gw_host"
+CONF_GW_PORT = "gw_port"
+CONF_OWN_MMSI = "own_mmsi"
+CONF_UPDATE_INTERVAL = "update_interval"
 CONF_STALE_TIMEOUT = "stale_timeout"
 
-# Seconds between scans of hass.states for AIS-derived nmea2000 entities.
-DEFAULT_SCAN_INTERVAL = 30
-# Minutes without an updated position before a target is expired/removed.
+# Default gateway endpoint. The YDNU-02 TCP gateway broadcasts the raw N2K
+# bus on port 4001; the host depends on where HA runs relative to the
+# gateway and MUST be set by the skipper in the config flow.
+DEFAULT_GW_HOST = "127.0.0.1"
+DEFAULT_GW_PORT = 4001
+# Empty by default: our own AIS unit also broadcasts its own MMSI (own-ship
+# message), so once the skipper fills this in, that target is flagged as our
+# own boat (named "Bumblebee") and reported under a distinct geo_location
+# `source` so it never gets plotted twice next to device_tracker.nevera.
+DEFAULT_OWN_MMSI = ""
+# Seconds between refreshes of the geo_location entities from the in-memory
+# target table (the socket read itself is continuous/push-driven).
+DEFAULT_UPDATE_INTERVAL = 5
+# Minutes without a position update before a target is expired/removed.
 DEFAULT_STALE_TIMEOUT = 10
 
-# Platform name the `nmea2000` HA integration registers its entities under
-# (entity_registry entry.platform), used to scope the scan instead of
-# guessing from the entity_id prefix alone.
-NMEA2000_PLATFORM = "nmea2000"
-
-# Message ids (from nmea2000/pgns.py `id` field) identifying AIS position
-# reports. Matched against a normalized (lowercased, separators stripped)
-# entity object_id, so "aisClassAPositionReport" and
-# "ais_class_a_position_report" compare equal.
-AIS_POSITION_ID_HINTS = (
-    "aisclassapositionreport",
-    "aisclassbpositionreport",
-    "aisclassbextendedpositionreport",
+# ── AIS PGNs we decode off the bus ──────────────────────────────────────────
+# Position reports (frequent): lat/lon/sog/cog/heading/nav_status/rate_of_turn.
+PGN_AIS_CLASS_A_POSITION = 129038
+PGN_AIS_CLASS_B_POSITION = 129039
+PGN_AIS_CLASS_B_EXT_POSITION = 129040
+AIS_POSITION_PGNS = frozenset(
+    {
+        PGN_AIS_CLASS_A_POSITION,
+        PGN_AIS_CLASS_B_POSITION,
+        PGN_AIS_CLASS_B_EXT_POSITION,
+    }
+)
+# Static & voyage data (infrequent): name/callsign/type/size/destination/eta.
+PGN_AIS_CLASS_A_STATIC = 129794
+PGN_AIS_CLASS_B_STATIC_A = 129809  # msg24 part A: name
+PGN_AIS_CLASS_B_STATIC_B = 129810  # msg24 part B: type/callsign/size
+AIS_STATIC_PGNS = frozenset(
+    {
+        PGN_AIS_CLASS_A_STATIC,
+        PGN_AIS_CLASS_B_STATIC_A,
+        PGN_AIS_CLASS_B_STATIC_B,
+    }
+)
+# Full set the drift-guard verifies is decodable by the installed fork.
+ALL_AIS_PGNS = frozenset(
+    AIS_POSITION_PGNS
+    | AIS_STATIC_PGNS
+    | {129041, 129793}  # AtoN report, UTC/date report (decoded, not plotted)
 )
 
-# Message id identifying AIS static & voyage related data (PGN 129794).
-AIS_STATIC_ID_HINTS = (
-    "aisclassastaticandvoyagerelateddata",
-)
+# ── nmea2000 field ids (from the fork's pgns.py) → our normalized names ──────
+# The MMSI is the `userId` field on every AIS message.
+FIELD_MMSI = "userId"
 
-# entity_id suffixes (after the last "_") that identify the MMSI/userId field.
-MMSI_FIELD_SUFFIXES = (
-    "user_id",
-    "userid",
-    "mmsi",
-    "mmsi_of_vessel_of_origin",
-)
-
-# entity_id suffix -> normalized attribute name, for AIS position reports.
-POSITION_FIELD_SUFFIXES = {
+# Position-report field id → attribute name. Values come from NMEA2000Field.value
+# (already scaled by the library): lat/lon in deg, cog/heading in rad, sog in
+# m/s, rateOfTurn in rad/s, navStatus is a LOOKUP → human string.
+POSITION_FIELDS = {
     "latitude": "latitude",
     "longitude": "longitude",
-    "sog": "sog",
-    "speed_over_ground": "sog",
-    "cog": "cog",
-    "course_over_ground": "cog",
-    "heading": "heading",
-    "true_heading": "heading",
-    "nav_status": "nav_status",
-    "navigational_status": "nav_status",
-    "navstatus": "nav_status",
-    "rate_of_turn": "rate_of_turn",
-    "rateofturn": "rate_of_turn",
+    "sog": "sog_ms",
+    "cog": "cog_rad",
+    "heading": "heading_rad",
+    "trueHeading": "heading_rad",
+    "navStatus": "nav_status",
+    "rateOfTurn": "rate_of_turn",
 }
 
-# entity_id suffix -> normalized attribute name, for static & voyage data.
-STATIC_FIELD_SUFFIXES = {
-    "vessel_name": "vessel_name",
+# Static/voyage field id → attribute name (129794 / 129809 / 129810 / 129040).
+STATIC_FIELDS = {
     "name": "vessel_name",
-    "call_sign": "callsign",
     "callsign": "callsign",
-    "ship_type": "ship_type",
-    "type_of_ship": "ship_type",
+    "typeOfShip": "ship_type",
     "length": "length",
     "beam": "beam",
     "destination": "destination",
-    "eta": "eta",
+    "etaDate": "eta_date",
+    "etaTime": "eta_time",
 }
 
-# `source` reported by every AisTarget geo_location entity — this is the
-# value referenced by `geo_location_sources: ['ais_targets']` on the map card.
+# `source` reported by EVERY AIS target entity, including our own boat — this
+# is the value referenced by `geo_location_sources: ['ais_targets']` on the
+# map card. Our own boat used to get a distinct source so it would never be
+# plotted twice next to the GPS-based device_tracker.nevera marker, but that
+# meant it depended entirely on that GPS tracker to appear on the map at all;
+# it now shares this source like every other target (flagged separately via
+# the `is_own_ship` attribute) so it is guaranteed visible once our own
+# AIS unit's own-ship message is decoded, even if device_tracker.nevera is
+# stale/unavailable.
 GEO_LOCATION_SOURCE = "ais_targets"

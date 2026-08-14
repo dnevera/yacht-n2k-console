@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
 """
-patch_pgn_include.py — idempotently add the AIS PGN set to the `pgn_include`
+patch_pgn_include.py — idempotently KEEP THE AIS PGNs OUT of the `pgn_include`
 allow-list of a live `nmea2000` config entry stored in
-`.storage/core.config_entries`.
+`.storage/core.config_entries`, and force `exclude_AIS = True`.
 
-Analogous in spirit to how ha/sailing-dash/helpers/merge_lovelace_resources.py
-and stage_provisioner.py do idempotent JSON merges: read the live document,
-compute the merged result, write it back ONLY if something actually changed,
-and never touch anything else in the file.
+⚠️ INVERTED ON 2026-08-13 (re-architecture):
+Earlier this script *added* the AIS PGNs to `pgn_include` so the `nmea2000` HA
+integration would decode AIS into entities. That approach was abandoned: the
+`ais_targets` custom integration now reads AIS straight from the gateway and
+decodes it in RAM, so the `nmea2000` HA integration must be kept AWAY from AIS
+— otherwise it recreates a throwaway device + sensors per passing MMSI and
+floods HA's registry / recorder DB. This script therefore now REMOVES the AIS
+PGNs from `pgn_include` (and sets `exclude_AIS = True`) so a previously-patched
+instance stops decoding AIS the moment `ha/ais/deploy.sh --install` runs.
 
-`pgn_include` is documented (see the project's nmea2000-setup skill and
-ha/sailing-dash's map_nmea_sensors.py comments) as a SILENT allow-list: a PGN
-missing from it produces no error, it just never gets an entity. That is
-exactly the failure mode this script exists to prevent for the AIS PGNs.
+Analogous in spirit to ha/sailing-dash/helpers/merge_lovelace_resources.py /
+stage_provisioner.py: read the live document, compute the result, write it back
+ONLY if something actually changed, and never touch anything else.
 
 USAGE
     python3 patch_pgn_include.py <core.config_entries path> [--write]
 
     Without --write: prints what WOULD change and exits 0 if nothing needs to
     change, 2 if a change is needed (so a caller shell script can decide).
-    With --write: patches the file in place (still idempotent - a no-op run
-    on an already-patched file exits 0 without touching the file's mtime).
+    With --write: patches the file in place (still idempotent — a no-op run on
+    an already-clean file exits 0 without touching the file's mtime).
 
 This script only edits the JSON on disk; ha/ais/deploy.sh is responsible for
 fetching core.config_entries out of the container, running this script, and
@@ -32,11 +36,9 @@ import argparse
 import json
 import sys
 
-# PGNs decodable by this project's nmea2000 fork (see .agents/skills/
-# nmea2000-setup/SKILL.md and nmea2000/pgns.py) needed for full AIS coverage:
-# Class A/B position reports, Class B extended position, Aid to Navigation,
-# UTC/date report, Class A static & voyage data, Class B static data (msg 24
-# parts A/B).
+# The AIS PGNs the ais_targets custom integration decodes itself off the
+# gateway — these must NOT be present in the nmea2000 HA integration's
+# pgn_include allow-list (see the module docstring for the reasoning).
 AIS_PGNS = [129038, 129039, 129040, 129041, 129793, 129794, 129809, 129810]
 
 NMEA2000_DOMAIN = "nmea2000"
@@ -52,10 +54,9 @@ def _iter_nmea2000_entries(config_entries_doc: dict):
 def compute_patch(config_entries_doc: dict) -> tuple[bool, list[str]]:
     """Return `(changed, messages)`.
 
-    `changed` is True when at least one nmea2000 entry's `pgn_include` was
-    missing one or more AIS PGNs and got patched IN PLACE (mutates
-    `config_entries_doc`). `messages` is a human-readable log, one line per
-    entry inspected.
+    `changed` is True when at least one nmea2000 entry still had an AIS PGN in
+    its `pgn_include` (removed here) or `exclude_AIS` not set to True (mutates
+    `config_entries_doc`). `messages` is a human-readable log.
     """
     changed = False
     messages: list[str] = []
@@ -64,60 +65,71 @@ def compute_patch(config_entries_doc: dict) -> tuple[bool, list[str]]:
     if not entries:
         messages.append(
             "No nmea2000 config entry found in core.config_entries — nothing "
-            "to patch (install/configure the nmea2000 integration first)."
+            "to clean (AIS is decoded by ais_targets, not this integration)."
         )
         return changed, messages
+
+    ais_set = set(AIS_PGNS)
 
     for entry in entries:
         options = entry.setdefault("options", {}) or {}
         entry["options"] = options
         data = entry.setdefault("data", {}) or {}
-
-        # Ensure exclude_AIS is False so AIS messages are not dropped
-        if data.get("exclude_AIS") is not False:
-            data["exclude_AIS"] = False
-            changed = True
-            messages.append(f"nmea2000 entry {entry.get('entry_id', '<unknown>')}: set exclude_AIS = False.")
-        if options.get("exclude_AIS") is not False and "exclude_AIS" in options:
-            options["exclude_AIS"] = False
-            changed = True
-
-        current = options.get("pgn_include")
-        target_dict = options
-        if current is None and data.get("pgn_include") is not None:
-            current = data.get("pgn_include")
-            target_dict = data
-
-        is_string_type = False
-        if isinstance(current, str):
-            current_list = [int(p.strip()) for p in current.split(",") if p.strip().isdigit()]
-            is_string_type = True
-        elif isinstance(current, list):
-            current_list = list(current)
-        else:
-            current_list = []
-
-        missing = [pgn for pgn in AIS_PGNS if pgn not in current_list]
-
         entry_id = entry.get("entry_id", "<unknown>")
-        if not missing:
+        entry_changed = False
+
+        # Force exclude_AIS = True wherever the key lives (data and/or options).
+        for holder, label in ((data, "data"), (options, "options")):
+            if "exclude_AIS" in holder and holder.get("exclude_AIS") is not True:
+                holder["exclude_AIS"] = True
+                entry_changed = True
+                messages.append(
+                    f"nmea2000 entry {entry_id}: set {label}.exclude_AIS = True."
+                )
+        # If exclude_AIS was absent entirely, add it to data (the canonical
+        # place the integration reads it from) so AIS is dropped by default.
+        if "exclude_AIS" not in data and "exclude_AIS" not in options:
+            data["exclude_AIS"] = True
+            entry_changed = True
             messages.append(
-                f"nmea2000 entry {entry_id}: pgn_include already covers all "
-                f"AIS PGNs ({AIS_PGNS}) — no change needed."
+                f"nmea2000 entry {entry_id}: added data.exclude_AIS = True."
             )
-            continue
 
-        new_list = current_list + missing
-        if is_string_type:
-            target_dict["pgn_include"] = ",".join(str(p) for p in new_list)
-        else:
-            target_dict["pgn_include"] = new_list
+        # Strip AIS PGNs out of pgn_include wherever it is stored.
+        for holder in (options, data):
+            current = holder.get("pgn_include")
+            if isinstance(current, str):
+                current_list = [
+                    int(p.strip())
+                    for p in current.split(",")
+                    if p.strip().isdigit()
+                ]
+                kept = [p for p in current_list if p not in ais_set]
+                if len(kept) != len(current_list):
+                    holder["pgn_include"] = ",".join(str(p) for p in kept)
+                    entry_changed = True
+                    removed = [p for p in current_list if p in ais_set]
+                    messages.append(
+                        f"nmea2000 entry {entry_id}: removed AIS PGNs {removed} "
+                        f"from pgn_include (string form)."
+                    )
+            elif isinstance(current, list):
+                kept = [p for p in current if p not in ais_set]
+                if len(kept) != len(current):
+                    removed = [p for p in current if p in ais_set]
+                    holder["pgn_include"] = kept
+                    entry_changed = True
+                    messages.append(
+                        f"nmea2000 entry {entry_id}: removed AIS PGNs {removed} "
+                        f"from pgn_include (list form)."
+                    )
 
-        changed = True
-        messages.append(
-            f"nmea2000 entry {entry_id}: added missing AIS PGNs {missing} to "
-            f"pgn_include (was {current_list})."
-        )
+        if not entry_changed:
+            messages.append(
+                f"nmea2000 entry {entry_id}: already AIS-free "
+                "(exclude_AIS True, no AIS PGNs in pgn_include) — no change."
+            )
+        changed = changed or entry_changed
 
     return changed, messages
 

@@ -28,10 +28,16 @@
 #     1. copies custom_components/ais_targets into the target's HA config dir
 #        (idempotent sha256-diff directory copy, like sailing-dash's
 #        ha_cp_dir_to_container_if_changed());
-#     2. patches the live nmea2000 config entry's pgn_include allow-list
-#        (.storage/core.config_entries) to include the AIS PGN set, if
-#        missing, via helpers/patch_pgn_include.py;
-#     3. runs helpers/verify_ais_targets.py against the nmea2000 package
+#     2. cleans AIS OUT of the live nmea2000 config entry
+#        (.storage/core.config_entries): removes the AIS PGNs from pgn_include
+#        and sets exclude_AIS=True (helpers/patch_pgn_include.py). AIS is
+#        decoded by the ais_targets component straight off the gateway, so the
+#        nmea2000 HA integration must NOT decode it (that would flood HA's
+#        registry with a throwaway device per passing MMSI);
+#     3. fetches + registers the custom:auto-entities + custom:flex-table-card
+#        Lovelace cards used by the target table (so ha/ais is self-sufficient
+#        and needs no separate sailing-dash deploy for the table to render);
+#     4. runs helpers/verify_ais_targets.py against the nmea2000 package
 #        found inside the container, as a drift-guard (best effort — logs a
 #        warning, never aborts the deploy on its own).
 #
@@ -137,9 +143,12 @@ install_component() {
     ha_state_flush
 }
 
-# ── patch_pgn_include(): verify/patch the live nmea2000 config entry ────────
+# ── patch_pgn_include(): keep AIS OUT of the live nmea2000 config entry ─────
+# AIS is decoded by ais_targets off the gateway; the nmea2000 HA integration
+# must not also decode it (registry/recorder garbage). This removes AIS PGNs
+# from pgn_include and forces exclude_AIS=True.
 patch_pgn_include() {
-    echo "-- Step: nmea2000 pgn_include allow-list --"
+    echo "-- Step: nmea2000 AIS exclusion (keep AIS out of the registry) --"
     local tmp_dir remote_path local_copy
     tmp_dir="$(mktemp -d /tmp/ais_pgn_patch.XXXXXX)"
     trap 'rm -rf "${tmp_dir}"' RETURN
@@ -151,14 +160,14 @@ patch_pgn_include() {
         return 0
     fi
 
-    # Report-only run first: exit 0 = pgn_include already covers every AIS
-    # PGN (nothing to do), exit 2 = a real change is needed, anything else =
-    # an unexpected script failure (a malformed core.config_entries, etc).
+    # Report-only run first: exit 0 = already AIS-free (nothing to do), exit 2
+    # = a real change is needed, anything else = an unexpected script failure
+    # (a malformed core.config_entries, etc).
     local report_status=0
     python3 "${HELPERS_DIR}/patch_pgn_include.py" "${local_copy}" || report_status=$?
 
     if [[ "${report_status}" -eq 0 ]]; then
-        echo "pgn_include already covers all AIS PGNs — nothing to patch."
+        echo "nmea2000 entry is already AIS-free — nothing to change."
         return 0
     elif [[ "${report_status}" -ne 2 ]]; then
         echo "WARN: patch_pgn_include.py failed unexpectedly (exit ${report_status}) — leaving pgn_include untouched." >&2
@@ -166,8 +175,69 @@ patch_pgn_include() {
     fi
 
     python3 "${HELPERS_DIR}/patch_pgn_include.py" "${local_copy}" --write
-    ha_cp_to_container_if_changed "${local_copy}" "${remote_path}" "core.config_entries (pgn_include)" \
+    ha_cp_to_container_if_changed "${local_copy}" "${remote_path}" "core.config_entries (AIS exclusion)" \
         && echo "pgn_include" >> "${AIS_CHANGE_FLAG}"
+}
+
+# ── deploy_card_deps(): the target table's Lovelace card dependencies ───────
+# Fetches the community cards the AIS target table needs (pinned in
+# ../sailing-dash/deps.yaml) and registers them as Lovelace resources on THIS
+# target, so ha/ais never depends on a separate sailing-dash deploy. Without
+# this the table renders as a "Custom element doesn't exist" error box.
+#   - auto-entities: discovers/filters the changing geo_location.ais_* set.
+#   - flex-table-card: renders that list as a multi-column, clickable table.
+deploy_card_deps() {
+    echo "-- Step: Lovelace card dependencies (target table) --"
+    local sailing_dir="${PROJECT_ROOT}/ha/sailing-dash"
+    local deps_helper="${sailing_dir}/helpers/fetch_deps.py"
+    local merge_helper="${sailing_dir}/helpers/merge_lovelace_resources.py"
+    local cards_dir="${sailing_dir}/build/deps/cards"
+    # asset:version pairs — keep the version in sync with ../sailing-dash/
+    # deps.yaml's `ref` for each card and the ?v= query below.
+    local assets=("auto-entities.js:1.16.1" "flex-table-card.js:1.4")
+
+    if [[ ! -f "${deps_helper}" || ! -f "${merge_helper}" ]]; then
+        echo "WARN: sailing-dash dependency helpers not found — skipping card deploy." >&2
+        echo "      The target table will show a 'Custom element doesn't exist' error." >&2
+        return 0
+    fi
+
+    if ! python3 "${deps_helper}" --only cards; then
+        echo "WARN: could not fetch Lovelace cards (no network access?) — skipping." >&2
+        return 0
+    fi
+
+    local tmp_dir resources_yaml current_json merged_json
+    tmp_dir="$(mktemp -d /tmp/ais_card_deps.XXXXXX)"
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    resources_yaml="${tmp_dir}/resources.yaml"
+    current_json="${tmp_dir}/lovelace_resources.json"
+    merged_json="${tmp_dir}/lovelace_resources.merged.json"
+
+    echo "resources:" > "${resources_yaml}"
+    local pair asset version
+    for pair in "${assets[@]}"; do
+        asset="${pair%%:*}"
+        version="${pair#*:}"
+        if [[ ! -f "${cards_dir}/${asset}" ]]; then
+            echo "WARN: ${asset} missing from ${cards_dir} after fetch — skipping this card." >&2
+            continue
+        fi
+        ha_cp_to_container_if_changed "${cards_dir}/${asset}" "/config/www/${asset}" "${asset}" \
+            && echo "${asset}" >> "${AIS_CHANGE_FLAG}"
+        cat >> "${resources_yaml}" <<EOF
+  - url: /local/${asset}?v=${version}
+    type: module
+EOF
+    done
+
+    ha_cat "/config/.storage/lovelace_resources" > "${current_json}" 2>/dev/null || echo "{}" > "${current_json}"
+
+    python3 "${merge_helper}" "${resources_yaml}" "${current_json}" "${merged_json}" \
+        "${TARGET_ENV}" "${cards_dir}" "${cards_dir}"
+
+    ha_cp_to_container_if_changed "${merged_json}" "/config/.storage/lovelace_resources" "lovelace_resources (ais cards)" \
+        && echo "lovelace_resources" >> "${AIS_CHANGE_FLAG}"
 }
 
 # ── verify_ais(): best-effort drift-guard inside the container ──────────────
@@ -241,6 +311,7 @@ case "${MODE}" in
 
         SKIP_RESTART=1 install_component
         SKIP_RESTART=1 patch_pgn_include
+        SKIP_RESTART=1 deploy_card_deps
         verify_ais_in_container || true
         "${HELPERS_DIR}/deploy_dashboard.sh" --target "${TARGET_ENV}" ${HOST_ARG:+"${HOST_ARG}"}
         ;;

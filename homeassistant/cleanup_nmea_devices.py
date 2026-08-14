@@ -153,8 +153,11 @@ def main() -> None:
     print('\n[1] Finding nmea2000 config entries...')
     nmea_entries = find_nmea_entry_ids(config_data)
     if not nmea_entries:
-        print('  No nmea2000 config entries found — nothing to clean.')
-        return
+        print('  No nmea2000 config entries found.')
+        if not clean_ais:
+            print('  Nothing else to clean — pass --clean-ais to purge stray '
+                  'geo_location.ais_*/ais_targets entities regardless.')
+            return
 
     # Identify devices to remove
     print('\n[2] Scanning devices...')
@@ -186,7 +189,20 @@ def main() -> None:
         dev_id = e.get('device_id')
         entry_id = e.get('config_entry_id')
 
-        is_ais = clean_ais and ('ais' in eid.lower()) and (entry_id in nmea_entries or e.get('platform') == 'nmea2000')
+        # Raw sensor.ais_* entities used to be created by the nmea2000
+        # integration (pre-rearchitecture); orphaned registry rows for
+        # geo_location.ais_<mmsi> can also linger from that same older
+        # design (it used to set unique_id, unlike the current ais_targets
+        # component, which is registry-less by design) — clean up both,
+        # regardless of whether nmea2000 config entries still exist.
+        is_ais = clean_ais and (
+            (
+                'ais' in eid.lower()
+                and (entry_id in nmea_entries or e.get('platform') == 'nmea2000')
+            )
+            or eid.startswith('geo_location.ais_')
+            or e.get('platform') == 'ais_targets'
+        )
         is_orphaned = dev_id in to_remove_ids
 
         if is_orphaned or is_ais:

@@ -1,289 +1,89 @@
 """geo_location platform for ais_targets.
 
-Turns raw per-field `nmea2000` entities carrying AIS PGN data into dynamic
-`geo_location.ais_<mmsi>` entities, following the same structural pattern
-HA core uses for `adsb`/`opensky`: a manager owns a periodic scan and adds/
-removes `GeolocationEvent` entities as targets appear, update or go stale.
+Turns the in-memory per-MMSI AIS target table maintained by `AisBusClient`
+(which reads and decodes the raw gateway stream directly — see ais_bus.py)
+into dynamic `geo_location.ais_<mmsi>` entities, following the same structural
+pattern HA core uses for `adsb`/`opensky`: a manager owns a periodic refresh
+and adds/removes `GeolocationEvent` entities as targets appear, update or go
+stale.
 
-⚠️ ENTITY/ATTRIBUTE SHAPE CAVEAT
-This sandboxed environment has no access to a live NMEA 2000 bus or a
-running Home Assistant instance, so the exact entity_id/attribute layout
-produced by the `nmea2000` integration for AIS PGNs could not be observed
-directly — see the module docstring in `const.py` for the full reasoning.
-The grouping/extraction logic below is written defensively: it matches on
-entity_id substrings AND on an `mmsi` attribute if present, logs a warning
-and skips gracefully whenever the expected shape is not found, and MUST be
-re-verified against a live HA instance during deployment.
+Nothing here touches the `nmea2000` HA integration or its entities — the AIS
+data comes straight off the gateway socket, so HA's device/entity registry is
+never polluted with transient per-MMSI devices.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
-import re
 from typing import Any
 
 from homeassistant.components.geo_location import GeolocationEvent
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from .ais_bus import AisBusClient, AisTargetReading
 from .const import (
-    AIS_POSITION_ID_HINTS,
-    AIS_STATIC_ID_HINTS,
-    CONF_SCAN_INTERVAL,
+    CONF_OWN_MMSI,
     CONF_STALE_TIMEOUT,
-    DEFAULT_SCAN_INTERVAL,
+    CONF_UPDATE_INTERVAL,
+    DEFAULT_OWN_MMSI,
     DEFAULT_STALE_TIMEOUT,
+    DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     GEO_LOCATION_SOURCE,
-    MMSI_FIELD_SUFFIXES,
-    NMEA2000_PLATFORM,
-    POSITION_FIELD_SUFFIXES,
-    STATIC_FIELD_SUFFIXES,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-_ID_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
-
-
-def _normalize_id(text: str) -> str:
-    """Lowercase and strip separators so 'aisClassAPositionReport' and
-    'ais_class_a_position_report' compare equal."""
-    return _ID_NORMALIZE_RE.sub("", text.lower())
-
-
-def _matches_any_hint(object_id: str, hints: tuple[str, ...]) -> bool:
-    normalized = _normalize_id(object_id)
-    return any(hint in normalized for hint in hints)
-
-
-def _strip_known_suffix(
-    object_id: str, suffix_map: dict[str, str]
-) -> tuple[str, str] | None:
-    """Return `(group_key, normalized_field)` when `object_id` ends with a
-    known "_<field>" suffix from `suffix_map`, else `None`."""
-    for suffix, normalized_field in suffix_map.items():
-        marker = "_" + suffix
-        if object_id.endswith(marker):
-            return object_id[: -len(marker)], normalized_field
-    return None
-
-
-def _strip_mmsi_suffix(object_id: str) -> str | None:
-    """Return the group key when `object_id` ends with a known MMSI suffix."""
-    for suffix in MMSI_FIELD_SUFFIXES:
-        marker = "_" + suffix
-        if object_id.endswith(marker):
-            return object_id[: -len(marker)]
-    return None
-
-
-@dataclass
-class _TargetReading:
-    """Aggregated reading for a single MMSI, merged across every distinct
-    nmea2000 entity group that reported it (position PGNs + the static/
-    voyage data PGN)."""
-
-    mmsi: int
-    latitude: float | None = None
-    longitude: float | None = None
-    sog: float | None = None
-    cog: float | None = None
-    heading: float | None = None
-    nav_status: Any = None
-    rate_of_turn: float | None = None
-    vessel_name: str | None = None
-    callsign: str | None = None
-    ship_type: Any = None
-    length: float | None = None
-    beam: float | None = None
-    destination: str | None = None
-    eta: Any = None
-    last_seen: datetime | None = None
-    has_position: bool = False
-
-
-def _iter_nmea2000_states(hass: HomeAssistant):
-    """Yield every hass state that the entity registry attributes to the
-    `nmea2000` platform (more reliable than guessing from entity_id alone).
-    """
-    registry = er.async_get(hass)
-    for entry in registry.entities.values():
-        if entry.platform != NMEA2000_PLATFORM:
-            continue
-        state = hass.states.get(entry.entity_id)
-        if state is not None:
-            yield state
-
-
-def _coerce_number(raw: Any) -> Any:
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return raw
-
-
-def _collect_readings(hass: HomeAssistant) -> dict[int, _TargetReading]:
-    """Scan nmea2000 entities and build one aggregated `_TargetReading` per
-    MMSI. Groups without a resolvable MMSI are logged and skipped."""
-    position_groups: dict[str, dict[str, Any]] = {}
-    static_groups: dict[str, dict[str, Any]] = {}
-    mmsi_by_group: dict[str, int] = {}
-
-    for state in _iter_nmea2000_states(hass):
-        object_id = state.entity_id.split(".", 1)[1]
-
-        is_position = _matches_any_hint(object_id, AIS_POSITION_ID_HINTS)
-        is_static = _matches_any_hint(object_id, AIS_STATIC_ID_HINTS)
-        if not is_position and not is_static:
-            continue
-
-        # An `mmsi` attribute, if the integration happens to expose one
-        # directly on every sibling field's state, is the most reliable
-        # grouping signal — prefer it whenever present.
-        attr_mmsi = state.attributes.get("mmsi")
-
-        mmsi_group_key = _strip_mmsi_suffix(object_id)
-        if mmsi_group_key is not None:
-            try:
-                mmsi_by_group[mmsi_group_key] = int(float(state.state))
-            except (TypeError, ValueError):
-                _LOGGER.warning(
-                    "ais_targets: %s looks like an MMSI field but its state "
-                    "(%r) is not numeric — skipping this group",
-                    state.entity_id,
-                    state.state,
-                )
-            continue
-
-        if is_position:
-            hit = _strip_known_suffix(object_id, POSITION_FIELD_SUFFIXES)
-            if hit is None:
-                _LOGGER.debug(
-                    "ais_targets: %s matches an AIS position message id but "
-                    "no known field suffix — ignoring (entity naming may "
-                    "differ from what this integration assumes)",
-                    state.entity_id,
-                )
-                continue
-            group_key, field_name = hit
-            group = position_groups.setdefault(group_key, {})
-        else:
-            hit = _strip_known_suffix(object_id, STATIC_FIELD_SUFFIXES)
-            if hit is None:
-                _LOGGER.debug(
-                    "ais_targets: %s matches AIS static/voyage data but no "
-                    "known field suffix — ignoring",
-                    state.entity_id,
-                )
-                continue
-            group_key, field_name = hit
-            group = static_groups.setdefault(group_key, {})
-
-        group[field_name] = _coerce_number(state.state)
-        group["_last_seen"] = state.last_updated
-        if attr_mmsi is not None:
-            try:
-                mmsi_by_group[group_key] = int(float(attr_mmsi))
-            except (TypeError, ValueError):
-                pass
-
-    readings: dict[int, _TargetReading] = {}
-
-    for group_key, fields in position_groups.items():
-        mmsi = mmsi_by_group.get(group_key)
-        if mmsi is None:
-            _LOGGER.warning(
-                "ais_targets: could not resolve MMSI for AIS position group "
-                "'%s' (fields found: %s) — skipping. This likely means the "
-                "real entity_id/attribute shape differs from what this "
-                "integration assumes; see README.md and re-verify against "
-                "a live HA instance.",
-                group_key,
-                sorted(fields),
-            )
-            continue
-        if "latitude" not in fields or "longitude" not in fields:
-            _LOGGER.debug(
-                "ais_targets: MMSI %s position group '%s' has no lat/lon yet "
-                "(fields so far: %s) — waiting for more data",
-                mmsi,
-                group_key,
-                sorted(fields),
-            )
-            continue
-
-        reading = readings.setdefault(mmsi, _TargetReading(mmsi=mmsi))
-        reading.latitude = fields.get("latitude")
-        reading.longitude = fields.get("longitude")
-        reading.sog = fields.get("sog")
-        reading.cog = fields.get("cog")
-        reading.heading = fields.get("heading")
-        reading.nav_status = fields.get("nav_status")
-        reading.rate_of_turn = fields.get("rate_of_turn")
-        reading.has_position = True
-        last_seen = fields.get("_last_seen")
-        if isinstance(last_seen, datetime):
-            reading.last_seen = last_seen
-
-    for group_key, fields in static_groups.items():
-        mmsi = mmsi_by_group.get(group_key)
-        if mmsi is None:
-            _LOGGER.debug(
-                "ais_targets: could not resolve MMSI for AIS static-data "
-                "group '%s' (fields: %s) — skipping merge (any existing "
-                "position-only entity for this vessel is unaffected)",
-                group_key,
-                sorted(fields),
-            )
-            continue
-
-        # Static data must never block a position-only entity: merge into
-        # whatever reading already exists (or create a position-less
-        # placeholder so the detail card can still show identity fields
-        # once a position report arrives later in the same scan cycle).
-        reading = readings.setdefault(mmsi, _TargetReading(mmsi=mmsi))
-        reading.vessel_name = fields.get("vessel_name", reading.vessel_name)
-        reading.callsign = fields.get("callsign", reading.callsign)
-        reading.ship_type = fields.get("ship_type", reading.ship_type)
-        reading.length = fields.get("length", reading.length)
-        reading.beam = fields.get("beam", reading.beam)
-        reading.destination = fields.get("destination", reading.destination)
-        reading.eta = fields.get("eta", reading.eta)
-        last_seen = fields.get("_last_seen")
-        if isinstance(last_seen, datetime) and (
-            reading.last_seen is None or last_seen > reading.last_seen
-        ):
-            reading.last_seen = last_seen
-
-    return readings
+_OWN_BOAT_NAME = "⛵ Bumblebee (Own Boat)"
 
 
 class AisTarget(GeolocationEvent):
-    """A single AIS-tracked vessel, plotted via `geo_location_sources`."""
+    """A single AIS-tracked vessel, plotted via `geo_location_sources`.
+
+    Our own boat (see CONF_OWN_MMSI) is represented the exact same way and
+    reports the SAME `source` (GEO_LOCATION_SOURCE) as every other target, so
+    it is guaranteed to show up on the map as soon as our own AIS unit's
+    own-ship message is decoded — this does not depend on the GPS-based
+    `device_tracker.nevera` marker being populated at all (that entity may
+    still be shown separately on the map card; a second pin for the same
+    boat is far less of a problem than the boat being invisible). The detail
+    table (filtered by entity_id, not source) lists it with the full AIS
+    attribute set like every other target, flagged via `is_own_ship`.
+    """
 
     _attr_should_poll = False
-    _attr_source = GEO_LOCATION_SOURCE
 
-    def __init__(self, reading: _TargetReading) -> None:
+    def __init__(self, reading: AisTargetReading, is_own_ship: bool) -> None:
         self._reading = reading
-        self._attr_unique_id = f"{DOMAIN}_{reading.mmsi}"
+        self._is_own_ship = is_own_ship
+        # Deliberately NO unique_id: these are purely transient in-memory
+        # entities (like HA core's adsb/opensky geo_location events), so they
+        # never create entity_registry rows — the whole point of this
+        # re-architecture is to keep HA's registry clean of passing vessels.
+        # The entity_id is pinned explicitly so the map/table can reference
+        # geo_location.ais_<mmsi> deterministically.
         self.entity_id = f"geo_location.ais_{reading.mmsi}"
         self._apply(reading)
 
-    def _apply(self, reading: _TargetReading) -> None:
+    def _apply(self, reading: AisTargetReading) -> None:
         self._reading = reading
-        self._attr_name = reading.vessel_name or f"AIS {reading.mmsi}"
+        self._attr_source = GEO_LOCATION_SOURCE
+        if self._is_own_ship:
+            self._attr_name = reading.vessel_name or _OWN_BOAT_NAME
+        else:
+            self._attr_name = reading.vessel_name or f"AIS {reading.mmsi}"
         self._attr_latitude = reading.latitude
         self._attr_longitude = reading.longitude
 
-    def update_from_reading(self, reading: _TargetReading) -> None:
-        """Refresh this entity in place from a newer scan's reading."""
+    def update_from_reading(
+        self, reading: AisTargetReading, is_own_ship: bool
+    ) -> None:
+        """Refresh this entity in place from a newer reading."""
+        self._is_own_ship = is_own_ship
         self._apply(reading)
         self.async_write_ha_state()
 
@@ -295,42 +95,60 @@ class AisTarget(GeolocationEvent):
     def extra_state_attributes(self) -> dict[str, Any]:
         r = self._reading
         last_seen = r.last_seen or dt_util.utcnow()
+
+        def disp(value: Any) -> Any:
+            """Render missing values as an em dash.
+
+            Plenty of AIS fields are legitimately "not available" (Class B
+            reports carry no navStatus, COG/heading are often 0xFFFF, static
+            data lags behind by minutes). flex-table-card renders a `null`
+            attribute as an empty/`undefined` cell, which reads as a bug, so
+            unavailable fields are shown as a dash instead.
+            """
+            return value if value is not None else "—"
+
         return {
+            # Keep the raw numeric position out of the dash substitution: the
+            # map card and any templating consume these directly.
             "mmsi": r.mmsi,
             "latitude": r.latitude,
             "longitude": r.longitude,
-            "sog": r.sog,
-            "cog": r.cog,
-            "heading": r.heading,
-            "nav_status": r.nav_status,
-            "rate_of_turn": r.rate_of_turn,
-            "vessel_name": r.vessel_name,
-            "callsign": r.callsign,
-            "ship_type": r.ship_type,
-            "length": r.length,
-            "beam": r.beam,
-            "destination": r.destination,
-            "eta": r.eta,
+            "sog": disp(r.sog),
+            "cog": disp(r.cog),
+            "heading": disp(r.heading),
+            "nav_status": disp(r.nav_status),
+            "rate_of_turn": disp(r.rate_of_turn),
+            "vessel_name": disp(r.vessel_name),
+            "callsign": disp(r.callsign),
+            "ship_type": disp(r.ship_type),
+            "length": disp(r.length),
+            "beam": disp(r.beam),
+            "destination": disp(r.destination),
+            "eta": disp(r.eta),
+            "is_own_ship": self._is_own_ship,
             "last_seen": last_seen.isoformat(),
         }
 
 
 class AisTargetsManager:
-    """Owns the periodic scan loop and the dynamic set of AisTarget entities.
+    """Owns the periodic refresh loop and the dynamic set of AisTarget entities.
 
     Structurally mirrors HA core's `adsb`/`opensky` geo_location platforms:
-    one manager per config entry, ticking on `scan_interval` and expiring
-    entities whose `last_seen` exceeds `stale_timeout`.
+    one manager per config entry, ticking on `update_interval` and expiring
+    entities whose `last_seen` exceeds `stale_timeout`. Readings come from the
+    `AisBusClient` in-memory target table, not from `hass.states`.
     """
 
     def __init__(
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
+        client: AisBusClient,
         async_add_entities: AddEntitiesCallback,
     ) -> None:
         self.hass = hass
         self.entry = entry
+        self._client = client
         self._async_add_entities = async_add_entities
         self._entities: dict[int, AisTarget] = {}
         self._unsub_interval = None
@@ -340,65 +158,79 @@ class AisTargetsManager:
         return {**self.entry.data, **self.entry.options}
 
     @property
-    def scan_interval(self) -> int:
-        return int(self._options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+    def update_interval(self) -> int:
+        return int(
+            self._options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+        )
 
     @property
     def stale_timeout(self) -> timedelta:
         minutes = int(self._options.get(CONF_STALE_TIMEOUT, DEFAULT_STALE_TIMEOUT))
         return timedelta(minutes=minutes)
 
+    @property
+    def own_mmsi(self) -> int | None:
+        raw = self._options.get(CONF_OWN_MMSI, DEFAULT_OWN_MMSI)
+        try:
+            return int(str(raw).strip())
+        except (TypeError, ValueError):
+            return None
+
     def async_start(self) -> None:
-        """Start the periodic scan and run one scan immediately."""
+        """Start the periodic refresh and run one immediately."""
         self._unsub_interval = async_track_time_interval(
-            self.hass, self._async_scan, timedelta(seconds=self.scan_interval)
+            self.hass, self._async_refresh, timedelta(seconds=self.update_interval)
         )
-        self.hass.async_create_task(self._async_scan_now())
+        self.hass.async_create_task(self._async_refresh_now())
 
     def async_stop(self) -> None:
-        """Cancel the periodic scan (called on config entry unload)."""
+        """Cancel the periodic refresh (called on config entry unload)."""
         if self._unsub_interval is not None:
             self._unsub_interval()
             self._unsub_interval = None
 
-    async def _async_scan(self, _now: datetime) -> None:
-        await self._async_scan_now()
+    async def _async_refresh(self, _now: datetime) -> None:
+        await self._async_refresh_now()
 
-    async def _async_scan_now(self) -> None:
+    async def _async_refresh_now(self) -> None:
         try:
-            readings = _collect_readings(self.hass)
-        except Exception:  # noqa: BLE001 - a scan glitch must never crash HA
-            _LOGGER.exception("ais_targets: error scanning nmea2000 entities")
+            snapshot = self._client.snapshot()
+        except Exception:  # noqa: BLE001 - a refresh glitch must never crash HA
+            _LOGGER.exception("ais_targets: error reading target table")
             return
 
         now = dt_util.utcnow()
         stale_before = now - self.stale_timeout
+        own_mmsi = self.own_mmsi
 
         new_entities: list[AisTarget] = []
-        for mmsi, reading in readings.items():
-            if reading.last_seen is None:
-                reading.last_seen = now
-            if reading.last_seen < stale_before:
-                # Already stale by the time we saw it (e.g. a lingering
-                # static-data-only group with no recent position) — do not
-                # (re)create an entity for it.
+        seen: set[int] = set()
+        for mmsi, reading in snapshot.items():
+            # Only plottable, non-stale targets get an entity.
+            if not reading.has_position:
                 continue
+            if reading.last_seen is not None and reading.last_seen < stale_before:
+                continue
+            seen.add(mmsi)
+            is_own = own_mmsi is not None and mmsi == own_mmsi
 
             existing = self._entities.get(mmsi)
             if existing is None:
-                entity = AisTarget(reading)
+                entity = AisTarget(reading, is_own)
                 self._entities[mmsi] = entity
                 new_entities.append(entity)
             else:
-                existing.update_from_reading(reading)
+                existing.update_from_reading(reading, is_own)
 
         if new_entities:
             self._async_add_entities(new_entities)
 
+        # Expire targets that are gone or stale, both from HA and the client.
         for mmsi in list(self._entities):
             entity = self._entities[mmsi]
-            if mmsi not in readings or entity.last_seen < stale_before:
+            if mmsi not in seen or entity.last_seen < stale_before:
                 del self._entities[mmsi]
+                self._client.drop(mmsi)
                 self.hass.async_create_task(entity.async_remove(force_remove=True))
 
 
@@ -408,7 +240,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the geo_location platform for a config entry."""
-    manager = AisTargetsManager(hass, entry, async_add_entities)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = manager
+    client: AisBusClient = hass.data[DOMAIN][entry.entry_id]["client"]
+    manager = AisTargetsManager(hass, entry, client, async_add_entities)
+    hass.data[DOMAIN][entry.entry_id]["manager"] = manager
     manager.async_start()
     entry.async_on_unload(manager.async_stop)

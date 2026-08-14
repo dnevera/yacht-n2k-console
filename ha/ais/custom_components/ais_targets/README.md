@@ -1,85 +1,80 @@
-# `ais_targets` — AIS-to-`geo_location` bridge integration
+# `ais_targets` — gateway-direct AIS → `geo_location` integration
 
-Small custom Home Assistant integration that turns the raw per-field
-`nmea2000` entities produced for AIS PGNs into dynamic
-`geo_location.ais_<mmsi>` entities, one per tracked vessel, so they can be
-plotted on the stock `map` Lovelace card via `geo_location_sources`
-(the same mechanism used by HA core's built-in `adsb`/`opensky`
-integrations for an unbounded, changing set of map objects).
+Small custom Home Assistant integration that opens a TCP socket to the
+**YDNU-02 gateway**, decodes AIS PGNs itself in RAM, and turns each tracked
+vessel into a dynamic `geo_location.ais_<mmsi>` entity so it can be plotted on
+the stock `map` Lovelace card via `geo_location_sources: ['ais_targets']` (the
+same mechanism HA core's `adsb`/`opensky` integrations use).
 
-## What it does
+## Why it reads the gateway directly (and NOT the nmea2000 integration)
 
-1. Every `scan_interval` seconds (default 30s, configurable), scans
-   `hass.states` for every entity the entity registry attributes to the
-   `nmea2000` platform.
-2. Matches entities that look like they were decoded from:
-   - PGN 129038 (`aisClassAPositionReport`)
-   - PGN 129039 (`aisClassBPositionReport`)
-   - PGN 129040 (`aisClassBExtendedPositionReport`)
-   - PGN 129794 (`aisClassAStaticAndVoyageRelatedData`)
-3. Groups matched entities by MMSI and merges them into one aggregated
-   reading per vessel: `mmsi`, `latitude`, `longitude`, `sog`, `cog`,
-   `heading`, `nav_status`, `rate_of_turn` from the position PGNs, plus
-   `vessel_name`, `callsign`, `ship_type`, `length`, `beam`, `destination`,
-   `eta` from PGN 129794 whenever available (static data never blocks a
-   position-only entity).
-4. Creates/updates one `geo_location.ais_<mmsi>` entity per vessel with the
-   fields above as `extra_state_attributes`, plus a `last_seen` ISO
-   timestamp.
-5. Removes (unregisters) any target whose `last_seen` exceeds
-   `stale_timeout` (default 10 minutes, configurable).
+Letting the `nmea2000` HA integration decode AIS creates one throwaway device
+plus a batch of `sensor.ais_*` entities **per passing MMSI**. In a busy
+anchorage that floods HA's device/entity registry and the recorder DB with
+transient junk. So instead:
 
-## ⚠️ IMPORTANT — entity_id/attribute shape is UNVERIFIED
+- AIS PGNs are decoded here, in memory, straight off the gateway stream — the
+  `nmea2000` HA integration is kept AWAY from AIS (`ha/ais/deploy.sh --install`
+  removes the AIS PGNs from its `pgn_include` and sets `exclude_AIS = True`).
+- The only things ever registered in HA are the live `geo_location.ais_<mmsi>`
+  entities, which are transient by design and disappear when a vessel goes out
+  of range.
 
-This integration was developed and reviewed entirely in a sandboxed
-environment with **no access to a live NMEA 2000 bus or a running Home
-Assistant instance**. The exact entity_id / attribute layout that the
-`nmea2000` HA integration produces for AIS PGNs (129038/129039/129040/129794)
-could **not** be observed directly.
+## How it works
 
-The grouping/extraction logic in `geo_location.py` is based on this
-project's already-documented naming pattern for other nmea2000-decoded
-sensors (see `ha/sailing-dash`'s notes on entities like
-`sensor.wind_data_raymarine_20_442559_pk_a00872..._wind_speed`): each
-decoded PGN *field* becomes its own HA entity, sharing a "group" prefix
-(message id + a hash derived from the source/primary key) and ending in a
-`_<field_name>` suffix — e.g. a hypothetical
-`sensor.ais_class_a_position_report_pk_1a2b3c_latitude` alongside
-`sensor.ais_class_a_position_report_pk_1a2b3c_user_id` (the MMSI, exposed as
-that entity's numeric *state*).
+1. `ais_bus.py` connects to `gw_host:gw_port` and reads the RAW
+   `HH:MM:SS.mmm R <CANID> <DATA>...` line format (identical to
+   `ydnu02/pgn_decoder.py`), reconnecting with backoff on any drop.
+2. Only AIS PGNs are decoded (every other frame is dropped after a cheap
+   CAN-ID parse). Multi-frame FastPacket AIS messages are reassembled by an
+   in-process `nmea2000.NMEA2000Decoder`.
+3. Decoded fields are grouped by MMSI (`userId`) into an in-memory table:
+   - position PGNs **129038 / 129039 / 129040** → `latitude`, `longitude`,
+     `sog` (m/s → knots), `cog`/`heading` (rad → deg), `nav_status`,
+     `rate_of_turn`;
+   - static/voyage PGNs **129794 / 129809 / 129810** → `vessel_name`,
+     `callsign`, `ship_type`, `length`, `beam`, `destination`, `eta`
+     (merged in whenever they arrive; static data never blocks a
+     position-only target).
+4. `geo_location.py` refreshes one `geo_location.ais_<mmsi>` entity per
+   vessel every `update_interval` seconds and removes any target whose
+   `last_seen` exceeds `stale_timeout`.
 
-Because this could not be confirmed against real traffic, the code:
+## Own vessel
 
-- matches on **entity_id substrings** (message id + field-name suffix
-  tables in `const.py`) **and** on an `mmsi` **attribute**, if the real
-  integration happens to expose one directly (whichever produces a match
-  wins);
-- logs a `WARNING`/`DEBUG` and skips gracefully whenever the expected
-  shape is not found, instead of raising;
-- never blocks position entities on the arrival of static/voyage data.
-
-**Before trusting this integration in production, re-verify the following
-against a live HA instance with a real AIS receiver on the bus:**
-
-1. What entity_ids the `nmea2000` integration actually creates for PGNs
-   129038/129039/129040/129794 (`ha_target.sh`'s `ha_cat
-   /config/.storage/core.entity_registry | grep -i ais` is a good start).
-2. Whether the MMSI is exposed as a field's numeric state (as assumed here),
-   as an attribute, or some other shape — and update `const.py`'s
-   `MMSI_FIELD_SUFFIXES` / the attribute lookup in `geo_location.py`
-   accordingly.
-3. The actual field-name suffixes used for latitude/longitude/SOG/COG/
-   heading/nav status/rate of turn/vessel name/callsign/ship type/length/
-   beam/destination/ETA, and update `POSITION_FIELD_SUFFIXES` /
-   `STATIC_FIELD_SUFFIXES` in `const.py` to match.
+Set `own_mmsi` to your own boat's MMSI (this config entry is the **single
+source of truth** — nothing else stores it). The matching target is then named
+"⛵ Bumblebee (Own Boat)" and reported under a distinct `source`
+(`ais_targets_own`) so the map never plots a duplicate pin next to the
+GPS-based `device_tracker.nevera` marker, while it still appears in the detail
+table (filtered by `entity_id`, not `source`) with the full attribute set.
 
 ## Configuration
 
 Set up via the HA UI (Settings → Devices & services → Add integration →
-"AIS Targets"). Single instance only. Two options, changeable later via the
+"AIS Targets"). Single instance only. All options are changeable later via the
 integration's "Configure" button:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `scan_interval` | 30 (seconds) | How often `hass.states` is re-scanned. |
-| `stale_timeout` | 10 (minutes) | How long without an update before a target is expired/removed. |
+| `gw_host` | `127.0.0.1` | YDNU-02 gateway host (as reachable from HA). |
+| `gw_port` | `4001` | YDNU-02 raw-stream TCP port. |
+| `own_mmsi` | *(blank)* | Your own vessel's MMSI (own-ship row / no duplicate map pin). |
+| `update_interval` | 5 (seconds) | How often geo_location entities are refreshed from the in-memory table. |
+| `stale_timeout` | 10 (minutes) | How long without a position update before a target is expired/removed. |
+
+## Requirements
+
+The `nmea2000` library must be importable inside the HA environment. It is
+declared in this integration's `manifest.json` (the same fork tag as the rest
+of the project) and is already present because the `nmea2000` HA integration
+used by `ha/sailing-dash` bundles it — HA will not reinstall an
+already-satisfied requirement.
+
+## Field-id reference (verified against the installed fork's `pgns.py`)
+
+`userId` (MMSI), `latitude`/`longitude` (deg), `sog` (m/s), `cog`/`heading`/
+`trueHeading` (rad), `rateOfTurn` (rad/s), `navStatus` (lookup string) on the
+position PGNs; `name`, `callsign`, `typeOfShip` (lookup string), `length`,
+`beam`, `destination`, `etaDate`/`etaTime` on the static PGNs. See
+`const.py` (`POSITION_FIELDS` / `STATIC_FIELDS`) for the exact mapping.
