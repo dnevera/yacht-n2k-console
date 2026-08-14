@@ -143,7 +143,9 @@ def map_height_css(height_px):
     gutters > 100vh) and turned on the browser's vertical scrollbar; `min()`
     keeps the configured height as an upper bound while shrinking on short
     screens. 56px is HA's top bar, plus the top/bottom gutters."""
-    reserved = 56 + 2 * GUTTER_PX
+    # 56px top bar + optional view-tabs row + both gutters, with a little
+    # slack: being a few px too tall is exactly what re-enables the scrollbar.
+    reserved = 56 + 24 + 2 * GUTTER_PX
     return f"min({height_px}px, calc(100vh - {reserved}px))"
 
 
@@ -161,13 +163,25 @@ def overlay_container_style():
     vertical-stack was a no-op: no gutter and no overlay. mod-card gives us a
     real ha-card to hang `position: relative` (the overlay's offset parent) and
     the outer gutter on."""
-    return f"ha-card {{ position: relative; margin: {GUTTER_PX}px; }}\n"
+    return (
+        "ha-card {\n"
+        "  position: relative;\n"
+        f"  margin: {GUTTER_PX}px;\n"
+        "  overflow: hidden;\n"
+        "}\n"
+    )
 
 
 def overlay_toggle_style():
-    """Absolute geometry of the always-visible expand/collapse toggle."""
+    """Absolute geometry of the always-visible expand/collapse toggle.
+
+    `:host`, not `ha-card`: card-mod injects its <style> into the card's own
+    shadow root, so `:host` targets the card ELEMENT. Positioning only the
+    inner ha-card left the element (and its hui-card wrapper) inside the
+    stack's flex column, where it kept reserving height — that is what caused
+    both the browser scrollbar and the stretched-looking toggle card."""
     return (
-        "ha-card {\n"
+        ":host {\n"
         "  position: absolute;\n"
         f"  top: {OVERLAY_TOP_PX}px;\n"
         f"  right: {OVERLAY_TOP_PX}px;\n"
@@ -178,18 +192,21 @@ def overlay_toggle_style():
 
 
 def overlay_table_style(height_px, width):
-    """Absolute geometry of one of the two overlay tables. Applied to the
-    flex-table-card itself (a real ha-card) rather than to the enclosing stack,
-    so it never depends on child indexes inside a shadow root."""
+    """Absolute geometry of one of the two overlay tables. Applied to the card
+    element via `:host` (see overlay_toggle_style) so it leaves the stack's
+    flow entirely; the inner ha-card only gets the scroll container."""
     height = map_height_css(height_px)
     return (
-        "ha-card {\n"
+        ":host {\n"
         "  position: absolute;\n"
         f"  top: {OVERLAY_TABLE_TOP_PX}px;\n"
         f"  right: {OVERLAY_TOP_PX}px;\n"
         "  z-index: 2;\n"
         f"  width: {width};\n"
         f"  max-height: calc({height} - {OVERLAY_TABLE_TOP_PX + 12}px);\n"
+        "}\n"
+        "ha-card {\n"
+        "  max-height: 100%;\n"
         "  overflow: auto;\n"
         "}\n"
     )

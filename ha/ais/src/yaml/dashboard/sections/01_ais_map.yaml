@@ -16,7 +16,7 @@
 - type: custom:mod-card
   card_mod:
     style: |
-      ha-card { position: relative; margin: 12px; }
+      ha-card { position: relative; margin: 12px; overflow: hidden; }
   card:
     type: vertical-stack
     # helpers/build.py rewrites the map's zoom/height, the overlay geometry and
@@ -34,18 +34,29 @@
         default_zoom: 12
         card_mod:
           style: |
-            ha-card { height: min(480px, calc(100vh - 80px)); }
-            #map { height: min(480px, calc(100vh - 80px)) !important; }
+            ha-card { height: min(480px, calc(100vh - 104px)); }
+            #map { height: min(480px, calc(100vh - 104px)) !important; }
 
       # ── Overlay header: expand/collapse toggle (always visible) ───────────
+      # A `tile` card, not `entities`: entities always renders a full card with
+      # header padding (bulky, and it was the card that looked stretched), while
+      # tile is a single compact row with a native toggle.
       - id: overlay_toggle
-        type: entities
-        entities:
-          - entity: input_boolean.ais_table_expanded
-            name: AIS Targets
+        type: tile
+        entity: input_boolean.ais_table_expanded
+        name: AIS Targets
+        icon: mdi:table-eye
+        tap_action:
+          action: toggle
         card_mod:
+          # `:host`, NOT `ha-card`: card-mod injects its <style> into the card's
+          # own shadow root, so `:host` targets the card ELEMENT. Positioning
+          # only the inner ha-card left the element itself in the stack's flex
+          # column — it kept reserving height (hence the browser scrollbar) and
+          # got stretched by the column. `:host { position: absolute }` takes
+          # the whole card out of flow, so the wrapper collapses to zero.
           style: |
-            ha-card {
+            :host {
               position: absolute;
               top: 12px;
               right: 12px;
@@ -86,13 +97,16 @@
               align: right
           card_mod:
             style: |
-              ha-card {
+              :host {
                 position: absolute;
                 top: 84px;
                 right: 12px;
                 z-index: 2;
                 width: 300px;
-                max-height: calc(min(480px, calc(100vh - 80px)) - 96px);
+                max-height: calc(min(480px, calc(100vh - 104px)) - 96px);
+              }
+              ha-card {
+                max-height: 100%;
                 overflow: auto;
               }
 
@@ -143,12 +157,15 @@
               data: last_seen
           card_mod:
             style: |
-              ha-card {
+              :host {
                 position: absolute;
                 top: 84px;
                 right: 12px;
                 z-index: 2;
                 width: min(1100px, calc(100vw - 96px));
-                max-height: calc(min(480px, calc(100vh - 80px)) - 96px);
+                max-height: calc(min(480px, calc(100vh - 104px)) - 96px);
+              }
+              ha-card {
+                max-height: 100%;
                 overflow: auto;
               }
