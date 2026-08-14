@@ -130,20 +130,39 @@ def ensure_dirs():
     os.makedirs(BUILD_DIR, exist_ok=True)
 
 
+# Outer gutter of the whole dashboard card, in px. A `panel` view has no
+# padding of its own, so without this the map sits flush against the window
+# edges; it also reserves the space the viewport-capped map height subtracts.
+GUTTER_PX = 12
+
+
+def map_height_css(height_px):
+    """Map height, capped to the viewport so the page never scrolls.
+
+    A plain fixed height made the panel view taller than the window (map +
+    gutters > 100vh) and turned on the browser's vertical scrollbar; `min()`
+    keeps the configured height as an upper bound while shrinking on short
+    screens. 56px is HA's top bar, plus the top/bottom gutters."""
+    reserved = 56 + 2 * GUTTER_PX
+    return f"min({height_px}px, calc(100vh - {reserved}px))"
+
+
 def overlay_style(height_px):
-    """card_mod style pinning the target list as an overlay over the map's
-    right-hand side. The two overlay cards are the 2nd/3rd children of the
-    outer vertical-stack (collapsed side-bar / expanded table); only one of
-    them is ever visible, since each is wrapped in a `conditional`."""
+    """card_mod style adding the outer gutter and pinning the target list as an
+    overlay over the map's right-hand side. The two overlay cards are the
+    2nd/3rd children of the outer vertical-stack (collapsed side-bar / expanded
+    table); only one of them is ever visible, since each is wrapped in a
+    `conditional`."""
+    height = map_height_css(height_px)
     return (
-        "#root { position: relative; }\n"
+        f"#root {{ position: relative; margin: {GUTTER_PX}px; }}\n"
         "#root > *:nth-child(2),\n"
         "#root > *:nth-child(3) {\n"
         "  position: absolute;\n"
         "  top: 12px;\n"
         "  right: 12px;\n"
         "  z-index: 1;\n"
-        f"  max-height: {max(height_px - 24, 120)}px;\n"
+        f"  max-height: calc({height} - 24px);\n"
         "  overflow: auto;\n"
         "}\n"
     )
@@ -161,10 +180,11 @@ def _patch_cards(cards, default_zoom, height_px, detail_fields, depth=0):
         card_id = card.pop("id", None)
         if card_id == "map" and card.get("type") == "map":
             card["default_zoom"] = default_zoom
+            height = map_height_css(height_px)
             card["card_mod"] = {
                 "style": (
-                    f"ha-card {{ height: {height_px}px; }}\n"
-                    f"#map {{ height: {height_px}px !important; }}\n"
+                    f"ha-card {{ height: {height}; }}\n"
+                    f"#map {{ height: {height} !important; }}\n"
                 )
             }
         elif card_id == "detail_list" and card.get("type") == "custom:flex-table-card":

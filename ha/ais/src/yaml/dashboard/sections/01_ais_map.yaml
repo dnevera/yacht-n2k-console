@@ -13,14 +13,14 @@
   # columns, and keeps the overlay geometry in sync with the map height.
   card_mod:
     style: |
-      #root { position: relative; }
+      #root { position: relative; margin: 12px; }
       #root > *:nth-child(2),
       #root > *:nth-child(3) {
         position: absolute;
         top: 12px;
         right: 12px;
         z-index: 1;
-        max-height: 456px;
+        max-height: calc(min(480px, calc(100vh - 80px)) - 24px);
         overflow: auto;
       }
   cards:
@@ -36,16 +36,19 @@
       default_zoom: 12
       card_mod:
         style: |
-          ha-card { height: 480px; }
-          #map { height: 480px !important; }
+          ha-card { height: min(480px, calc(100vh - 80px)); }
+          #map { height: min(480px, calc(100vh - 80px)) !important; }
 
     # ── Collapsed overlay: compact side-bar (name + distance) ───────────────
     - id: overlay_collapsed
       type: conditional
       conditions:
+        # `state_not` (not `state: "off"`) on purpose: it also matches while the
+        # toggle is missing/unavailable, so the side-bar still renders instead
+        # of the whole overlay silently disappearing.
         - condition: state
           entity: input_boolean.ais_table_expanded
-          state: "off"
+          state_not: "on"
       card:
         type: vertical-stack
         card_mod:

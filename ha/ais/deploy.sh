@@ -190,13 +190,20 @@ provision_helpers() {
     trap 'rm -rf "${tmp_dir}"' RETURN
     remote_path="/config/.storage/input_boolean"
     local_copy="${tmp_dir}/input_boolean"
+    local reg_remote="/config/.storage/core.entity_registry"
+    local reg_copy="${tmp_dir}/core.entity_registry"
 
     # A missing store is normal on an instance without any UI helper yet —
     # provision_helpers.py then creates a fresh, minimally-valid document.
     ha_cat "${remote_path}" > "${local_copy}" 2>/dev/null || rm -f "${local_copy}"
+    # The registry is also fed in so a helper registered under a mis-slugged
+    # entity_id by an older revision (input_boolean.ais_targets) gets dropped
+    # and re-registered as input_boolean.ais_table_expanded.
+    ha_cat "${reg_remote}" > "${reg_copy}" 2>/dev/null || rm -f "${reg_copy}"
 
     local report_status=0
-    python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" || report_status=$?
+    python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" \
+        --entity-registry "${reg_copy}" || report_status=$?
 
     if [[ "${report_status}" -eq 0 ]]; then
         echo "AIS dashboard helpers already present — nothing to change."
@@ -206,9 +213,14 @@ provision_helpers() {
         return 0
     fi
 
-    python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" --write
+    python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" \
+        --entity-registry "${reg_copy}" --write
     ha_cp_to_container_if_changed "${local_copy}" "${remote_path}" "input_boolean (AIS table toggle)" \
         && echo "input_boolean" >> "${AIS_CHANGE_FLAG}"
+    if [[ -f "${reg_copy}" ]]; then
+        ha_cp_to_container_if_changed "${reg_copy}" "${reg_remote}" "core.entity_registry (AIS toggle slug)" \
+            && echo "entity_registry" >> "${AIS_CHANGE_FLAG}"
+    fi
 }
 
 # ── deploy_card_deps(): the target table's Lovelace card dependencies ───────
