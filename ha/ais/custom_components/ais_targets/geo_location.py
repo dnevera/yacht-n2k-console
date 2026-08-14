@@ -51,10 +51,26 @@ _LOGGER = logging.getLogger(__name__)
 # configured on the integration.
 _OWN_BOAT_ICON = "⛵"
 
-# GPS-based own-boat tracker (provided by ha/sailing-dash). Used only as a
-# fallback origin for the distance column while our own AIS target is not
-# available yet.
-OWN_BOAT_TRACKER = "device_tracker.nevera"
+
+
+def _valid_origin(lat: Any, lon: Any) -> tuple[float, float] | None:
+    """Sanity-check a candidate distance origin.
+
+    A null-island / partially-filled fix (e.g. HA's GPS tracker reporting
+    latitude 42.43 with longitude 0.0, seen live on prod) is not a position —
+    using it made every AIS target read ~1500 km away and dropped a marker in
+    the middle of nowhere. Such values are rejected outright.
+    """
+    try:
+        flat = float(lat)
+        flon = float(lon)
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= flat <= 90) or not (-180 <= flon <= 180):
+        return None
+    if abs(flat) < 0.001 or abs(flon) < 0.001:
+        return None
+    return (flat, flon)
 
 
 class AisTarget(GeolocationEvent):
@@ -125,21 +141,19 @@ class AisTarget(GeolocationEvent):
     def _distance_km(self, reading: AisTargetReading) -> float | None:
         """Distance from OUR BOAT to this target, in km.
 
-        The origin is our own vessel's live position (own_mmsi AIS target, or
-        device_tracker.nevera as a fallback). HA's configured home coordinates
-        are only the last resort: on a moving boat they are a meaningless
-        reference point, which is exactly why the column looked wrong.
+        The origin is our own vessel's live position, decoded off the bus (the
+        GNSS receiver's PGN 129029/129025, or our own AIS target as a
+        fallback). If we do not have a TRUSTWORTHY
+        own position we report no distance at all: HA's configured home zone is
+        deliberately NOT used as a fallback — on a moving boat it produced a
+        constant, meaningless offset (a stale/broken origin once made every
+        target ~1500 km away, which is what this guard prevents).
         """
         if reading.latitude is None or reading.longitude is None:
             return None
         origin = self._origin
         if origin is None:
-            hass = getattr(self, "hass", None)
-            if hass is None:
-                return None
-            if hass.config.latitude is None or hass.config.longitude is None:
-                return None
-            origin = (hass.config.latitude, hass.config.longitude)
+            return None
         return round(
             distance(origin[0], origin[1], reading.latitude, reading.longitude) / 1000,
             2,
@@ -299,23 +313,29 @@ class AisTargetsManager:
     ) -> tuple[float, float] | None:
         """Live position of OUR boat, used as the distance origin.
 
-        Priority: our own AIS target (own_mmsi) → device_tracker.nevera (GPS)
-        → None, in which case the entity falls back to HA's home coordinates.
+        Both candidates come straight off the N2K bus, read by our own gateway
+        client — HA's `device_tracker.*` template sensor is deliberately NOT
+        consulted: it re-derives the very same GNSS fix through the nmea2000
+        integration plus a Jinja last-known-position hold, and on prod it was
+        publishing a partial fix (longitude 0.0) that made every target read
+        ~1500 km away.
+
+        Priority: the GNSS receiver's own fix (PGN 129029/129025, the antennas
+        out in the open sky) → our own AIS target (own_mmsi) → None (no
+        distance is reported at all, see AisTarget._distance_km). Every
+        candidate is validated by `_valid_origin`, because a broken origin
+        silently poisons EVERY target's distance.
         """
+        gnss = self._client.own_position
+        if gnss is not None:
+            origin = _valid_origin(gnss[0], gnss[1])
+            if origin is not None:
+                return origin
         own_mmsi = self.own_mmsi
         if own_mmsi is not None:
             own = snapshot.get(own_mmsi)
             if own is not None and own.has_position:
-                return (own.latitude, own.longitude)
-        state = self.hass.states.get(OWN_BOAT_TRACKER)
-        if state is not None:
-            lat = state.attributes.get("latitude")
-            lon = state.attributes.get("longitude")
-            try:
-                if lat is not None and lon is not None:
-                    return (float(lat), float(lon))
-            except (TypeError, ValueError):
-                return None
+                return _valid_origin(own.latitude, own.longitude)
         return None
 
     def async_start(self) -> None:

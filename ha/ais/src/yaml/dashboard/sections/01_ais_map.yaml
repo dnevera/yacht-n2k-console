@@ -26,11 +26,16 @@
     type: vertical-stack
     cards:
       - type: map
-        # Own boat (GPS pin) + every live AIS target. The targets come from the
+        # Every live AIS target, own boat INCLUDED (it is an ordinary target,
+        # matched by the integration's `own_mmsi`). They come from the
         # `ais_targets` custom integration's geo_location source (it reads the
         # gateway directly — the nmea2000 HA integration is NOT involved in AIS).
-        entities:
-          - entity: device_tracker.nevera
+        #
+        # device_tracker.nevera is deliberately NOT listed here: on prod it
+        # reported latitude 42.43 with longitude 0.0 (partial GPS fix), which
+        # dropped a marker thousands of km away from the boat. AIS is the single
+        # source of truth for our own position on this map.
+        entities: []
         geo_location_sources:
           - ais_targets
         default_zoom: ${AIS_MAP_ZOOM}

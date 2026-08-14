@@ -83,6 +83,17 @@ AIS_STATIC_PGNS = frozenset(
         PGN_AIS_CLASS_B_STATIC_B,
     }
 )
+# ── OUR OWN position, straight off the bus ──────────────────────────────────
+# The boat carries proper GNSS receivers with the antennas out in the open sky,
+# and they broadcast their fix on the very same N2K bus we already read. So the
+# distance origin is taken from THESE PGNs — not from HA's `device_tracker.*`
+# template sensor, which re-derives the same fix through two extra layers (the
+# nmea2000 integration + a Jinja template with a last-known-position hold) and
+# on prod was observed publishing a partial fix (longitude 0.0).
+PGN_GNSS_POSITION_DATA = 129029   # full GNSS fix (FastPacket)
+PGN_POSITION_RAPID_UPDATE = 129025  # lat/lon only, ~1 Hz
+OWN_POSITION_PGNS = frozenset({PGN_GNSS_POSITION_DATA, PGN_POSITION_RAPID_UPDATE})
+
 # Full set the drift-guard verifies is decodable by the installed fork.
 ALL_AIS_PGNS = frozenset(
     AIS_POSITION_PGNS

@@ -31,12 +31,15 @@ from .const import (
     AIS_POSITION_PGNS,
     AIS_STATIC_PGNS,
     FIELD_MMSI,
+    OWN_POSITION_PGNS,
+    PGN_GNSS_POSITION_DATA,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-# All AIS PGNs we bother to fully decode (position + static/voyage data).
-_DECODE_PGNS = AIS_POSITION_PGNS | AIS_STATIC_PGNS
+# All PGNs we bother to fully decode: AIS targets (position + static/voyage
+# data) plus OUR OWN GNSS fix, which is used as the distance origin.
+_DECODE_PGNS = AIS_POSITION_PGNS | AIS_STATIC_PGNS | OWN_POSITION_PGNS
 
 _MS_TO_KNOTS = 1.9438444924406046
 
@@ -126,6 +129,12 @@ class AisBusClient:
         # dashboard looked like. This cache is keyed by MMSI, survives
         # drop()/expiry, and is replayed onto any (re-)created target.
         self._static_cache: dict[int, dict[str, Any]] = {}
+        # Our own boat's position, decoded straight off the bus from the GNSS
+        # receiver's own PGNs (129029/129025). This is the authoritative origin
+        # for the target-distance column — no HA template sensor involved.
+        self.own_position: tuple[float, float] | None = None
+        self.own_position_at: datetime | None = None
+        self._own_position_pgn: int | None = None
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._decoder = None  # created lazily on the executor (imports nmea2000)
@@ -251,7 +260,43 @@ class AisBusClient:
             # Incomplete FastPacket frame — the decoder will emit the assembled
             # message on a later frame.
             return
+        if pgn in OWN_POSITION_PGNS:
+            self._ingest_own_position(msg, pgn)
+            return
         self._ingest(msg)
+
+    # ── our own GNSS fix ────────────────────────────────────────────────────
+    def _ingest_own_position(self, msg: Any, pgn: int) -> None:
+        """Record our own boat's position from a GNSS PGN.
+
+        129029 (full GNSS position data) wins over 129025 (rapid update): it is
+        the receiver's complete fix. Once 129029 has been seen we ignore 129025
+        so a second, less capable source cannot flip-flop the origin.
+        """
+        fields = {f.id: f for f in msg.fields}
+
+        def val(fid: str) -> Any:
+            f = fields.get(fid)
+            return getattr(f, "value", None) if f else None
+
+        lat = _num(val("latitude"))
+        lon = _num(val("longitude"))
+        if lat is None or lon is None:
+            return
+        if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+            return
+        # A partially-filled fix (either coordinate sitting exactly on zero) is
+        # not a position: trusting one on prod put the boat 1500 km away.
+        if abs(lat) < 0.001 or abs(lon) < 0.001:
+            return
+        if (
+            pgn != PGN_GNSS_POSITION_DATA
+            and self._own_position_pgn == PGN_GNSS_POSITION_DATA
+        ):
+            return
+        self.own_position = (round(lat, 6), round(lon, 6))
+        self.own_position_at = dt_util.utcnow()
+        self._own_position_pgn = pgn
 
     # ── decode → target table ───────────────────────────────────────────────
     def _ingest(self, msg: Any) -> None:

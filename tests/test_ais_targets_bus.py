@@ -209,3 +209,42 @@ def test_static_data_survives_target_expiry(ais_bus):
     assert t.ship_type == "Pleasure"
     assert t.length == 24.0
     assert t.beam == 5.0
+
+
+def test_own_position_comes_from_bus_gnss_pgns(ais_bus):
+    """Our own position is decoded off the bus, not taken from an HA sensor.
+
+    129029 (full GNSS fix) outranks 129025 (rapid update), and a partial fix
+    with a zero coordinate is rejected outright — such a value once made every
+    target read ~1500 km away.
+    """
+    client = ais_bus.AisBusClient("127.0.0.1", 4001)
+    assert client.own_position is None
+
+    client._ingest_own_position(
+        _Msg(129025, [_Field("latitude", 42.4346), _Field("longitude", 18.6032)]),
+        129025,
+    )
+    assert client.own_position == (42.4346, 18.6032)
+
+    client._ingest_own_position(
+        _Msg(129029, [_Field("latitude", 42.4345), _Field("longitude", 18.6030)]),
+        129029,
+    )
+    assert client.own_position == (42.4345, 18.603)
+
+    # Once the full fix is known, the rapid update must not flip the origin.
+    client._ingest_own_position(
+        _Msg(129025, [_Field("latitude", 10.0), _Field("longitude", 20.0)]),
+        129025,
+    )
+    assert client.own_position == (42.4345, 18.603)
+
+
+def test_own_position_rejects_null_island_fix(ais_bus):
+    client = ais_bus.AisBusClient("127.0.0.1", 4001)
+    client._ingest_own_position(
+        _Msg(129029, [_Field("latitude", 42.4346), _Field("longitude", 0.0)]),
+        129029,
+    )
+    assert client.own_position is None

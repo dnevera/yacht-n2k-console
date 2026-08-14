@@ -57,14 +57,14 @@ table:
   # the 12px gutters.
   # Placeholders: ${AIS_TABLE_WIDTH} / ${AIS_TABLE_COLLAPSED_WIDTH}
   width: calc(50vw - 48px)
-  collapsed_width: 300px
+  collapsed_width: 320px
   # Width of the vessel-name column, as a CSS length. The table uses
   # `table-layout: fixed` (needed to keep header/body columns aligned while the
   # body scrolls), which otherwise splits the width evenly and CLIPS long
   # vessel names. Make this at least as wide as the longest name you want to
   # see in full.
   # Placeholder: ${AIS_VESSEL_COL_WIDTH}
-  vessel_column_width: 220px
+  vessel_column_width: 180px
   # Minimum width of the expanded table, in px. The overlay itself is pinned to
   # the map container's box (never wider than the window, 12px gutters kept);
   # once that box is narrower than this value the table scrolls HORIZONTALLY
