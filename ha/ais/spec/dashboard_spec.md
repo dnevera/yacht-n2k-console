@@ -82,6 +82,7 @@ graph LR
 | :--- | :--- | :--- |
 | `table.width` | `${AIS_TABLE_WIDTH}` | `calc(50vw - 48px)` |
 | `table.collapsed_width` | `${AIS_TABLE_COLLAPSED_WIDTH}` | `300px` |
+| `table.vessel_column_width` | `${AIS_VESSEL_COL_WIDTH}` | `220px` |
 
 По высоте оверлеи по-прежнему растягиваются **сторонами** (`top: 84px; bottom: 12px`), а не явным `height`, и прижаты к правому краю (`right: 12px`); дополнительный `max-width: calc(100vw - 48px)` гарантирует, что любая заданная ширина не выйдет за 12px-отступы окна.
 
@@ -222,3 +223,18 @@ ha-card { height: 100%; }
 #root { padding-bottom: 0 !important; height: 100% !important; }
 ha-map { height: 100% !important; }
 ```
+
+### Ширина колонки с именем судна
+
+Таблица использует `table-layout: fixed` (это необходимо, чтобы колонки шапки и тела оставались выровненными, пока тело скроллится). Побочный эффект: ширина делится **равномерно** между колонками, поэтому длинные имена судов обрезались.
+
+Колонке имени задана собственная ширина через `thead th:first-child, tbody td:first-child` — значение берётся из `table.vessel_column_width` (плейсхолдер `${AIS_VESSEL_COL_WIDTH}`, по умолчанию `220px`). Указывается и `width`, и `min-width`: при фиксированной раскладке один `min-width` игнорируется.
+
+### Расстояние до цели: отсчёт от нашей лодки
+
+`AisTarget._distance_km()` считает расстояние от **живой позиции нашей лодки**, а не от домашних координат Home Assistant (на движущейся лодке это бессмысленная точка отсчёта — именно поэтому колонка `Dist (km)` показывала непонятные значения).
+
+Приоритет источника точки отсчёта (`AisTargetsManager.own_position()`):
+1. AIS-цель с MMSI из `own_mmsi` (единственный источник правды);
+2. `device_tracker.nevera` (GPS-трекер из `ha/sailing-dash`) — фолбэк;
+3. `hass.config.latitude/longitude` — последний фолбэк.

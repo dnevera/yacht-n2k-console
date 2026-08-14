@@ -139,6 +139,11 @@
             # APPENDS to the card's own default rule instead of replacing it.
             "tr td+": " white-space: nowrap; text-overflow: ellipsis;"
             "th+": " white-space: nowrap;"
+            # `table-layout: fixed` above splits the width EVENLY, which clipped
+            # the vessel name. The name column gets its own width (never less
+            # than the name needs) — `min-width` alone is ignored under a fixed
+            # layout, so `width` is set too.
+            "thead th:first-child, tbody td:first-child+": " width: ${AIS_VESSEL_COL_WIDTH}; min-width: ${AIS_VESSEL_COL_WIDTH};"
           columns:
             - name: Vessel
               data: name
@@ -197,6 +202,10 @@
             # APPENDS to the card's own default rule instead of replacing it.
             "tr td+": " white-space: nowrap; text-overflow: ellipsis;"
             "th+": " white-space: nowrap;"
+            # See the collapsed table above: under `table-layout: fixed` the
+            # vessel name would be clipped by the even column split, so the
+            # name column keeps its own (configurable) width.
+            "thead th:first-child, tbody td:first-child+": " width: ${AIS_VESSEL_COL_WIDTH}; min-width: ${AIS_VESSEL_COL_WIDTH};"
           columns:
             - name: Vessel
               data: name

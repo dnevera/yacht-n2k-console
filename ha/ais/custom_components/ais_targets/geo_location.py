@@ -51,6 +51,11 @@ _LOGGER = logging.getLogger(__name__)
 # configured on the integration.
 _OWN_BOAT_ICON = "⛵"
 
+# GPS-based own-boat tracker (provided by ha/sailing-dash). Used only as a
+# fallback origin for the distance column while our own AIS target is not
+# available yet.
+OWN_BOAT_TRACKER = "device_tracker.nevera"
+
 
 class AisTarget(GeolocationEvent):
     """A single AIS-tracked vessel, plotted via `geo_location_sources`.
@@ -73,9 +78,13 @@ class AisTarget(GeolocationEvent):
         reading: AisTargetReading,
         is_own_ship: bool,
         own_static: dict[str, Any] | None = None,
+        origin: tuple[float, float] | None = None,
     ) -> None:
         self._reading = reading
         self._is_own_ship = is_own_ship
+        # Point the distance is measured FROM: our own boat's live position
+        # (see AisTargetsManager.own_position), not HA's static home zone.
+        self._origin = origin
         # Static identity of OUR boat, straight from the config entry. Our own
         # transceiver never puts its own msg24/static data on the N2K bus
         # (verified on the live bus), so without this fallback our row would
@@ -114,15 +123,25 @@ class AisTarget(GeolocationEvent):
         self._attr_distance = self._distance_km(reading)
 
     def _distance_km(self, reading: AisTargetReading) -> float | None:
-        hass = getattr(self, "hass", None)
-        if hass is None or reading.latitude is None or reading.longitude is None:
+        """Distance from OUR BOAT to this target, in km.
+
+        The origin is our own vessel's live position (own_mmsi AIS target, or
+        device_tracker.nevera as a fallback). HA's configured home coordinates
+        are only the last resort: on a moving boat they are a meaningless
+        reference point, which is exactly why the column looked wrong.
+        """
+        if reading.latitude is None or reading.longitude is None:
             return None
-        home_lat = hass.config.latitude
-        home_lon = hass.config.longitude
-        if home_lat is None or home_lon is None:
-            return None
+        origin = self._origin
+        if origin is None:
+            hass = getattr(self, "hass", None)
+            if hass is None:
+                return None
+            if hass.config.latitude is None or hass.config.longitude is None:
+                return None
+            origin = (hass.config.latitude, hass.config.longitude)
         return round(
-            distance(home_lat, home_lon, reading.latitude, reading.longitude) / 1000,
+            distance(origin[0], origin[1], reading.latitude, reading.longitude) / 1000,
             2,
         )
 
@@ -131,10 +150,12 @@ class AisTarget(GeolocationEvent):
         reading: AisTargetReading,
         is_own_ship: bool,
         own_static: dict[str, Any] | None = None,
+        origin: tuple[float, float] | None = None,
     ) -> None:
         """Refresh this entity in place from a newer reading."""
         self._is_own_ship = is_own_ship
         self._own_static = own_static or {}
+        self._origin = origin
         self._apply(reading)
         self.async_write_ha_state()
 
@@ -273,6 +294,30 @@ class AisTargetsManager:
         }
         return {k: v for k, v in static.items() if v is not None}
 
+    def own_position(
+        self, snapshot: dict[int, AisTargetReading]
+    ) -> tuple[float, float] | None:
+        """Live position of OUR boat, used as the distance origin.
+
+        Priority: our own AIS target (own_mmsi) → device_tracker.nevera (GPS)
+        → None, in which case the entity falls back to HA's home coordinates.
+        """
+        own_mmsi = self.own_mmsi
+        if own_mmsi is not None:
+            own = snapshot.get(own_mmsi)
+            if own is not None and own.has_position:
+                return (own.latitude, own.longitude)
+        state = self.hass.states.get(OWN_BOAT_TRACKER)
+        if state is not None:
+            lat = state.attributes.get("latitude")
+            lon = state.attributes.get("longitude")
+            try:
+                if lat is not None and lon is not None:
+                    return (float(lat), float(lon))
+            except (TypeError, ValueError):
+                return None
+        return None
+
     def async_start(self) -> None:
         """Start the periodic refresh and run one immediately."""
         self._unsub_interval = async_track_time_interval(
@@ -306,6 +351,7 @@ class AisTargetsManager:
         stale_before = now - self.stale_timeout
         own_mmsi = self.own_mmsi
         own_static = self.own_static
+        origin = self.own_position(snapshot)
 
         seen: set[int] = set()
         for mmsi, reading in snapshot.items():
@@ -342,7 +388,7 @@ class AisTargetsManager:
             is_own = own_mmsi is not None and mmsi == own_mmsi
             existing = self._entities.get(mmsi)
             if existing is not None:
-                existing.update_from_reading(reading, is_own, own_static)
+                existing.update_from_reading(reading, is_own, own_static, origin)
                 continue
             if self.hass.states.get(f"geo_location.ais_{mmsi}") is not None:
                 # A leftover state object from a previous incarnation of this
@@ -352,7 +398,7 @@ class AisTargetsManager:
                 # pick the target up on the next tick.
                 self.hass.states.async_remove(f"geo_location.ais_{mmsi}")
                 continue
-            entity = AisTarget(reading, is_own, own_static)
+            entity = AisTarget(reading, is_own, own_static, origin)
             self._entities[mmsi] = entity
             new_entities.append(entity)
 

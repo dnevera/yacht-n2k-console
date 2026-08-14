@@ -94,6 +94,9 @@ def build_placeholders(config):
         # height (e.g. `calc(60vw - 50px)`), not px numbers.
         "AIS_TABLE_WIDTH": str(tbl_cfg.get("width", "calc(100vw - 48px)")),
         "AIS_TABLE_COLLAPSED_WIDTH": str(tbl_cfg.get("collapsed_width", "300px")),
+        # `table-layout: fixed` would split the width evenly and clip long
+        # vessel names, so the name column keeps its own width.
+        "AIS_VESSEL_COL_WIDTH": str(tbl_cfg.get("vessel_column_width", "220px")),
         "AIS_ROWS_SCROLL_PX": str(visible_rows * row_height),
         "AIS_ROWS_SCROLL_COMPACT_PX": str(collapsed_rows * row_height),
     }
