@@ -147,31 +147,57 @@ def map_height_css(height_px):
     return f"min({height_px}px, calc(100vh - {reserved}px))"
 
 
-def overlay_style(height_px):
-    """card_mod style adding the outer gutter and pinning the target list as an
-    overlay over the map's right-hand side. The two overlay cards are the
-    2nd/3rd children of the outer vertical-stack (collapsed side-bar / expanded
-    table); only one of them is ever visible, since each is wrapped in a
-    `conditional`."""
+OVERLAY_TOP_PX = 12
+OVERLAY_TABLE_TOP_PX = 84
+COLLAPSED_WIDTH = "300px"
+EXPANDED_WIDTH = "min(1100px, calc(100vw - 96px))"
+
+
+def overlay_container_style():
+    """card_mod style of the custom:mod-card wrapper.
+
+    card-mod cannot style stack cards at all (it hooks ha-card/hui-card only —
+    there is no stack handling in card-mod.js), so styling the outer
+    vertical-stack was a no-op: no gutter and no overlay. mod-card gives us a
+    real ha-card to hang `position: relative` (the overlay's offset parent) and
+    the outer gutter on."""
+    return f"ha-card {{ position: relative; margin: {GUTTER_PX}px; }}\n"
+
+
+def overlay_toggle_style():
+    """Absolute geometry of the always-visible expand/collapse toggle."""
+    return (
+        "ha-card {\n"
+        "  position: absolute;\n"
+        f"  top: {OVERLAY_TOP_PX}px;\n"
+        f"  right: {OVERLAY_TOP_PX}px;\n"
+        "  z-index: 2;\n"
+        f"  width: {COLLAPSED_WIDTH};\n"
+        "}\n"
+    )
+
+
+def overlay_table_style(height_px, width):
+    """Absolute geometry of one of the two overlay tables. Applied to the
+    flex-table-card itself (a real ha-card) rather than to the enclosing stack,
+    so it never depends on child indexes inside a shadow root."""
     height = map_height_css(height_px)
     return (
-        f"#root {{ position: relative; margin: {GUTTER_PX}px; }}\n"
-        "#root > *:nth-child(2),\n"
-        "#root > *:nth-child(3) {\n"
+        "ha-card {\n"
         "  position: absolute;\n"
-        "  top: 12px;\n"
-        "  right: 12px;\n"
-        "  z-index: 1;\n"
-        f"  max-height: calc({height} - 24px);\n"
+        f"  top: {OVERLAY_TABLE_TOP_PX}px;\n"
+        f"  right: {OVERLAY_TOP_PX}px;\n"
+        "  z-index: 2;\n"
+        f"  width: {width};\n"
+        f"  max-height: calc({height} - {OVERLAY_TABLE_TOP_PX + 12}px);\n"
         "  overflow: auto;\n"
         "}\n"
     )
 
 
 def _patch_cards(cards, default_zoom, height_px, detail_fields, depth=0):
-    """Recursively walk a (possibly nested, e.g. vertical-stack) cards list and
-    patch the `id: map` / `id: detail_list` cards wherever they live, plus the
-    overlay geometry on the outermost vertical-stack."""
+    """Recursively walk a (possibly nested) cards list and patch the map, the
+    overlay geometry and the detail tables wherever they live."""
     if not isinstance(cards, list):
         return
     for card in cards:
@@ -187,11 +213,20 @@ def _patch_cards(cards, default_zoom, height_px, detail_fields, depth=0):
                     f"#map {{ height: {height} !important; }}\n"
                 )
             }
-        elif card_id == "detail_list" and card.get("type") == "custom:flex-table-card":
+        elif card_id == "overlay_toggle":
+            card["card_mod"] = {"style": overlay_toggle_style()}
+        elif card_id == "detail_list_compact":
+            card["card_mod"] = {
+                "style": overlay_table_style(height_px, COLLAPSED_WIDTH)
+            }
+        elif card_id == "detail_list":
             card["columns"] = build_columns(detail_fields)
-        elif depth == 0 and card.get("type") == "vertical-stack":
-            card["card_mod"] = {"style": overlay_style(height_px)}
-        # Recurse into any nested card containers (vertical-stack, grid, ...).
+            card["card_mod"] = {
+                "style": overlay_table_style(height_px, EXPANDED_WIDTH)
+            }
+        elif depth == 0 and card.get("type") == "custom:mod-card":
+            card["card_mod"] = {"style": overlay_container_style()}
+        # Recurse into any nested card containers (mod-card, vertical-stack, ...).
         if isinstance(card.get("cards"), list):
             _patch_cards(
                 card["cards"], default_zoom, height_px, detail_fields, depth + 1

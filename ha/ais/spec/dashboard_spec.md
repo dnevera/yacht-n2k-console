@@ -154,3 +154,15 @@ graph LR
 - [`architecture.md`](./architecture.md) — общая архитектура и обоснование дизайна.
 - [`integration_spec.md`](./integration_spec.md) — источник атрибутов, отображаемых в таблице.
 - [`deployment_and_ops.md`](./deployment_and_ops.md) — деплой карточек и дашборда.
+
+### Почему оверлей обёрнут в `custom:mod-card`
+
+**card-mod не умеет стилизовать stack-карточки.** В `card-mod.js` нет ни одного упоминания `hui-*-stack-card` — библиотека хукается только на `ha-card`, `hui-card`, `hui-entities-card`, `hui-conditional-row`, `hui-picture-elements-card`, `hui-section`, `hui-view` и т.п. Поэтому `card_mod`, повешенный напрямую на внешний `vertical-stack`, **молча игнорировался**: не появлялись ни внешние отступы (`margin: 12px`), ни позиционирование оверлея (`#root > *:nth-child(2)`) — таблица просто оставалась в обычном потоке под картой.
+
+Актуальная схема:
+
+- Внешний контейнер — `custom:mod-card` (карточка идёт в составе `card-mod.js`): она рендерит собственный настоящий `<ha-card>` вокруг любой вложенной карточки, поэтому `card_mod` к ней применяется гарантированно. На нём заданы `position: relative` (offset-родитель оверлея) и `margin: 12px` (внешние отступы).
+- Внутри — обычный `vertical-stack` без какого-либо `card_mod`.
+- Карта остаётся в нормальном потоке и задаёт высоту контейнера (`min(height_px, calc(100vh - 80px))`).
+- Тумблер (`overlay_toggle`) и обе таблицы (`detail_list_compact`, `detail_list`) позиционируются `position: absolute` **своим собственным** `card_mod` — это реальные `ha-card`, к которым card-mod применяется штатно. Никакой зависимости от порядка детей (`nth-child`) внутри shadow root стека больше нет, поэтому раскладка не «съезжает» при перерисовке набора целей.
+- Геометрия генерируется функциями `overlay_container_style()`, `overlay_toggle_style()`, `overlay_table_style()` в `helpers/build.py`.
