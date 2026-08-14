@@ -145,7 +145,12 @@ class AisTarget(GeolocationEvent):
             "destination": disp(r.destination),
             "eta": disp(r.eta),
             "is_own_ship": self._is_own_ship,
-            "last_seen": last_seen.isoformat(),
+            # Plain LOCAL wall-clock time: the table's "Updated" column is read
+            # at a glance while sailing, and a full UTC ISO timestamp is both
+            # unreadable there and off by the local UTC offset. The machine
+            # readable form stays available as `last_seen_iso`.
+            "last_seen": dt_util.as_local(last_seen).strftime("%H:%M:%S"),
+            "last_seen_iso": last_seen.isoformat(),
         }
 
 

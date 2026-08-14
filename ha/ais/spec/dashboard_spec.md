@@ -38,18 +38,33 @@ graph LR
 
 `own_mmsi` **намеренно не читается** в `build.py` — единственный источник правды для этого значения — конфигурация интеграции `ais_targets` (Config Flow), а не build-time YAML. Это устраняет риск рассинхронизации между временем сборки дашборда и временем выполнения интеграции (см. `integration_spec.md`).
 
-## Конфигурация сетки (`header.yaml`)
+## Конфигурация вида (`header.yaml`)
 
 ```yaml
 views:
-  - type: sections
+  - type: panel
     title: AIS
     icon: mdi:radar
-    max_columns: 1
-    sections:
+    cards:
 ```
 
-`max_columns: 1` в сочетании с `grid_options: columns: full` на обеих карточках заставляет карту и таблицу занимать **всю ширину контента** дашборда (не «панельный» полноэкранный режим `type: panel`, а полноширинная секция), но при этом карта имеет фиксированную, а не бесконечную высоту — это решает проблему прежней версии, где карта растягивалась на весь экран.
+`type: panel` — единственный тип вида Lovelace, который рендерит контент по-настоящему от края до края (без центрированной колонки с max-width, как в `sections`/`masonry`). Вид показывает ровно **одну** карточку верхнего уровня, поэтому карта и таблица завёрнуты в единый `vertical-stack`. Высота карты фиксируется через `card_mod`, чтобы «во всю ширину» не означало «во весь экран по высоте».
+
+## Раскладка: карта + таблица-оверлей
+
+```mermaid
+graph LR
+    VS[vertical-stack] --> M[map 480px]
+    VS --> C1[conditional off: side-bar]
+    VS --> C2[conditional on: full table]
+```
+
+- В нормальном потоке лежит **только карта** (фиксированная высота `height_px`, по умолчанию 480px, полная ширина контента).
+- Список целей рендерится **оверлеем** поверх правой части карты. `card_mod` на внешнем `vertical-stack` делает контейнер `position: relative`, а 2-й и 3-й дочерние элементы — `position: absolute; top: 12px; right: 12px; z-index: 1` с `max-height: height_px - 24` и `overflow: auto` (стиль генерируется `overlay_style()` в `build.py`).
+- Два взаимоисключающих `conditional`-карточки по состоянию `input_boolean.ais_table_expanded`:
+  - **`off` (по умолчанию)** — компактный сайдбар шириной 300px: только `Vessel` и `Dist (km)`.
+  - **`on`** — полная таблица шириной `min(1100px, calc(100vw - 48px))` со всеми колонками.
+- Переключатель разворачивания — карточка `entities` с самим `input_boolean.ais_table_expanded` в шапке оверлея (присутствует в обоих состояниях). Хелпер создаётся идемпотентно скриптом `helpers/provision_helpers.py` в `.storage/input_boolean` при `deploy.sh --install`.
 
 ## Карточка карты (`type: map`)
 
@@ -61,84 +76,75 @@ views:
   geo_location_sources:
     - ais_targets
   default_zoom: 12
-  grid_options:
-    columns: full
   card_mod:
     style: |
       ha-card { height: 480px; }
       #map { height: 480px !important; }
 ```
 
-- **`entities: [device_tracker.nevera]`** — GPS-трекер собственной лодки (fallback-механизм; сохраняется одновременно с AIS-целью для собственного судна).
-- **`geo_location_sources: ['ais_targets']`** — отображает **все** AIS-цели (кроме собственного судна, помеченного отдельным `source`, см. `integration_spec.md`), динамически появляющиеся/исчезающие как сущности `geo_location.ais_<mmsi>`.
-- **`grid_options.columns: full`** — карточка растягивается на всю ширину секции (полную ширину контента дашборда).
-- **`card_mod.style`** — фиксирует высоту карточки и внутреннего DOM-элемента карты (`#map`) в пикселях (`height_px` из `config.yaml`, по умолчанию 480px), чтобы карта не разрасталась на весь экран.
+- **`entities: [device_tracker.nevera]`** — GPS-трекер собственной лодки (fallback, работает одновременно с AIS-целью собственного судна).
+- **`geo_location_sources: ['ais_targets']`** — все AIS-цели, включая собственное судно (единый `source`, см. `integration_spec.md`).
+- **`card_mod.style`** — фиксирует высоту карточки и внутреннего DOM-элемента `#map` (`height_px` из `config.yaml`).
 
-## Таблица целей (`custom:auto-entities` + `custom:flex-table-card`)
+## Таблица целей (`custom:flex-table-card`)
 
-### Почему две вложенные карточки, а не одна
-
-Ни одна из зависимостей не была выбрана произвольно — это результат нескольких итераций:
+### Почему именно так
 
 | Подход | Проблема |
 |---|---|
-| Нативная markdown-таблица (Jinja) | DOMPurify/marked.js в HA фильтрует инлайн-`onclick`, поэтому клик по строке не работал; кроме того, отсутствие `-` (trim) в Jinja-тегах ломало непрерывность GFM-таблицы. |
-| Нативная карточка `entities` | Может показать только один state + одну вторичную строку на сущность — недостаточно колонок для полного набора AIS-полей. |
-| `custom:auto-entities` + `custom:flex-table-card` (текущее решение) | `auto-entities` обнаруживает изменяющийся список `geo_location.ais_*` в рантайме (список судов заранее не известен), `flex-table-card` рендерит многоколоночную таблицу с нативной кликабельностью строк (открывает more-info с мини-картой судна). |
+| Нативная markdown-таблица (Jinja) | DOMPurify/marked.js фильтрует инлайн-`onclick`, клик по строке не работал; отсутствие trim-модификаторов в Jinja ломало GFM-таблицу. |
+| Нативная карточка `entities` | Только один state + одна вторичная строка на сущность — не хватает колонок. |
+| `custom:auto-entities` + `custom:flex-table-card` | `auto-entities` при **каждом** изменении набора целей заново вызывал `setConfig()` внутренней карточки, из-за чего пересоздавалась таблица и **сбрасывалась сортировка**, выбранная пользователем кликом по заголовку. |
+| `custom:flex-table-card` напрямую (текущее решение) | Карточка сама умеет `entities: include: geo_location.ais_*` (wildcard-регексп внутри `_getEntities()`), поэтому `setConfig()` вызывается один раз, а сортировка живёт в экземпляре и **сохраняется**. |
 
 ### Конфигурация
 
 ```yaml
 - id: detail_list
-  type: custom:auto-entities
-  grid_options:
-    columns: full
-  card:
-    type: custom:flex-table-card
-    title: AIS Targets
-    clickable: true
-    sort_by: name+
-    columns: [... см. ниже ...]
-  filter:
-    include:
-      - entity_id: "geo_location.ais_*"
-    exclude: []
+  type: custom:flex-table-card
+  entities:
+    include: geo_location.ais_*
+  strict: true
+  clickable: true
+  sort_by: state+
+  columns: [... см. ниже ...]
 ```
 
-- **`filter.include`** — маска по `entity_id` (`geo_location.ais_*`), а не жёстко заданный список: новые/исчезающие цели подхватываются автоматически без пересборки/передеплоя.
-- **`clickable: true`** — клик по строке таблицы открывает нативный диалог more-info выбранной сущности `geo_location.ais_<mmsi>`, который включает мини-карту с позицией именно этого судна («центрирование на цели»).
-- **`sort_by: name+`** — сортировка по алфавиту (по имени/friendly_name).
+- **`entities.include`** — маска по `entity_id`: новые/исчезающие цели подхватываются автоматически.
+- **`strict: true`** — скрывает строки с пустой ячейкой, то есть «призраков» — восстановленные (`restored`/`unavailable`) записи реестра без атрибутов, оставшиеся от прежних версий интеграции.
+- **`clickable: true`** — клик по строке открывает нативный more-info выбранной цели с мини-картой (центрирование на судне).
+- **`sort_by: state+`** — начальная сортировка по расстоянию (state сущности = дистанция в км); клик по любому заголовку меняет сортировку и она сохраняется до перезагрузки страницы.
 
 ### Колонки таблицы (генерируются `build_columns()`)
 
-Итоговый набор колонок = `friendly_name` + сконфигурированные `detail_fields` + всегда присутствующие навигационные колонки (`ALWAYS_TRAILING_FIELDS`), без дублей:
+Итоговый набор = `name` + `state` + сконфигурированные `detail_fields` + всегда присутствующие навигационные колонки (`ALWAYS_TRAILING_FIELDS`), без дублей. `data` — **плоский** ключ (не путь `attributes.x`): карточка резолвит `name`/`state`/... специальным образом, затем как член сущности, затем как `entity.attributes[key]`.
 
-| Колонка | Источник | Атрибут |
+| Колонка | Источник | `data` |
 |---|---|---|
-| Vessel | всегда | `friendly_name` |
-| MMSI | `detail_fields` (по умолчанию) | `mmsi` |
-| Name | `detail_fields` (по умолчанию) | `vessel_name` |
-| Callsign | `detail_fields` (по умолчанию) | `callsign` |
-| Type | `detail_fields` (по умолчанию) | `ship_type` |
-| Length (m) | `detail_fields` (по умолчанию) | `length` |
-| Beam (m) | `detail_fields` (по умолчанию) | `beam` |
-| Destination | `detail_fields` (по умолчанию) | `destination` |
-| SOG (kn) | всегда (`ALWAYS_TRAILING_FIELDS`) | `sog` |
+| Vessel | всегда | `name` |
+| Dist (km) | всегда | `state` |
+| MMSI | `detail_fields` | `mmsi` |
+| Name | `detail_fields` | `vessel_name` |
+| Callsign | `detail_fields` | `callsign` |
+| Type | `detail_fields` | `ship_type` |
+| Length (m) | `detail_fields` | `length` |
+| Beam (m) | `detail_fields` | `beam` |
+| Destination | `detail_fields` | `destination` |
+| SOG (kn) | всегда | `sog` |
 | COG (°) | всегда | `cog` |
 | Heading (°) | всегда | `heading` |
 | Nav Status | всегда | `nav_status` |
-| Last Seen | всегда | `last_seen` |
-
-Список `detail_fields` настраивается в `config.yaml` (по умолчанию — `DEFAULT_DETAIL_FIELDS` в `build.py`), последние 5 навигационных колонок присутствуют **всегда**, независимо от конфигурации, чтобы таблица никогда не «теряла» ключевые данные о движении цели.
+| Updated | всегда | `last_seen` — **локальное** время `HH:MM:SS` (машиночитаемый UTC ISO остаётся в `last_seen_iso`) |
 
 ## Зависимости Lovelace-карточек
 
 | Карточка | Репозиторий | Способ получения |
 |---|---|---|
-| `custom:auto-entities` | `thomasloven/lovelace-auto-entities` | `github_raw` (у репозитория нет release-ассетов) |
-| `custom:flex-table-card` | (аналогично) | `github_raw`, версия зафиксирована в `ha/sailing-dash/deps.yaml` |
+| `custom:flex-table-card` | `custom-cards/flex-table-card` | `github_raw`, версия зафиксирована в `ha/sailing-dash/deps.yaml` |
+| `custom:auto-entities` | `thomasloven/lovelace-auto-entities` | `github_raw`; дашбордом больше не используется, но ресурс остаётся зарегистрированным |
+| `card-mod` | — | нужен для оверлея и фиксированной высоты карты; уже присутствует на инстансе из `sailing-dash` |
 
-Обе зависимости пинятся по конкретной версии/тегу в `ha/sailing-dash/deps.yaml` (общие ресурсы Lovelace для инстанса HA), а `ha/ais/deploy.sh` самостоятельно скачивает и регистрирует их (`deploy_card_deps()`) — пакет `ha/ais` не требует отдельного деплоя `ha/sailing-dash` для их появления (см. `deployment_and_ops.md`).
+Зависимости пинятся по версии/тегу в `ha/sailing-dash/deps.yaml` (ресурсы Lovelace общие для инстанса HA), а `ha/ais/deploy.sh` сам скачивает и регистрирует их (`deploy_card_deps()`).
 
 ## Связанные документы
 

@@ -179,13 +179,49 @@ patch_pgn_include() {
         && echo "pgn_include" >> "${AIS_CHANGE_FLAG}"
 }
 
+# ── provision_helpers(): the AIS table overlay toggle ───────────────────────
+# The target list is rendered as an overlay on the map and collapses to a
+# name+distance side-bar; the collapsed/expanded state is held by
+# input_boolean.ais_table_expanded, which lives in .storage/input_boolean.
+provision_helpers() {
+    echo "-- Step: AIS dashboard helpers (table overlay toggle) --"
+    local tmp_dir remote_path local_copy
+    tmp_dir="$(mktemp -d /tmp/ais_helpers.XXXXXX)"
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    remote_path="/config/.storage/input_boolean"
+    local_copy="${tmp_dir}/input_boolean"
+
+    # A missing store is normal on an instance without any UI helper yet —
+    # provision_helpers.py then creates a fresh, minimally-valid document.
+    ha_cat "${remote_path}" > "${local_copy}" 2>/dev/null || rm -f "${local_copy}"
+
+    local report_status=0
+    python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" || report_status=$?
+
+    if [[ "${report_status}" -eq 0 ]]; then
+        echo "AIS dashboard helpers already present — nothing to change."
+        return 0
+    elif [[ "${report_status}" -ne 2 ]]; then
+        echo "WARN: provision_helpers.py failed unexpectedly (exit ${report_status}) — leaving helpers untouched." >&2
+        return 0
+    fi
+
+    python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" --write
+    ha_cp_to_container_if_changed "${local_copy}" "${remote_path}" "input_boolean (AIS table toggle)" \
+        && echo "input_boolean" >> "${AIS_CHANGE_FLAG}"
+}
+
 # ── deploy_card_deps(): the target table's Lovelace card dependencies ───────
 # Fetches the community cards the AIS target table needs (pinned in
 # ../sailing-dash/deps.yaml) and registers them as Lovelace resources on THIS
 # target, so ha/ais never depends on a separate sailing-dash deploy. Without
 # this the table renders as a "Custom element doesn't exist" error box.
-#   - auto-entities: discovers/filters the changing geo_location.ais_* set.
-#   - flex-table-card: renders that list as a multi-column, clickable table.
+#   - flex-table-card: renders the geo_location.ais_* set as a multi-column,
+#     clickable table (it resolves the wildcard entity include itself — the
+#     auto-entities wrapper was dropped because it re-called setConfig() on
+#     every target change and reset the user's chosen sort column).
+#   - auto-entities: no longer used by this dashboard, but kept registered so
+#     an older cached dashboard revision doesn't break.
 deploy_card_deps() {
     echo "-- Step: Lovelace card dependencies (target table) --"
     local sailing_dir="${PROJECT_ROOT}/ha/sailing-dash"
@@ -311,6 +347,7 @@ case "${MODE}" in
 
         SKIP_RESTART=1 install_component
         SKIP_RESTART=1 patch_pgn_include
+        SKIP_RESTART=1 provision_helpers
         SKIP_RESTART=1 deploy_card_deps
         verify_ais_in_container || true
         "${HELPERS_DIR}/deploy_dashboard.sh" --target "${TARGET_ENV}" ${HOST_ARG:+"${HOST_ARG}"}

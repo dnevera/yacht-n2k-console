@@ -44,6 +44,7 @@ FIELD_LABELS = {
     "length": "Length (m)",
     "beam": "Beam (m)",
     "name": "Vessel",
+    "state": "Dist (km)",
     "destination": "Destination",
     "eta": "ETA",
     "sog": "SOG (kn)",
@@ -51,8 +52,10 @@ FIELD_LABELS = {
     "heading": "Heading (°)",
     "nav_status": "Nav Status",
     "rate_of_turn": "Rate of Turn",
-    "last_seen": "Last Seen",
+    "last_seen": "Updated",
 }
+# Right-aligned numeric columns (purely cosmetic).
+RIGHT_ALIGNED_FIELDS = {"state", "length", "beam", "sog", "cog", "heading"}
 DEFAULT_DETAIL_FIELDS = [
     "mmsi",
     "vessel_name",
@@ -110,23 +113,46 @@ def build_columns(detail_fields):
     worse, a comma inside `data` means "multi source", so a two-field column
     rendered as `undefinedundefined`. Hence: plain attribute keys, and the
     special `name` key for the vessel column."""
-    ordered = ["name"]
+    ordered = ["name", "state"]
     for field in list(detail_fields) + ALWAYS_TRAILING_FIELDS:
         if field not in ordered:
             ordered.append(field)
-    return [
-        {"name": FIELD_LABELS.get(field, field), "data": field}
-        for field in ordered
-    ]
+    columns = []
+    for field in ordered:
+        col = {"name": FIELD_LABELS.get(field, field), "data": field}
+        if field in RIGHT_ALIGNED_FIELDS:
+            col["align"] = "right"
+        columns.append(col)
+    return columns
 
 
 def ensure_dirs():
     os.makedirs(BUILD_DIR, exist_ok=True)
 
 
-def _patch_cards(cards, default_zoom, height_px, detail_fields):
-    """Recursively walk a (possibly nested, e.g. vertical-stack) cards list
-    and patch the `id: map` / `id: detail_list` cards wherever they live."""
+def overlay_style(height_px):
+    """card_mod style pinning the target list as an overlay over the map's
+    right-hand side. The two overlay cards are the 2nd/3rd children of the
+    outer vertical-stack (collapsed side-bar / expanded table); only one of
+    them is ever visible, since each is wrapped in a `conditional`."""
+    return (
+        "#root { position: relative; }\n"
+        "#root > *:nth-child(2),\n"
+        "#root > *:nth-child(3) {\n"
+        "  position: absolute;\n"
+        "  top: 12px;\n"
+        "  right: 12px;\n"
+        "  z-index: 1;\n"
+        f"  max-height: {max(height_px - 24, 120)}px;\n"
+        "  overflow: auto;\n"
+        "}\n"
+    )
+
+
+def _patch_cards(cards, default_zoom, height_px, detail_fields, depth=0):
+    """Recursively walk a (possibly nested, e.g. vertical-stack) cards list and
+    patch the `id: map` / `id: detail_list` cards wherever they live, plus the
+    overlay geometry on the outermost vertical-stack."""
     if not isinstance(cards, list):
         return
     for card in cards:
@@ -141,13 +167,19 @@ def _patch_cards(cards, default_zoom, height_px, detail_fields):
                     f"#map {{ height: {height_px}px !important; }}\n"
                 )
             }
-        elif card_id == "detail_list" and card.get("type") == "custom:auto-entities":
-            inner = card.get("card")
-            if isinstance(inner, dict):
-                inner["columns"] = build_columns(detail_fields)
+        elif card_id == "detail_list" and card.get("type") == "custom:flex-table-card":
+            card["columns"] = build_columns(detail_fields)
+        elif depth == 0 and card.get("type") == "vertical-stack":
+            card["card_mod"] = {"style": overlay_style(height_px)}
         # Recurse into any nested card containers (vertical-stack, grid, ...).
         if isinstance(card.get("cards"), list):
-            _patch_cards(card["cards"], default_zoom, height_px, detail_fields)
+            _patch_cards(
+                card["cards"], default_zoom, height_px, detail_fields, depth + 1
+            )
+        if isinstance(card.get("card"), dict):
+            _patch_cards(
+                [card["card"]], default_zoom, height_px, detail_fields, depth + 1
+            )
 
 
 def build_dashboard(config=None):

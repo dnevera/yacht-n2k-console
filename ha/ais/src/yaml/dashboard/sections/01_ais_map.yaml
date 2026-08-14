@@ -1,9 +1,29 @@
 - type: vertical-stack
-  # This is the SINGLE top-level card the `panel` view renders — it stretches
-  # edge-to-edge (see header.yaml), and everything below stacks inside it.
+  # The SINGLE top-level card of the `panel` view (see header.yaml): it spans
+  # the full CONTENT width, while the map keeps a fixed pixel height so
+  # "full width" never turns into "full window".
+  #
+  # Layout: the map is the only card in the normal flow; the target list is
+  # rendered as an OVERLAY on top of the map's right-hand side. Two mutually
+  # exclusive `conditional` cards (driven by input_boolean.ais_table_expanded,
+  # provisioned by helpers/provision_helpers.py) implement the collapsed
+  # side-bar (name + distance only) and the fully expanded table.
+  #
+  # helpers/build.py rewrites the map's zoom/height and the full table's
+  # columns, and keeps the overlay geometry in sync with the map height.
+  card_mod:
+    style: |
+      #root { position: relative; }
+      #root > *:nth-child(2),
+      #root > *:nth-child(3) {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        z-index: 1;
+        max-height: 456px;
+        overflow: auto;
+      }
   cards:
-    - type: heading
-      heading: AIS
     - id: map
       type: map
       # Own boat (GPS pin) + every live AIS target. The targets come from the
@@ -14,69 +34,104 @@
       geo_location_sources:
         - ais_targets
       default_zoom: 12
-      # Fixed height via card-mod so the map doesn't also stretch to fill the
-      # whole panel view's height (only the WIDTH should be edge-to-edge).
-      # helpers/build.py refreshes default_zoom and the pixel height from
-      # config.yaml at build time.
       card_mod:
         style: |
           ha-card { height: 480px; }
           #map { height: 480px !important; }
-    - id: detail_list
-      type: custom:auto-entities
-      # auto-entities discovers the changing set of geo_location.ais_* entities
-      # at runtime (the vessel list is never known at build time) and feeds them
-      # to flex-table-card, which renders one row per vessel with one COLUMN PER
-      # FIELD and makes every row clickable (opens the vessel's more-info dialog
-      # with its mini-map — i.e. "focus this target on the map").
-      # helpers/build.py overwrites `card.columns` from config.yaml's
-      # detail_fields; the list below is only the as-shipped default so this
-      # file stays valid on its own.
+
+    # ── Collapsed overlay: compact side-bar (name + distance) ───────────────
+    - id: overlay_collapsed
+      type: conditional
+      conditions:
+        - condition: state
+          entity: input_boolean.ais_table_expanded
+          state: "off"
       card:
-        type: custom:flex-table-card
-        title: AIS Targets
-        clickable: true
-        sort_by: name+
-        columns:
-          - name: Vessel
-            data: name
-          - name: MMSI
-            data: mmsi
-          - name: Name
-            data: vessel_name
-          - name: Callsign
-            data: callsign
-          - name: Type
-            data: ship_type
-          - name: Length (m)
-            data: length
-          - name: Beam (m)
-            data: beam
-          - name: Destination
-            data: destination
-          - name: SOG (kn)
-            data: sog
-          - name: COG (°)
-            data: cog
-          - name: Heading (°)
-            data: heading
-          - name: Nav Status
-            data: nav_status
-          - name: Last Seen
-            data: last_seen
-      filter:
-        include:
-          - entity_id: "geo_location.ais_*"
-        exclude:
-          # Ghost rows: leftover entity_registry rows for geo_location.ais_*
-          # (from older versions of the integration, which set a unique_id)
-          # are "restored" by HA as attribute-less `unavailable` states, match
-          # the entity_id mask and render a full row of `undefined` cells.
-          #
-          # NOTE: do NOT exclude `unknown` here. A GeolocationEvent's state is
-          # its `distance`, which we never set, so EVERY live target sits at
-          # state `unknown` — excluding it emptied the whole table while the
-          # map (which reads latitude/longitude, not state) stayed correct.
-          - state: "unavailable"
-          - attributes:
-              restored: true
+        type: vertical-stack
+        card_mod:
+          style: |
+            #root { width: 300px; }
+        cards:
+          - id: overlay_toggle
+            type: entities
+            entities:
+              - entity: input_boolean.ais_table_expanded
+                name: AIS Targets
+          - id: detail_list_compact
+            type: custom:flex-table-card
+            # flex-table-card resolves the entity set itself (no auto-entities
+            # wrapper): auto-entities re-called setConfig() on every change of
+            # the vessel set, which rebuilt the table and RESET the column the
+            # user had clicked to sort by. Doing the wildcard include natively
+            # means setConfig() runs once, so the sort order sticks.
+            entities:
+              include: geo_location.ais_*
+            # `strict` drops any row with a missing cell — which is exactly the
+            # attribute-less "restored"/unavailable ghost rows left over in the
+            # entity registry by older versions of the integration.
+            strict: true
+            clickable: true
+            sort_by: state+
+            columns:
+              - name: Vessel
+                data: name
+              - name: Dist (km)
+                data: state
+                align: right
+
+    # ── Expanded overlay: the full table ───────────────────────────────────
+    - id: overlay_expanded
+      type: conditional
+      conditions:
+        - condition: state
+          entity: input_boolean.ais_table_expanded
+          state: "on"
+      card:
+        type: vertical-stack
+        card_mod:
+          style: |
+            #root { width: min(1100px, calc(100vw - 48px)); }
+        cards:
+          - id: overlay_toggle_expanded
+            type: entities
+            entities:
+              - entity: input_boolean.ais_table_expanded
+                name: AIS Targets
+          - id: detail_list
+            type: custom:flex-table-card
+            # Columns are regenerated from config.yaml's `detail_fields` by
+            # helpers/build.py; the list below is only the as-shipped default
+            # so this file stays valid on its own.
+            entities:
+              include: geo_location.ais_*
+            strict: true
+            clickable: true
+            sort_by: state+
+            columns:
+              - name: Vessel
+                data: name
+              - name: Dist (km)
+                data: state
+                align: right
+              - name: MMSI
+                data: mmsi
+              - name: Callsign
+                data: callsign
+              - name: Type
+                data: ship_type
+              - name: Length (m)
+                data: length
+              - name: Beam (m)
+                data: beam
+              - name: Destination
+                data: destination
+              - name: SOG (kn)
+                data: sog
+              - name: COG (°)
+                data: cog
+              - name: Heading (°)
+                data: heading
+              - name: Nav Status
+                data: nav_status
+              - name: Updated
+                data: last_seen
