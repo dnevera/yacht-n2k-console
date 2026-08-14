@@ -376,6 +376,24 @@ gd5.dispatchEvent(touchEvent('touchstart', [{ clientX: 5, clientY: 5 }], true));
 gd5.dispatchEvent(touchEvent('touchend', [], true));
 t('a tap on the modebar is left entirely to the browser', mouse.length === 0);
 
+// 13. Two fingers must not produce the one-finger gestures: a second finger
+// takes the tooltip back down (and aborts Plotly's pan), and the mouse events
+// the browser replays after a touch sequence - which is what made a tooltip
+// pop up on the RELEASE of a tap or of a pinch - are swallowed.
+let mouseThrough = 0;
+gd5.addEventListener('mouseover', () => { mouseThrough++; }, true);
+mouse.length = 0;
+gd5.dispatchEvent(touchEvent('touchstart', [{ clientX: 5, clientY: 5 }], false));
+gd5.dispatchEvent(touchEvent('touchstart', [{ clientX: 5, clientY: 5 }, { clientX: 90, clientY: 90 }], false));
+gd5.dispatchEvent(touchEvent('touchmove', [{ clientX: 5, clientY: 5 }, { clientX: 120, clientY: 120 }], false));
+t('a pinch never turns into a hover', !mouse.includes('mouseover'));
+gd5.dispatchEvent(touchEvent('touchend', [{ clientX: 90, clientY: 90 }], false));
+t('lifting one finger of a pinch does not start a new tap', !mouse.includes('mouseout'));
+gd5.dispatchEvent(touchEvent('touchend', [], false));
+t('a finished pinch takes any tooltip down', mouse.includes('mouseout') && !mouse.includes('mouseover'));
+gd5.dispatchEvent(new Event('mouseover'));
+t('the mouse events replayed after a gesture never reach Plotly', mouseThrough === 0);
+
 const gReset = makeGd([T(0), T(60)]);
 buttons[2].click(gReset); // resetScale2d
 t('reset button clicks the same hidden reset button the dblclick handler uses', gReset.resetBtn.clicked === 1);

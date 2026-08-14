@@ -74,13 +74,20 @@
     gd.__touchGestureLongPress = true;
     const HOLD_MS = 400;
     const MOVE_TOL = 10;
-    let timer = null, hover = false, sx = 0, sy = 0;
+    // `multi` stays true from the moment a second finger lands until every
+    // finger is off again: while a pinch is in progress neither the tooltip
+    // nor Plotly's one-finger pan may be alive.
+    let timer = null, hover = false, sx = 0, sy = 0, multi = false;
     const dragLayer = () => gd.querySelector('.nsewdrag') || gd;
+    let selfHover = false;
     const hoverAt = (t) => {
       const target = dragLayer();
       const opts = { clientX: t.clientX, clientY: t.clientY, bubbles: true, cancelable: true };
-      target.dispatchEvent(new MouseEvent('mouseover', opts));
-      target.dispatchEvent(new MouseEvent('mousemove', opts));
+      selfHover = true;
+      try {
+        target.dispatchEvent(new MouseEvent('mouseover', opts));
+        target.dispatchEvent(new MouseEvent('mousemove', opts));
+      } finally { selfHover = false; }
     };
     // Plotly treats a plain tap as a mouse hover and pops the tooltip up for
     // it; the tooltip is supposed to be the reward for a deliberate long
@@ -88,9 +95,26 @@
     const unhoverAt = () => {
       const target = dragLayer();
       const opts = { bubbles: true, cancelable: true };
-      target.dispatchEvent(new MouseEvent('mouseout', opts));
-      target.dispatchEvent(new MouseEvent('mouseleave', opts));
+      selfHover = true;
+      try {
+        target.dispatchEvent(new MouseEvent('mouseout', opts));
+        target.dispatchEvent(new MouseEvent('mouseleave', opts));
+      } finally { selfHover = false; }
     };
+    // After a touch sequence the browser replays it as synthetic mouse events
+    // (mouseover/mousemove/click) - which is why a tooltip popped up on the
+    // RELEASE of a tap or of a pinch, after `unhoverAt()` had already run.
+    // Swallow those for a short window; our own long-press hover is dispatched
+    // with `selfHover` set, so it still gets through.
+    const MOUSE_MUTE_MS = 700;
+    let muteUntil = 0;
+    ['mouseover', 'mousemove', 'mouseenter', 'mouseout', 'mouseleave'].forEach((type) => {
+      gd.addEventListener(type, (e) => {
+        if (selfHover || Date.now() >= muteUntil) return;
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      }, true);
+    });
     const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
     const abortPan = () => {
       document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
@@ -138,9 +162,21 @@
       // finger resting on a button for >HOLD_MS turned the tap into a
       // long-press hover gesture and the click never happened.
       if (inModebar(e.target)) return;
+      muteUntil = Date.now() + MOUSE_MUTE_MS;
       clear();
+      if (e.touches.length > 1) {
+        // Second finger = pinch. Plotly already started a pan on the first
+        // one and, if the finger had rested there for >HOLD_MS, a tooltip is
+        // up as well - both are false positives of the pinch, so take them
+        // down before the card's controller starts zooming.
+        multi = true;
+        if (hover) unhoverAt();
+        hover = false;
+        abortPan();
+        return;
+      }
       hover = false;
-      if (e.touches.length !== 1) return;
+      if (multi) return;
       const t = e.touches[0];
       sx = t.clientX; sy = t.clientY;
       timer = setTimeout(() => {
@@ -154,7 +190,11 @@
     gd.addEventListener('touchmove', (e) => {
       if (inModebar(e.target)) return;
       const t = e.touches[0];
-      if (e.touches.length > 1) { clear(); return; }
+      if (multi || e.touches.length > 1) {
+        clear();
+        if (hover) { unhoverAt(); hover = false; }
+        return;
+      }
       if (hover) {
         e.stopPropagation();
         if (e.cancelable) e.preventDefault();
@@ -167,11 +207,17 @@
       if (e && inModebar(e.target)) return;
       const wasHover = hover;
       const pending = !!timer;
+      const wasMulti = multi;
+      muteUntil = Date.now() + MOUSE_MUTE_MS;
       clear();
       hover = false;
+      // A finger leaving a pinch must not turn the remaining one back into a
+      // tap/long-press; only a fully released hand resets the gesture.
+      if (e && e.touches && e.touches.length > 0) return;
+      multi = false;
       // Neither a long press nor a pinch: whatever tooltip Plotly showed for
       // the tap goes away again.
-      if (!wasHover && pending) unhoverAt();
+      if (wasMulti || (!wasHover && pending)) unhoverAt();
     };
     gd.addEventListener('touchend', end, true);
     gd.addEventListener('touchcancel', end, true);

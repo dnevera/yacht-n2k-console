@@ -10,6 +10,13 @@ write-ups/rationale for the entries below still live in `README.md` and
 `local-preview/README.md` (this file is an index/summary, not a
 replacement for that detail) and in `.agents/skills/nmea2000-setup/SKILL.md`.
 
+## 2026-08-14 (26)
+
+- **Fixed: a two-finger pinch produced a tooltip and panned the chart, and the tooltip also popped up when the fingers were lifted.** All in `src/js/common/plotly_touch_patch_shapes.js`:
+  - A second finger now switches the snippet into a `multi` state until the whole hand is off: the long-press timer is cleared, any tooltip is taken down and Plotly's one-finger pan (started by the first finger) is aborted with the same synthetic `mouseup` the long press uses. Lifting one finger of a pinch no longer turns the remaining one back into a tap/long press.
+  - The browser replays a finished touch sequence as synthetic mouse events (`mouseover`/`mousemove`), which is what made the tooltip appear *after* the release, past our `mouseout`. Those are now swallowed in the capture phase on the plot div for 700 ms after any touch; the snippet's own hover/unhover dispatches carry a flag and still go through, so the deliberate long press keeps working.
+- Tests: `tests/js/wind_chart_snippets.test.js` gained a pinch/replay suite (no hover during a pinch, lifting one finger is not a new tap, a finished pinch clears the tooltip, replayed mouse events never reach Plotly).
+
 ## 2026-08-14 (25)
 
 - **Fixed: pinch zoom and the +/-/reset buttons on a phone, for real this time - and tooltips now need a long press.** Reading the card bundle showed the actual cause, which entries (23)/(24) had guessed wrong: **the card already ships its own touch controller** (`disable_pinch_to_zoom`), and it zooms by dispatching a *synthetic* `wheel` event at the drag layer. Since entry (20) we set `scrollZoom: false`, so that wheel did nothing - pinch was dead by construction, and the hand-written pinch of entry (23) was fighting the card's controller for the same axis.
