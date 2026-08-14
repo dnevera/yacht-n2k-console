@@ -401,6 +401,14 @@ case "${MODE}" in
         "${HELPERS_DIR}/deploy_dashboard.sh" --target "${TARGET_ENV}" ${HOST_ARG:+"${HOST_ARG}"}
         ;;
     update)
+        # The dashboard MUST NOT be deployed without its front-end resources
+        # and helpers: a view referencing `custom:ais-user-scope` (or a helper
+        # that does not exist yet) renders as a single "Custom element doesn't
+        # exist" error box and the whole page looks broken. This exact drift
+        # broke prod once — `--update` shipped a new dashboard while the JS
+        # module stayed at the previous revision. Both steps are idempotent.
+        SKIP_RESTART=1 provision_helpers
+        SKIP_RESTART=1 deploy_card_deps
         "${HELPERS_DIR}/deploy_dashboard.sh" --target "${TARGET_ENV}" ${HOST_ARG:+"${HOST_ARG}"}
         ;;
 esac
