@@ -17,22 +17,31 @@ ha/ais/src/yaml/dashboard/
 
 ```mermaid
 graph LR
-    T[config.yaml.template] --> C[load_config]
-    CY[config.yaml] --> C
-    C --> B[build_dashboard]
-    H[header.yaml] --> B
+    H[header.yaml] --> B[build_dashboard]
     S[sections/01_ais_map.yaml] --> B
     B --> OUT[build/dashboard-ais.yaml]
 ```
 
-1. **`load_config()`** читает `config.yaml.template` (значения по умолчанию), затем переопределяет их значениями из `config.yaml`, если он существует (аналогично конвенции `ha/sailing-dash`).
-2. **`build_dashboard()`**:
-   - Загружает `header.yaml` (заголовок вида).
-   - Проходит по всем файлам `sections/*.yaml` в алфавитном порядке.
-   - Для карточки с `id: map` (тип `type: map`) подставляет `default_zoom` и стиль `card_mod` с фиксированной высотой (`height_px`, по умолчанию 480px) из `config.yaml`.
-   - Для карточки с `id: detail_list` (тип `type: custom:auto-entities`) подставляет во вложенную карточку `flex-table-card` список колонок, сгенерированный из `detail_fields` конфигурации (`build_columns()`).
-   - Поле `id` удаляется из итогового YAML (`card.pop("id", None)`) — это чисто служебная метка для build-скрипта, HA её не использует.
-   - Результат записывается в `build/dashboard-ais.yaml`.
+### Единственный источник правды — YAML-шаблоны
+
+`src/yaml/dashboard/header.yaml` и `src/yaml/dashboard/sections/*.yaml` — **единственный источник правды** для структуры и стилей: раскладка, геометрия оверлея, набор колонок таблицы, все стили `card_mod`/`css`.
+
+`helpers/build.py` делает ровно две вещи:
+
+1. подставляет явные плейсхолдеры `${AIS_*}`, объявленные самими шаблонами, значениями из `config.yaml` (дефолты — в `config.yaml.template`); неизвестный плейсхолдер — ошибка сборки, а не тихое игнорирование;
+2. склеивает `header.yaml` + `sections/*.yaml` (в алфавитном порядке) в `views[0].cards` и пишет `build/dashboard-ais.yaml` (одноразовый артефакт, руками не правится).
+
+Скрипт **не имеет права** ничего генерировать, дописывать или «нормализовать» внутри карточек. Ранняя версия генерировала целые `card_mod`-блоки и колонки таблицы из `config.yaml` и молча затирала содержимое шаблонов: любая ручная правка в `src/yaml/**` исчезала при следующем деплое (симптом — «отредактировал локально, задеплоил, а на stage старая карточка»). Возвращать эту логику нельзя.
+
+### Опции `config.yaml` и их плейсхолдеры
+
+| Ключ | Плейсхолдер | Назначение |
+|---|---|---|
+| `map.default_zoom` | `${AIS_MAP_ZOOM}` | начальный зум карты |
+| `map.height` | `${AIS_MAP_HEIGHT}` | высота карты (CSS-длина, по умолчанию `calc(100vh - 104px)`) |
+| `table.default_sort` | `${AIS_SORT_BY}` | сортировка таблицы по умолчанию (напр. `state+`) |
+| `table.visible_rows` × `row_height_px` | `${AIS_ROWS_SCROLL_PX}` | сколько строк видно в полной таблице до скролла |
+| `table.collapsed_visible_rows` × `row_height_px` | `${AIS_ROWS_SCROLL_COMPACT_PX}` | то же для компактного сайдбара |
 
 ### Важное архитектурное ограничение
 
@@ -59,21 +68,39 @@ graph LR
     VS --> C2[conditional on: full table]
 ```
 
-- В нормальном потоке лежит **только карта** (фиксированная высота `height_px`, по умолчанию 480px, полная ширина контента).
-- Список целей рендерится **оверлеем** поверх правой части карты. `card_mod` на внешнем `vertical-stack` делает контейнер `position: relative`, а 2-й и 3-й дочерние элементы — `position: absolute; top: 12px; right: 12px; z-index: 1` с `max-height: height_px - 24` и `overflow: auto` (стиль генерируется `overlay_style()` в `build.py`).
+- В нормальном потоке лежит **только карта** (высота ограничена вьюпортом, полная ширина контента).
+- Список целей рендерится **оверлеем** поверх правой части карты: каждая карточка оверлея позиционируется своим собственным `card_mod` (`:host { position: absolute; top/right; z-index }`), заданным прямо в шаблоне.
 - Два взаимоисключающих `conditional`-карточки по состоянию `input_boolean.ais_table_expanded`:
-  - **`off` (по умолчанию)** — компактный сайдбар шириной 300px: только `Vessel` и `Dist (km)`.
-  - **`on`** — полная таблица шириной `min(1100px, calc(100vw - 48px))` со всеми колонками.
+  - **`off` (по умолчанию)** — компактный сайдбар (ширина из `table.collapsed_width`): только `Vessel` и `Dist (km)`.
+  - **`on`** — полная таблица со всеми колонками, ширина из `table.width`.
+
+### Габариты оверлея: не шире и не выше окна
+
+Ширина обоих оверлеев задаётся **точно так же, как высота карты** — произвольной CSS-длиной в `config.yaml`:
+
+| Опция | Плейсхолдер | По умолчанию |
+| :--- | :--- | :--- |
+| `table.width` | `${AIS_TABLE_WIDTH}` | `calc(50vw - 48px)` |
+| `table.collapsed_width` | `${AIS_TABLE_COLLAPSED_WIDTH}` | `300px` |
+
+По высоте оверлеи по-прежнему растягиваются **сторонами** (`top: 84px; bottom: 12px`), а не явным `height`, и прижаты к правому краю (`right: 12px`); дополнительный `max-width: calc(100vw - 48px)` гарантирует, что любая заданная ширина не выйдет за 12px-отступы окна.
+
+Контейнер (`custom:mod-card` с `margin: 12px`) сам уже отступает от краёв окна, поэтому оверлей физически не может стать шире или выше окна и всегда сохраняет отступы. Явные `width: calc(100vw - 96px)` / `height: calc(100vh - 96px)` из прежней версии этого не гарантировали: они считались от вьюпорта, а не от контейнера, и при смещении `top: 84px` таблица выходила за нижнюю границу.
+
+### Автоматический горизонтальный скролл
+
+- На внутреннем `ha-card` оверлея задано `max-height: 100%; overflow: auto` — это и даёт скролл по обеим осям.
+- В `css` полной таблицы добавлено `"table+": " min-width: ${AIS_TABLE_MIN_WIDTH}px;"` (по умолчанию 1100, опция `table.min_width_px`). Без `min-width` таблица с `width: 100%` просто сжималась, а из-за `white-space: nowrap` содержимое ячеек обрезалось; теперь при нехватке ширины включается горизонтальный скролл.
+- Вертикальный скролл тела таблицы дополнительно ограничен вьюпортом: `max-height: min(${AIS_ROWS_SCROLL_PX}px, calc(100vh - 260px))`.
 - Переключатель разворачивания — карточка `entities` с самим `input_boolean.ais_table_expanded` в шапке оверлея (присутствует в обоих состояниях). Хелпер создаётся идемпотентно скриптом `helpers/provision_helpers.py` в `.storage/input_boolean` при `deploy.sh --install`.
 - **Важно про имя хелпера:** Home Assistant формирует `entity_id` из *отображаемого имени*, а не из `id`, поэтому имя обязано быть `AIS table expanded` → `input_boolean.ais_table_expanded`. Ранняя версия использовала имя `AIS Targets`, из-за чего создавался `input_boolean.ais_targets`, оба `conditional` никогда не срабатывали и **оверлей был полностью невидим**. Переименование само по себе не лечит уже зарегистрированный хелпер (его `entity_id` закреплён в `core.entity_registry`), поэтому `provision_helpers.py --entity-registry` удаляет неверную запись, и HA пересоздаёт её корректно при старте.
 - Свёрнутое состояние проверяется через `state_not: "on"` (а не `state: "off"`), чтобы сайдбар отображался и в момент, когда хелпер ещё недоступен.
-- **Отступы и высота.** Внешний `card_mod` добавляет `margin: 12px` (у `panel`-вида нет собственных отступов, без этого карта прилипала к краям окна), а высота карты ограничивается вьюпортом: `min(height_px, calc(100vh - 80px))` — фиксированная высота делала страницу выше окна и включала вертикальный скролл браузера. Стиль генерируется `map_height_css()`/`overlay_style()` в `build.py`.
+- **Отступы и высота.** Внешний `card_mod` добавляет `margin: 12px` (у `panel`-вида нет собственных отступов, без этого карта прилипала к краям окна), а высота карты ограничивается вьюпортом (`calc(100vh - 104px)`) — фиксированная высота делала страницу выше окна и включала вертикальный скролл браузера. Все эти значения заданы в шаблоне `01_ais_map.yaml`.
 
 ## Карточка карты (`type: map`)
 
 ```yaml
-- id: map
-  type: map
+- type: map
   entities:
     - entity: device_tracker.nevera
   geo_location_sources:
@@ -81,13 +108,15 @@ graph LR
   default_zoom: 12
   card_mod:
     style: |
-      ha-card { height: 480px; }
-      #map { height: 480px !important; }
+      :host { display: block; height: calc(100vh - 104px); }
+      ha-card { height: 100%; }
+      #root { padding-bottom: 0 !important; height: 100% !important; }
+      ha-map { height: 100% !important; }
 ```
 
 - **`entities: [device_tracker.nevera]`** — GPS-трекер собственной лодки (fallback, работает одновременно с AIS-целью собственного судна).
 - **`geo_location_sources: ['ais_targets']`** — все AIS-цели, включая собственное судно (единый `source`, см. `integration_spec.md`).
-- **`card_mod.style`** — фиксирует высоту карточки и внутреннего DOM-элемента `#map` (`height_px` из `config.yaml`).
+- **`card_mod.style`** — фиксирует высоту карточки и внутреннего DOM-элемента `ha-map` (значение задано в шаблоне).
 
 ## Таблица целей (`custom:flex-table-card`)
 
@@ -103,8 +132,7 @@ graph LR
 ### Конфигурация
 
 ```yaml
-- id: detail_list
-  type: custom:flex-table-card
+- type: custom:flex-table-card
   entities:
     include: geo_location.ais_*
   strict: true
@@ -116,28 +144,30 @@ graph LR
 - **`entities.include`** — маска по `entity_id`: новые/исчезающие цели подхватываются автоматически.
 - **`strict: true`** — скрывает строки с пустой ячейкой, то есть «призраков» — восстановленные (`restored`/`unavailable`) записи реестра без атрибутов, оставшиеся от прежних версий интеграции.
 - **`clickable: true`** — клик по строке открывает нативный more-info выбранной цели с мини-картой (центрирование на судне).
-- **`sort_by: state+`** — начальная сортировка по расстоянию (state сущности = дистанция в км); клик по любому заголовку меняет сортировку и она сохраняется до перезагрузки страницы.
+- **`sort_by: ${AIS_SORT_BY}`** — сортировка по умолчанию из `config.yaml` (штатно `state+` — по расстоянию, state сущности = дистанция в км); клик по заголовку меняет сортировку и она сохраняется до перезагрузки страницы.
+- **Скролл вместо обрезания.** Видно `table.visible_rows` строк, остальные доступны прокруткой: `css.tbody` делает тело таблицы собственным скролл-контейнером (`display: block; max-height; overflow-y: auto`), а `thead, tbody tr { display: table; table-layout: fixed }` сохраняет выравнивание колонок. Штатный `max_rows` карточки **не используется** — он обрезает лишние цели, а не скроллит их.
+- **Однострочные ячейки.** `css` дописывает (суффикс `+` — режим append к дефолтному стилю карточки) `white-space: nowrap` для `tr td`/`th`, чтобы длинные имена судов не переносились на вторую строку.
+- **Своя лодка** — обычная строка таблицы с тем же `geo_location.ais_<mmsi>`; отличается только иконкой ⛵ в начале имени (без подписи «Own Boat»), которую ставит интеграция при совпадении MMSI с `own_mmsi`.
 
-### Колонки таблицы (генерируются `build_columns()`)
+### Колонки таблицы (заданы в шаблоне)
 
-Итоговый набор = `name` + `state` + сконфигурированные `detail_fields` + всегда присутствующие навигационные колонки (`ALWAYS_TRAILING_FIELDS`), без дублей. `data` — **плоский** ключ (не путь `attributes.x`): карточка резолвит `name`/`state`/... специальным образом, затем как член сущности, затем как `entity.attributes[key]`.
+Список колонок целиком лежит в `sections/01_ais_map.yaml` — добавление/удаление/переупорядочивание колонок делается там. `data` — **плоский** ключ (не путь `attributes.x`): карточка резолвит `name`/`state`/... специальным образом, затем как член сущности, затем как `entity.attributes[key]`.
 
-| Колонка | Источник | `data` |
-|---|---|---|
-| Vessel | всегда | `name` |
-| Dist (km) | всегда | `state` |
-| MMSI | `detail_fields` | `mmsi` |
-| Name | `detail_fields` | `vessel_name` |
-| Callsign | `detail_fields` | `callsign` |
-| Type | `detail_fields` | `ship_type` |
-| Length (m) | `detail_fields` | `length` |
-| Beam (m) | `detail_fields` | `beam` |
-| Destination | `detail_fields` | `destination` |
-| SOG (kn) | всегда | `sog` |
-| COG (°) | всегда | `cog` |
-| Heading (°) | всегда | `heading` |
-| Nav Status | всегда | `nav_status` |
-| Updated | всегда | `last_seen` — **локальное** время `HH:MM:SS` (машиночитаемый UTC ISO остаётся в `last_seen_iso`) |
+| Колонка | `data` |
+|---|---|
+| Vessel | `name` |
+| Dist (km) | `state` |
+| MMSI | `mmsi` |
+| Callsign | `callsign` |
+| Type | `ship_type` |
+| Length (m) | `length` |
+| Beam (m) | `beam` |
+| Destination | `destination` |
+| SOG (kn) | `sog` |
+| COG (°) | `cog` |
+| Heading (°) | `heading` |
+| Nav Status | `nav_status` |
+| Updated | `last_seen` — **локальное** время `HH:MM:SS` (машиночитаемый UTC ISO остаётся в `last_seen_iso`) |
 
 ## Зависимости Lovelace-карточек
 
@@ -163,9 +193,9 @@ graph LR
 
 - Внешний контейнер — `custom:mod-card` (карточка идёт в составе `card-mod.js`): она рендерит собственный настоящий `<ha-card>` вокруг любой вложенной карточки, поэтому `card_mod` к ней применяется гарантированно. На нём заданы `position: relative` (offset-родитель оверлея) и `margin: 12px` (внешние отступы).
 - Внутри — обычный `vertical-stack` без какого-либо `card_mod`.
-- Карта остаётся в нормальном потоке и задаёт высоту контейнера (`min(height_px, calc(100vh - 80px))`).
-- Тумблер (`overlay_toggle`) и обе таблицы (`detail_list_compact`, `detail_list`) позиционируются `position: absolute` **своим собственным** `card_mod` — это реальные `ha-card`, к которым card-mod применяется штатно. Никакой зависимости от порядка детей (`nth-child`) внутри shadow root стека больше нет, поэтому раскладка не «съезжает» при перерисовке набора целей.
-- Геометрия генерируется функциями `overlay_container_style()`, `overlay_toggle_style()`, `overlay_table_style()` в `helpers/build.py`.
+- Карта остаётся в нормальном потоке и задаёт высоту контейнера (`calc(100vh - 104px)`).
+- Тумблер и обе таблицы позиционируются `position: absolute` **своим собственным** `card_mod` — это реальные `ha-card`, к которым card-mod применяется штатно. Никакой зависимости от порядка детей (`nth-child`) внутри shadow root стека больше нет, поэтому раскладка не «съезжает» при перерисовке набора целей.
+- Вся геометрия задана инлайн в шаблоне `01_ais_map.yaml`.
 
 ### Почему оверлеи позиционируются через `:host`, а не через `ha-card`
 
@@ -178,7 +208,7 @@ card-mod внедряет свой `<style>` **в shadow root самой кар�
 
 Дополнительно:
 - переключатель — карточка `tile` (компактная строка с нативным тумблером) вместо громоздкой `entities`;
-- высота карты — `min(height_px, calc(100vh - 104px))`: 56px верхней панели + строка табов + оба отступа по 12px, с небольшим запасом (пары лишних пикселей достаточно, чтобы скролл вернулся);
+- высота карты — `calc(100vh - 104px)`: 56px верхней панели + строка табов + оба отступа по 12px, с небольшим запасом (пары лишних пикселей достаточно, чтобы скролл вернулся);
 - на контейнере `custom:mod-card` добавлен `overflow: hidden`, чтобы оверлей не мог вылезти за пределы карточки.
 
 ### Чому карта була гігантською і сторінка скролилась
@@ -187,7 +217,7 @@ card-mod внедряет свой `<style>` **в shadow root самой кар�
 
 Робочий стиль карти:
 ```
-:host { display: block; height: min(480px, calc(100vh - 104px)); }
+:host { display: block; height: calc(100vh - 104px); }
 ha-card { height: 100%; }
 #root { padding-bottom: 0 !important; height: 100% !important; }
 ha-map { height: 100% !important; }

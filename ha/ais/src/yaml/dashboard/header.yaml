@@ -7,6 +7,9 @@ views:
     # user reported as still not full width even with `grid_options: full`).
     # It only ever shows ONE top-level card, so everything (heading, map,
     # table) is wrapped in a single vertical-stack card below. The map's
-    # height stays fixed via card_mod (see 01_ais_map.yaml / build.py) so the
-    # panel's edge-to-edge width doesn't also mean edge-to-edge height.
+    # height stays fixed via card_mod (see 01_ais_map.yaml) so the panel's
+    # edge-to-edge width doesn't also mean edge-to-edge height.
+    #
+    # This file and sections/*.yaml are the SINGLE SOURCE OF TRUTH; build.py
+    # only concatenates them into build/dashboard-ais.yaml.
     cards:

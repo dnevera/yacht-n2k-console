@@ -28,7 +28,12 @@ from homeassistant.util.location import distance
 
 from .ais_bus import AisBusClient, AisTargetReading
 from .const import (
+    CONF_OWN_BEAM,
+    CONF_OWN_CALLSIGN,
+    CONF_OWN_LENGTH,
     CONF_OWN_MMSI,
+    CONF_OWN_NAME,
+    CONF_OWN_SHIP_TYPE,
     CONF_STALE_TIMEOUT,
     CONF_UPDATE_INTERVAL,
     DEFAULT_OWN_MMSI,
@@ -40,7 +45,11 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_OWN_BOAT_NAME = "⛵ Bumblebee (Own Boat)"
+# Our own boat stays an ordinary target row: same entity_id scheme, same
+# source, same columns. It is marked ONLY by this icon prefix on the name (no
+# "Own Boat" caption), and only when the decoded MMSI equals the `own_mmsi`
+# configured on the integration.
+_OWN_BOAT_ICON = "⛵"
 
 
 class AisTarget(GeolocationEvent):
@@ -59,9 +68,19 @@ class AisTarget(GeolocationEvent):
 
     _attr_should_poll = False
 
-    def __init__(self, reading: AisTargetReading, is_own_ship: bool) -> None:
+    def __init__(
+        self,
+        reading: AisTargetReading,
+        is_own_ship: bool,
+        own_static: dict[str, Any] | None = None,
+    ) -> None:
         self._reading = reading
         self._is_own_ship = is_own_ship
+        # Static identity of OUR boat, straight from the config entry. Our own
+        # transceiver never puts its own msg24/static data on the N2K bus
+        # (verified on the live bus), so without this fallback our row would
+        # stay "AIS <mmsi>" with empty name/callsign/type/size columns.
+        self._own_static = own_static or {}
         # Deliberately NO unique_id: these are purely transient in-memory
         # entities (like HA core's adsb/opensky geo_location events), so they
         # never create entity_registry rows — the whole point of this
@@ -71,13 +90,22 @@ class AisTarget(GeolocationEvent):
         self.entity_id = f"geo_location.ais_{reading.mmsi}"
         self._apply(reading)
 
+    def _static(self, attr: str) -> Any:
+        """Field value, falling back to the configured own-boat identity.
+
+        The bus always wins; the configured value only fills a gap, and only
+        for our own boat.
+        """
+        value = getattr(self._reading, attr, None)
+        if value is None and self._is_own_ship:
+            return self._own_static.get(attr)
+        return value
+
     def _apply(self, reading: AisTargetReading) -> None:
         self._reading = reading
         self._attr_source = GEO_LOCATION_SOURCE
-        if self._is_own_ship:
-            self._attr_name = reading.vessel_name or _OWN_BOAT_NAME
-        else:
-            self._attr_name = reading.vessel_name or f"AIS {reading.mmsi}"
+        name = self._static("vessel_name") or f"AIS {reading.mmsi}"
+        self._attr_name = f"{_OWN_BOAT_ICON} {name}" if self._is_own_ship else name
         self._attr_latitude = reading.latitude
         self._attr_longitude = reading.longitude
         # A GeolocationEvent's state IS its distance, so leaving it unset
@@ -99,10 +127,14 @@ class AisTarget(GeolocationEvent):
         )
 
     def update_from_reading(
-        self, reading: AisTargetReading, is_own_ship: bool
+        self,
+        reading: AisTargetReading,
+        is_own_ship: bool,
+        own_static: dict[str, Any] | None = None,
     ) -> None:
         """Refresh this entity in place from a newer reading."""
         self._is_own_ship = is_own_ship
+        self._own_static = own_static or {}
         self._apply(reading)
         self.async_write_ha_state()
 
@@ -137,11 +169,13 @@ class AisTarget(GeolocationEvent):
             "heading": disp(r.heading),
             "nav_status": disp(r.nav_status),
             "rate_of_turn": disp(r.rate_of_turn),
-            "vessel_name": disp(r.vessel_name),
-            "callsign": disp(r.callsign),
-            "ship_type": disp(r.ship_type),
-            "length": disp(r.length),
-            "beam": disp(r.beam),
+            # Identity fields fall back to the configured own-boat values (for
+            # our MMSI only) when the bus has not delivered static data.
+            "vessel_name": disp(self._static("vessel_name")),
+            "callsign": disp(self._static("callsign")),
+            "ship_type": disp(self._static("ship_type")),
+            "length": disp(self._static("length")),
+            "beam": disp(self._static("beam")),
             "destination": disp(r.destination),
             "eta": disp(r.eta),
             "is_own_ship": self._is_own_ship,
@@ -207,6 +241,38 @@ class AisTargetsManager:
         except (TypeError, ValueError):
             return None
 
+    @property
+    def own_static(self) -> dict[str, Any]:
+        """Configured static identity of our own boat (blank keys dropped).
+
+        Our transceiver broadcasts our position but not our own msg24/static
+        data, so these config-entry values are the only source for the name /
+        callsign / type / size of our own row.
+        """
+        opts = self._options
+
+        def text(key: str) -> str | None:
+            value = str(opts.get(key, "") or "").strip()
+            return value or None
+
+        def number(key: str) -> float | None:
+            value = text(key)
+            if value is None:
+                return None
+            try:
+                return float(value)
+            except ValueError:
+                return None
+
+        static = {
+            "vessel_name": text(CONF_OWN_NAME),
+            "callsign": text(CONF_OWN_CALLSIGN),
+            "ship_type": text(CONF_OWN_SHIP_TYPE),
+            "length": number(CONF_OWN_LENGTH),
+            "beam": number(CONF_OWN_BEAM),
+        }
+        return {k: v for k, v in static.items() if v is not None}
+
     def async_start(self) -> None:
         """Start the periodic refresh and run one immediately."""
         self._unsub_interval = async_track_time_interval(
@@ -239,6 +305,7 @@ class AisTargetsManager:
         now = dt_util.utcnow()
         stale_before = now - self.stale_timeout
         own_mmsi = self.own_mmsi
+        own_static = self.own_static
 
         seen: set[int] = set()
         for mmsi, reading in snapshot.items():
@@ -275,7 +342,7 @@ class AisTargetsManager:
             is_own = own_mmsi is not None and mmsi == own_mmsi
             existing = self._entities.get(mmsi)
             if existing is not None:
-                existing.update_from_reading(reading, is_own)
+                existing.update_from_reading(reading, is_own, own_static)
                 continue
             if self.hass.states.get(f"geo_location.ais_{mmsi}") is not None:
                 # A leftover state object from a previous incarnation of this
@@ -285,7 +352,7 @@ class AisTargetsManager:
                 # pick the target up on the next tick.
                 self.hass.states.async_remove(f"geo_location.ais_{mmsi}")
                 continue
-            entity = AisTarget(reading, is_own)
+            entity = AisTarget(reading, is_own, own_static)
             self._entities[mmsi] = entity
             new_entities.append(entity)
 

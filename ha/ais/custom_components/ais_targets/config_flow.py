@@ -17,12 +17,22 @@ from homeassistant.core import callback
 from .const import (
     CONF_GW_HOST,
     CONF_GW_PORT,
+    CONF_OWN_BEAM,
+    CONF_OWN_CALLSIGN,
+    CONF_OWN_LENGTH,
     CONF_OWN_MMSI,
+    CONF_OWN_NAME,
+    CONF_OWN_SHIP_TYPE,
     CONF_STALE_TIMEOUT,
     CONF_UPDATE_INTERVAL,
     DEFAULT_GW_HOST,
     DEFAULT_GW_PORT,
+    DEFAULT_OWN_BEAM,
+    DEFAULT_OWN_CALLSIGN,
+    DEFAULT_OWN_LENGTH,
     DEFAULT_OWN_MMSI,
+    DEFAULT_OWN_NAME,
+    DEFAULT_OWN_SHIP_TYPE,
     DEFAULT_STALE_TIMEOUT,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
@@ -47,6 +57,30 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_OWN_MMSI,
                 default=defaults.get(CONF_OWN_MMSI, DEFAULT_OWN_MMSI),
+            ): str,
+            # Own-boat static identity. Our transceiver puts our position on
+            # the bus but not our own msg24/static data, so without these the
+            # own row shows as "AIS <mmsi>" with empty identity columns. Used
+            # ONLY as a fallback for the `own_mmsi` target.
+            vol.Optional(
+                CONF_OWN_NAME,
+                default=defaults.get(CONF_OWN_NAME, DEFAULT_OWN_NAME),
+            ): str,
+            vol.Optional(
+                CONF_OWN_CALLSIGN,
+                default=defaults.get(CONF_OWN_CALLSIGN, DEFAULT_OWN_CALLSIGN),
+            ): str,
+            vol.Optional(
+                CONF_OWN_SHIP_TYPE,
+                default=defaults.get(CONF_OWN_SHIP_TYPE, DEFAULT_OWN_SHIP_TYPE),
+            ): str,
+            vol.Optional(
+                CONF_OWN_LENGTH,
+                default=defaults.get(CONF_OWN_LENGTH, DEFAULT_OWN_LENGTH),
+            ): str,
+            vol.Optional(
+                CONF_OWN_BEAM,
+                default=defaults.get(CONF_OWN_BEAM, DEFAULT_OWN_BEAM),
             ): str,
             vol.Optional(
                 CONF_UPDATE_INTERVAL,

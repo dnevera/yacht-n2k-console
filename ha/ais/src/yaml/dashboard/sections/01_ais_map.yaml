@@ -1,29 +1,31 @@
 # The SINGLE top-level card of the `panel` view (see header.yaml).
 #
+# THIS FILE IS THE SINGLE SOURCE OF TRUTH for the whole AIS view: layout,
+# card_mod styles and the table's columns are edited HERE. helpers/build.py only
+# substitutes the explicit `${AIS_*}` placeholders below (values come from
+# config.yaml / config.yaml.template) and concatenates the section files — it
+# never rewrites anything inside a card.
+#
 # WHY custom:mod-card WRAPS EVERYTHING (do not "simplify" this away):
 # card-mod does NOT support stack cards at all — it only hooks `ha-card` /
 # `hui-card` / `hui-entities-card` / ... (grep card-mod.js: it has no notion of
 # hui-*-stack-card). So an earlier revision that put `card_mod` directly on the
 # outer `vertical-stack` was silently ignored: no outer margin, and the overlay
-# positioning (`#root > *:nth-child(2)`) never applied — the target list simply
-# stacked BELOW the map, which is exactly what was reported.
+# positioning never applied — the target list simply stacked BELOW the map.
 #
 # `custom:mod-card` (shipped inside card-mod.js) renders a real `<ha-card>` of
 # its own around any card, so `card_mod` reliably applies to it. That ha-card is
-# the `position: relative` container; each overlay card then positions itself
-# absolutely via its OWN card_mod (real ha-cards → card-mod definitely applies),
-# so nothing depends on child indexes inside a stack's shadow root.
+# the `position: relative` container; each overlay block then positions itself
+# absolutely via its OWN card_mod, so nothing depends on child indexes inside a
+# stack's shadow root.
 - type: custom:mod-card
   card_mod:
     style: |
       ha-card { position: relative; margin: 12px; overflow: hidden; }
   card:
     type: vertical-stack
-    # helpers/build.py rewrites the map's zoom/height, the overlay geometry and
-    # the full table's columns.
     cards:
-      - id: map
-        type: map
+      - type: map
         # Own boat (GPS pin) + every live AIS target. The targets come from the
         # `ais_targets` custom integration's geo_location source (it reads the
         # gateway directly — the nmea2000 HA integration is NOT involved in AIS).
@@ -31,7 +33,7 @@
           - entity: device_tracker.nevera
         geo_location_sources:
           - ais_targets
-        default_zoom: 12
+        default_zoom: ${AIS_MAP_ZOOM}
         card_mod:
           # hui-map-card sets an INLINE `#root { padding-bottom: 100% }` when it
           # is not a direct panel/grid child (ours is inside a stack), i.e. the
@@ -40,7 +42,7 @@
           style: |
             :host {
               display: block;
-              height: min(480px, calc(100vh - 104px));
+              height: ${AIS_MAP_HEIGHT};
             }
             ha-card { height: 100%; }
             #root {
@@ -53,8 +55,7 @@
       # A `tile` card, not `entities`: entities always renders a full card with
       # header padding (bulky, and it was the card that looked stretched), while
       # tile is a single compact row with a native toggle.
-      - id: overlay_toggle
-        type: tile
+      - type: tile
         entity: input_boolean.ais_table_expanded
         name: AIS Targets
         icon: mdi:table-eye
@@ -86,13 +87,16 @@
             entity: input_boolean.ais_table_expanded
             state_not: "on"
         card:
-          id: detail_list_compact
           type: custom:flex-table-card
           # flex-table-card resolves the entity set itself (no auto-entities
-          # wrapper): auto-entities re-called setConfig() on every change of
-          # the vessel set, which rebuilt the table and RESET the column the
-          # user had clicked to sort by. Doing the wildcard include natively
-          # means setConfig() runs once, so the sort order sticks.
+          # wrapper): auto-entities re-called setConfig() on every change of the
+          # vessel set, which rebuilt the table and RESET the column the user
+          # had clicked to sort by. Doing the wildcard include natively means
+          # setConfig() runs once, so the sort order sticks.
+          #
+          # Our own boat is an ordinary row here — the integration prefixes its
+          # name with ⛵ when the decoded MMSI matches the integration's
+          # `own_mmsi` option (the single source of truth for that).
           entities:
             include: geo_location.ais_*
           # `strict` drops any row with a missing cell — which is exactly the
@@ -100,27 +104,47 @@
           # entity registry by older versions of the integration.
           strict: true
           clickable: true
-          sort_by: state+
+          sort_by: ${AIS_SORT_BY}
+          card_mod:
+            # Width comes from config (`table.collapsed_width`), exactly like
+            # the map's height — any CSS length works, e.g. `calc(30vw - 50px)`.
+            # top+bottom (not a bare height): the overlay can never grow past
+            # the map container, which is itself inset 12px from the window —
+            # so the card is always inside the viewport, margins included.
+            style: |
+              :host {
+                position: absolute;
+                top: 84px;
+                right: 12px;
+                bottom: 12px;
+                z-index: 2;
+                width: ${AIS_TABLE_COLLAPSED_WIDTH};
+                max-width: calc(100vw - 48px);
+              }
+              ha-card {
+                max-height: 100%;
+                overflow: auto;
+              }
+          css:
+            # N rows visible, the rest scrollable: the tbody becomes its own
+            # scroll container. `max_rows` is NOT used on purpose — it
+            # truncates the extra targets instead of scrolling them. thead/tr
+            # need `display: table` so the columns stay aligned once tbody is
+            # no longer a table-row-group. The min() also caps it to the
+            # viewport, so a large row count can't overflow the window.
+            tbody: "display: block; max-height: min(${AIS_ROWS_SCROLL_COMPACT_PX}px, calc(100vh - 260px)); overflow-y: auto;"
+            "thead, tbody tr": "display: table; width: 100%; table-layout: fixed;"
+            # Every cell stays on ONE line (long vessel names/destinations
+            # used to wrap and make rows two lines tall); the "+" suffix
+            # APPENDS to the card's own default rule instead of replacing it.
+            "tr td+": " white-space: nowrap; text-overflow: ellipsis;"
+            "th+": " white-space: nowrap;"
           columns:
             - name: Vessel
               data: name
             - name: Dist (km)
               data: state
               align: right
-          card_mod:
-            style: |
-              :host {
-                position: absolute;
-                top: 84px;
-                right: 12px;
-                z-index: 2;
-                width: 300px;
-                max-height: calc(min(480px, calc(100vh - 104px)) - 96px);
-              }
-              ha-card {
-                max-height: 100%;
-                overflow: auto;
-              }
 
       # ── Expanded overlay: the full table ─────────────────────────────────
       - type: conditional
@@ -129,16 +153,50 @@
             entity: input_boolean.ais_table_expanded
             state: "on"
         card:
-          id: detail_list
           type: custom:flex-table-card
-          # Columns are regenerated from config.yaml's `detail_fields` by
-          # helpers/build.py; the list below is only the as-shipped default
-          # so this file stays valid on its own.
+          # `data` is a FLAT key, not a JS path: the card resolves
+          # `name`/`state`/... specially, then a direct member of the row
+          # entity, then entity.attributes[key]. `attributes.mmsi` never
+          # resolves (renders `undefined`), and a comma inside `data` means
+          # "multi source" (which produced `undefinedundefined`).
           entities:
             include: geo_location.ais_*
           strict: true
           clickable: true
-          sort_by: state+
+          sort_by: ${AIS_SORT_BY}
+          card_mod:
+            # Width comes from config (`table.width`), exactly like the map's
+            # height — any CSS length works, e.g. `calc(60vw - 50px)`; the
+            # `max-width` still guarantees it never leaves the 12px gutters.
+            # bottom (not an explicit height) keeps it inside the window too.
+            # `overflow: auto` on the inner ha-card gives the AUTOMATIC
+            # HORIZONTAL SCROLL for the wide table.
+            style: |
+              :host {
+                position: absolute;
+                top: 84px;
+                right: 12px;
+                bottom: 12px;
+                z-index: 2;
+                width: ${AIS_TABLE_WIDTH};
+                max-width: calc(100vw - 48px);
+              }
+              ha-card {
+                max-height: 100%;
+                overflow: auto;
+              }
+          css:
+            tbody: "display: block; max-height: min(${AIS_ROWS_SCROLL_PX}px, calc(100vh - 260px)); overflow-y: auto;"
+            "thead, tbody tr": "display: table; width: 100%; table-layout: fixed;"
+            # All 13 columns need room: below this width the table stops
+            # squeezing and the ha-card scrolls horizontally instead (cells
+            # are nowrap, so squeezing would just clip the text).
+            "table+": " min-width: ${AIS_TABLE_MIN_WIDTH}px;"
+            # Every cell stays on ONE line (long vessel names/destinations
+            # used to wrap and make rows two lines tall); the "+" suffix
+            # APPENDS to the card's own default rule instead of replacing it.
+            "tr td+": " white-space: nowrap; text-overflow: ellipsis;"
+            "th+": " white-space: nowrap;"
           columns:
             - name: Vessel
               data: name
@@ -167,17 +225,3 @@
               data: nav_status
             - name: Updated
               data: last_seen
-          card_mod:
-            style: |
-              :host {
-                position: absolute;
-                top: 84px;
-                right: 12px;
-                z-index: 2;
-                width: min(1100px, calc(100vw - 96px));
-                max-height: calc(min(480px, calc(100vh - 104px)) - 96px);
-              }
-              ha-card {
-                max-height: 100%;
-                overflow: auto;
-              }

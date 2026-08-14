@@ -23,6 +23,18 @@ DOMAIN = "ais_targets"
 CONF_GW_HOST = "gw_host"
 CONF_GW_PORT = "gw_port"
 CONF_OWN_MMSI = "own_mmsi"
+# Static identity of OUR boat. Our own transceiver broadcasts its position
+# (129039) onto the N2K bus but — verified on the live bus — never its own
+# msg24/static data, so our row would otherwise stay "AIS <mmsi>" with empty
+# name/callsign/type/size columns forever. These options are the single source
+# of truth for those fields and are used ONLY as a fallback, i.e. only for the
+# target matching `own_mmsi` and only while the bus has not delivered the real
+# static data for it.
+CONF_OWN_NAME = "own_name"
+CONF_OWN_CALLSIGN = "own_callsign"
+CONF_OWN_SHIP_TYPE = "own_ship_type"
+CONF_OWN_LENGTH = "own_length"
+CONF_OWN_BEAM = "own_beam"
 CONF_UPDATE_INTERVAL = "update_interval"
 CONF_STALE_TIMEOUT = "stale_timeout"
 
@@ -36,6 +48,12 @@ DEFAULT_GW_PORT = 4001
 # own boat (named "Bumblebee") and reported under a distinct geo_location
 # `source` so it never gets plotted twice next to device_tracker.nevera.
 DEFAULT_OWN_MMSI = ""
+# Own-boat static fallbacks, all optional (blank = leave the field unknown).
+DEFAULT_OWN_NAME = ""
+DEFAULT_OWN_CALLSIGN = ""
+DEFAULT_OWN_SHIP_TYPE = ""
+DEFAULT_OWN_LENGTH = ""
+DEFAULT_OWN_BEAM = ""
 # Seconds between refreshes of the geo_location entities from the in-memory
 # target table (the socket read itself is continuous/push-driven).
 DEFAULT_UPDATE_INTERVAL = 5

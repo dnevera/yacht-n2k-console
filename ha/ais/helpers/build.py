@@ -2,24 +2,33 @@
 """
 AIS Dashboard Build Script.
 
-Compiles src/yaml/dashboard/** (plus config.yaml/config.yaml.template
-toggles) into build/dashboard-ais.yaml — a much smaller equivalent of
-ha/sailing-dash/helpers/build.py, following the same load_config() /
-section-merge conventions so the two packages stay easy to read side by
-side.
+Assembles src/yaml/dashboard/header.yaml + src/yaml/dashboard/sections/*.yaml
+into build/dashboard-ais.yaml.
 
-The detail list is a `custom:auto-entities` card wrapping a
-`custom:flex-table-card`: auto-entities discovers the changing set of
-`geo_location.ais_*` entities at runtime, flex-table-card renders them as a
-full multi-column, clickable table. This script injects the table columns
-from config.yaml's `detail_fields`, and the map's zoom/height from config.yaml.
+SINGLE SOURCE OF TRUTH = THE TEMPLATES.
+The templates own the dashboard's structure and styling completely. This script
+does exactly two things:
 
-NOTE: `own_mmsi` lives ONLY in the ais_targets integration's config entry
-(the single source of truth) — it is deliberately NOT read here, so the two
-never drift out of sync.
+  1. substitutes the explicit `${AIS_*}` placeholders the templates declare,
+     using values from config.yaml (config.yaml.template holds the defaults);
+  2. concatenates the section files into the view's `cards` list.
+
+It must NEVER rewrite, inject or "normalise" anything inside a card. An earlier
+revision generated whole card_mod blocks and the table's `columns` list from
+config.yaml and silently overwrote whatever was in the templates, so hand edits
+to src/yaml/** disappeared on the next deploy ("edited locally, deployed, still
+the old card on stage"). Do not reintroduce that: to change the look, edit the
+template; to make something configurable, add a placeholder to the template AND
+a key here.
+
+NOTE: runtime settings (gateway host/port, `own_mmsi`, update/stale intervals)
+live ONLY in the ais_targets integration's config entry, not here.
 """
 
 import os
+import re
+import string
+import sys
 
 import yaml
 
@@ -32,48 +41,12 @@ BUILD_DIR = os.path.join(ROOT_DIR, "build")
 DEFAULT_CONFIG_PATH = os.path.join(ROOT_DIR, "config.yaml")
 DEFAULT_TEMPLATE_PATH = os.path.join(ROOT_DIR, "config.yaml.template")
 
-# Human-readable label for each attribute the ais_targets integration exposes
-# (see custom_components/ais_targets/geo_location.py) — used as flex-table-card
-# column headers. `data` is the plain geo_location attribute key (flat, NOT `attributes.x`).
-FIELD_LABELS = {
-    "friendly_name": "Vessel",
-    "mmsi": "MMSI",
-    "vessel_name": "Name",
-    "callsign": "Callsign",
-    "ship_type": "Type",
-    "length": "Length (m)",
-    "beam": "Beam (m)",
-    "name": "Vessel",
-    "state": "Dist (km)",
-    "destination": "Destination",
-    "eta": "ETA",
-    "sog": "SOG (kn)",
-    "cog": "COG (°)",
-    "heading": "Heading (°)",
-    "nav_status": "Nav Status",
-    "rate_of_turn": "Rate of Turn",
-    "last_seen": "Updated",
-}
-# Right-aligned numeric columns (purely cosmetic).
-RIGHT_ALIGNED_FIELDS = {"state", "length", "beam", "sog", "cog", "heading"}
-DEFAULT_DETAIL_FIELDS = [
-    "mmsi",
-    "vessel_name",
-    "callsign",
-    "ship_type",
-    "length",
-    "beam",
-    "destination",
-]
-# Always appended (in this order) after the configured identity/voyage columns
-# — exactly the live nav attributes every target exposes, so the table never
-# silently drops them regardless of `detail_fields`.
-ALWAYS_TRAILING_FIELDS = ["sog", "cog", "heading", "nav_status", "last_seen"]
+PLACEHOLDER_RE = re.compile(r"\$\{([A-Za-z0-9_]+)\}")
 
 
 def load_config(config_path=None, template_path=None):
-    """Load configuration from config.yaml, merging missing keys from
-    config.yaml.template — same fallback convention as ha/sailing-dash."""
+    """Load config.yaml.template (defaults), then overlay config.yaml — the
+    same fallback convention as ha/sailing-dash."""
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
     if template_path is None:
@@ -87,224 +60,92 @@ def load_config(config_path=None, template_path=None):
     if os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             override = yaml.safe_load(f) or {}
-        if isinstance(override, dict):
-            if isinstance(override.get("map"), dict):
-                config.setdefault("map", {}).update(override["map"])
-            if "target_stale_timeout_minutes" in override:
-                config["target_stale_timeout_minutes"] = override[
-                    "target_stale_timeout_minutes"
-                ]
-            if isinstance(override.get("detail_fields"), list):
-                config["detail_fields"] = override["detail_fields"]
+        for key, value in (override or {}).items():
+            if isinstance(value, dict) and isinstance(config.get(key), dict):
+                config[key].update(value)
+            else:
+                config[key] = value
 
     return config
 
 
-def build_columns(detail_fields):
-    """Return the flex-table-card `columns` list: a 'Vessel' name column, then
-    every configured `detail_fields` entry, then the always-on nav columns —
-    de-duplicated while preserving order.
+def build_placeholders(config):
+    """Map every `${AIS_*}` placeholder the templates may use to its value.
 
-    IMPORTANT: flex-table-card's `data` is a FLAT key, not a JS path — it
-    resolves `name`/`object_id`/`state`/... specially, then a direct member of
-    the row entity, then falls back to `entity.attributes[key]` (see
-    flex-table-card.js `col_type == "auto"`). A nested path like
-    `attributes.mmsi` therefore never resolves and renders as `undefined`;
-    worse, a comma inside `data` means "multi source", so a two-field column
-    rendered as `undefinedundefined`. Hence: plain attribute keys, and the
-    special `name` key for the vessel column."""
-    ordered = ["name", "state"]
-    for field in list(detail_fields) + ALWAYS_TRAILING_FIELDS:
-        if field not in ordered:
-            ordered.append(field)
-    columns = []
-    for field in ordered:
-        col = {"name": FIELD_LABELS.get(field, field), "data": field}
-        if field in RIGHT_ALIGNED_FIELDS:
-            col["align"] = "right"
-        columns.append(col)
-    return columns
+    Keep this list tiny and explicit: a placeholder is a deliberate contract
+    between config.yaml and a template, not a generic templating engine."""
+    map_cfg = config.get("map") or {}
+    tbl_cfg = config.get("table") or {}
+
+    row_height = int(tbl_cfg.get("row_height_px", 34))
+    visible_rows = int(tbl_cfg.get("visible_rows", 10))
+    collapsed_rows = int(tbl_cfg.get("collapsed_visible_rows", 8))
+
+    return {
+        "AIS_MAP_ZOOM": str(int(map_cfg.get("default_zoom", 12))),
+        "AIS_MAP_HEIGHT": str(map_cfg.get("height", "calc(100vh - 104px)")),
+        "AIS_SORT_BY": str(tbl_cfg.get("default_sort", "state+")),
+        # The table body is its own scroll container: N rows visible, the rest
+        # reachable by scrolling (flex-table-card's `max_rows` would truncate).
+        # Below this width the wide table stops squeezing and scrolls
+        # horizontally instead of clipping its (nowrap) cells.
+        "AIS_TABLE_MIN_WIDTH": str(int(tbl_cfg.get("min_width_px", 1100))),
+        # Overlay widths are plain CSS lengths, set exactly like the map's
+        # height (e.g. `calc(60vw - 50px)`), not px numbers.
+        "AIS_TABLE_WIDTH": str(tbl_cfg.get("width", "calc(100vw - 48px)")),
+        "AIS_TABLE_COLLAPSED_WIDTH": str(tbl_cfg.get("collapsed_width", "300px")),
+        "AIS_ROWS_SCROLL_PX": str(visible_rows * row_height),
+        "AIS_ROWS_SCROLL_COMPACT_PX": str(collapsed_rows * row_height),
+    }
+
+
+def render(text, placeholders, source):
+    """Substitute `${AIS_*}` placeholders, failing loudly on an unknown one."""
+    unknown = {
+        name for name in PLACEHOLDER_RE.findall(text) if name not in placeholders
+    }
+    if unknown:
+        raise SystemExit(
+            f"{source}: unknown placeholder(s) {sorted(unknown)} — add them to "
+            "build_placeholders() (and document them in config.yaml.template)."
+        )
+    return string.Template(text).safe_substitute(placeholders)
 
 
 def ensure_dirs():
     os.makedirs(BUILD_DIR, exist_ok=True)
 
 
-# Outer gutter of the whole dashboard card, in px. A `panel` view has no
-# padding of its own, so without this the map sits flush against the window
-# edges; it also reserves the space the viewport-capped map height subtracts.
-GUTTER_PX = 12
-
-
-def map_height_css(height_px):
-    """Map height, capped to the viewport so the page never scrolls.
-
-    A plain fixed height made the panel view taller than the window (map +
-    gutters > 100vh) and turned on the browser's vertical scrollbar; `min()`
-    keeps the configured height as an upper bound while shrinking on short
-    screens. 56px is HA's top bar, plus the top/bottom gutters."""
-    # 56px top bar + optional view-tabs row + both gutters, with a little
-    # slack: being a few px too tall is exactly what re-enables the scrollbar.
-    reserved = 56 + 24 + 2 * GUTTER_PX
-    return f"min({height_px}px, calc(100vh - {reserved}px))"
-
-
-def map_style(height_px):
-    """card_mod style forcing a fixed map height.
-
-    THE bug behind "the map is huge and the page scrolls": hui-map-card's
-    _computePadding() sets an INLINE `#root { padding-bottom: 100% }` whenever
-    the card is not a direct panel/grid child (ours lives inside a stack), which
-    makes the map SQUARE — on an edge-to-edge panel that is ~viewport-width tall.
-    Also, the map element is `ha-map`, not `#map`, so the previous `#map` rule
-    never matched anything. Both are fixed here: `:host` gives the card element a
-    real height and the inline padding is overridden back to 0."""
-    height = map_height_css(height_px)
-    return (
-        ":host {\n"
-        "  display: block;\n"
-        f"  height: {height};\n"
-        "}\n"
-        "ha-card { height: 100%; }\n"
-        "#root {\n"
-        "  padding-bottom: 0 !important;\n"
-        "  height: 100% !important;\n"
-        "}\n"
-        "ha-map { height: 100% !important; }\n"
-    )
-
-
-OVERLAY_TOP_PX = 12
-OVERLAY_TABLE_TOP_PX = 84
-COLLAPSED_WIDTH = "300px"
-EXPANDED_WIDTH = "min(1100px, calc(100vw - 96px))"
-
-
-def overlay_container_style():
-    """card_mod style of the custom:mod-card wrapper.
-
-    card-mod cannot style stack cards at all (it hooks ha-card/hui-card only —
-    there is no stack handling in card-mod.js), so styling the outer
-    vertical-stack was a no-op: no gutter and no overlay. mod-card gives us a
-    real ha-card to hang `position: relative` (the overlay's offset parent) and
-    the outer gutter on."""
-    return (
-        "ha-card {\n"
-        "  position: relative;\n"
-        f"  margin: {GUTTER_PX}px;\n"
-        "  overflow: hidden;\n"
-        "}\n"
-    )
-
-
-def overlay_toggle_style():
-    """Absolute geometry of the always-visible expand/collapse toggle.
-
-    `:host`, not `ha-card`: card-mod injects its <style> into the card's own
-    shadow root, so `:host` targets the card ELEMENT. Positioning only the
-    inner ha-card left the element (and its hui-card wrapper) inside the
-    stack's flex column, where it kept reserving height — that is what caused
-    both the browser scrollbar and the stretched-looking toggle card."""
-    return (
-        ":host {\n"
-        "  position: absolute;\n"
-        f"  top: {OVERLAY_TOP_PX}px;\n"
-        f"  right: {OVERLAY_TOP_PX}px;\n"
-        "  z-index: 2;\n"
-        f"  width: {COLLAPSED_WIDTH};\n"
-        "}\n"
-    )
-
-
-def overlay_table_style(height_px, width):
-    """Absolute geometry of one of the two overlay tables. Applied to the card
-    element via `:host` (see overlay_toggle_style) so it leaves the stack's
-    flow entirely; the inner ha-card only gets the scroll container."""
-    height = map_height_css(height_px)
-    return (
-        ":host {\n"
-        "  position: absolute;\n"
-        f"  top: {OVERLAY_TABLE_TOP_PX}px;\n"
-        f"  right: {OVERLAY_TOP_PX}px;\n"
-        "  z-index: 2;\n"
-        f"  width: {width};\n"
-        f"  max-height: calc({height} - {OVERLAY_TABLE_TOP_PX + 12}px);\n"
-        "}\n"
-        "ha-card {\n"
-        "  max-height: 100%;\n"
-        "  overflow: auto;\n"
-        "}\n"
-    )
-
-
-def _patch_cards(cards, default_zoom, height_px, detail_fields, depth=0):
-    """Recursively walk a (possibly nested) cards list and patch the map, the
-    overlay geometry and the detail tables wherever they live."""
-    if not isinstance(cards, list):
-        return
-    for card in cards:
-        if not isinstance(card, dict):
-            continue
-        card_id = card.pop("id", None)
-        if card_id == "map" and card.get("type") == "map":
-            card["default_zoom"] = default_zoom
-            card["card_mod"] = {"style": map_style(height_px)}
-        elif card_id == "overlay_toggle":
-            card["card_mod"] = {"style": overlay_toggle_style()}
-        elif card_id == "detail_list_compact":
-            card["card_mod"] = {
-                "style": overlay_table_style(height_px, COLLAPSED_WIDTH)
-            }
-        elif card_id == "detail_list":
-            card["columns"] = build_columns(detail_fields)
-            card["card_mod"] = {
-                "style": overlay_table_style(height_px, EXPANDED_WIDTH)
-            }
-        elif depth == 0 and card.get("type") == "custom:mod-card":
-            card["card_mod"] = {"style": overlay_container_style()}
-        # Recurse into any nested card containers (mod-card, vertical-stack, ...).
-        if isinstance(card.get("cards"), list):
-            _patch_cards(
-                card["cards"], default_zoom, height_px, detail_fields, depth + 1
-            )
-        if isinstance(card.get("card"), dict):
-            _patch_cards(
-                [card["card"]], default_zoom, height_px, detail_fields, depth + 1
-            )
+def load_yaml(path, placeholders):
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    return yaml.safe_load(render(text, placeholders, os.path.basename(path)))
 
 
 def build_dashboard(config=None):
     """Build build/dashboard-ais.yaml from header.yaml + sections/*.yaml.
 
-    The view is a `panel` view (the only Lovelace view type that renders
-    truly edge-to-edge, without a centered max-width column like
-    `sections`/`masonry`), so it holds exactly ONE top-level card per file in
-    sections/*.yaml (typically a `vertical-stack` wrapping heading/map/table)."""
+    The view is a `panel` view (the only Lovelace view type that renders truly
+    edge-to-edge, without a centered max-width column like `sections`/
+    `masonry`), so each sections/*.yaml holds exactly ONE top-level card
+    (a `custom:mod-card` wrapping the map and the overlay tables)."""
     if config is None:
         config = load_config()
+    placeholders = build_placeholders(config)
 
     header_path = os.path.join(SRC_DIR, "yaml", "dashboard", "header.yaml")
     sections_dir = os.path.join(SRC_DIR, "yaml", "dashboard", "sections")
 
-    with open(header_path, "r", encoding="utf-8") as f:
-        header_data = yaml.safe_load(f)
-
-    map_cfg = config.get("map", {}) if isinstance(config.get("map"), dict) else {}
-    default_zoom = int(map_cfg.get("default_zoom", 12))
-    height_px = int(map_cfg.get("height_px", 480))
-    detail_fields = config.get("detail_fields") or list(DEFAULT_DETAIL_FIELDS)
+    header_data = load_yaml(header_path, placeholders)
 
     cards = []
     for fname in sorted(os.listdir(sections_dir)):
         if not fname.endswith(".yaml"):
             continue
-        fpath = os.path.join(sections_dir, fname)
-        with open(fpath, "r", encoding="utf-8") as f:
-            sec_data = yaml.safe_load(f)
-
-        sec_items = sec_data if isinstance(sec_data, list) else [sec_data]
-        _patch_cards(sec_items, default_zoom, height_px, detail_fields)
-        cards.extend(sec_items)
+        sec_data = load_yaml(os.path.join(sections_dir, fname), placeholders)
+        if sec_data is None:
+            continue
+        cards.extend(sec_data if isinstance(sec_data, list) else [sec_data])
 
     if header_data and "views" in header_data and len(header_data["views"]) > 0:
         header_data["views"][0]["cards"] = cards
@@ -321,7 +162,8 @@ def main():
     ensure_dirs()
     build_dashboard(config)
     print("Build completed successfully!")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

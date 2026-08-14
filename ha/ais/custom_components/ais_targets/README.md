@@ -43,11 +43,11 @@ transient junk. So instead:
 ## Own vessel
 
 Set `own_mmsi` to your own boat's MMSI (this config entry is the **single
-source of truth** — nothing else stores it). The matching target is then named
-"⛵ Bumblebee (Own Boat)" and reported under a distinct `source`
-(`ais_targets_own`) so the map never plots a duplicate pin next to the
-GPS-based `device_tracker.nevera` marker, while it still appears in the detail
-table (filtered by `entity_id`, not `source`) with the full attribute set.
+source of truth** — nothing else stores it). The matching target stays an
+ordinary row/pin (same `geo_location.ais_<mmsi>`, same `source`), marked ONLY by
+a ⛵ prefix on its name and the `is_own_ship: true` attribute. A separate
+`source` was tried and reverted: it kept our own boat off the map entirely,
+since the map card only listens to `geo_location_sources: ['ais_targets']`.
 
 ## Configuration
 
