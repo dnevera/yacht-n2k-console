@@ -32,6 +32,16 @@ USAGE
 A missing file is fine: HA creates `.storage/input_boolean` only once a helper
 exists, so this script writes a fresh, minimally-valid document in that case.
 
+PER-USER HELPERS (`--auth`)
+Home Assistant has NO per-user entity state: every dashboard helper is global,
+so one user's selection was visible to everybody. The dashboard therefore uses
+ONE HELPER PER USER — `input_text.ais_selected_mmsi_<user_slug>` and
+`input_boolean.ais_table_expanded_<user_slug>` — and the Lovelace side picks the
+current user's helper at render time (see src/js/ais-select-bridge.js, card
+`custom:ais-user-scope`). Pass `--auth <.storage/auth>` to provision one pair per
+active, non-system user. The un-suffixed helpers are still provisioned as the
+fallback used when the user cannot be resolved.
+
 IMPORTANT — the entity_id comes from `name`, not from `id`.
 Home Assistant slugifies the helper's DISPLAY NAME to build its entity_id, so
 the name MUST be "AIS table expanded" to yield
@@ -75,6 +85,75 @@ SELECTED_CONFIG = {
     # appears.
     "mode": "text",
 }
+
+
+def slugify(value: str) -> str:
+    """Same shape as Home Assistant's slugify for our purposes: lowercase,
+    every run of non-alphanumerics collapsed into a single underscore."""
+    out = []
+    prev_us = True
+    for ch in value.lower():
+        if ch.isalnum() and ch.isascii():
+            out.append(ch)
+            prev_us = False
+        elif not prev_us:
+            out.append("_")
+            prev_us = True
+    return "".join(out).strip("_")
+
+
+def user_slug(user: dict) -> str:
+    """Slug identifying a user's helpers. Mirrors the JS side exactly: the
+    slugified name, or `u_<first 8 chars of the user id>` when the name has no
+    ASCII alphanumerics (e.g. a fully cyrillic name)."""
+    slug = slugify(str(user.get("name") or ""))
+    if slug:
+        return slug
+    return "u_" + str(user.get("id") or "")[:8]
+
+
+def user_helper_configs(slug: str) -> list[tuple[dict, str, str]]:
+    """`[(config, entity_id, store_key), ...]` for one user's helper pair."""
+    toggle_id = f"{HELPER_ID}_{slug}"
+    selected_id = f"{SELECTED_ID}_{slug}"
+    return [
+        (
+            {
+                "id": toggle_id,
+                # Must slugify to toggle_id — see the module docstring.
+                "name": f"AIS table expanded {slug}",
+                "icon": HELPER_CONFIG["icon"],
+            },
+            f"input_boolean.{toggle_id}",
+            "input_boolean",
+        ),
+        (
+            {
+                "id": selected_id,
+                "name": f"AIS selected mmsi {slug}",
+                "icon": SELECTED_CONFIG["icon"],
+                "min": SELECTED_CONFIG["min"],
+                "max": SELECTED_CONFIG["max"],
+                "mode": SELECTED_CONFIG["mode"],
+            },
+            f"input_text.{selected_id}",
+            "input_text",
+        ),
+    ]
+
+
+def load_users(auth_path: str) -> list[dict]:
+    """Active, non-system users from `.storage/auth`."""
+    with open(auth_path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+    users = doc.get("data", {}).get("users") or []
+    return [
+        u
+        for u in users
+        if isinstance(u, dict)
+        and u.get("is_active", True)
+        and not u.get("system_generated")
+    ]
 
 
 def _empty_doc(key: str) -> dict:
@@ -172,7 +251,21 @@ def main() -> int:
         "--entity-registry",
         help="path to .storage/core.entity_registry, to drop a mis-slugged row",
     )
+    parser.add_argument(
+        "--auth",
+        help="path to .storage/auth — provisions one helper pair per user",
+    )
     args = parser.parse_args()
+
+    users = []
+    if args.auth and os.path.exists(args.auth):
+        users = load_users(args.auth)
+        print(
+            "per-user helpers for: "
+            + ", ".join(sorted(user_slug(u) for u in users))
+        )
+    elif args.auth:
+        print(f"{args.auth} does not exist — per-user helpers skipped.")
 
     if os.path.exists(args.input_boolean_path):
         with open(args.input_boolean_path, "r", encoding="utf-8") as f:
@@ -189,6 +282,16 @@ def main() -> int:
         print(message)
     if not os.path.exists(args.input_boolean_path):
         changed = True
+
+    # Per-user toggles live in the same input_boolean store as the fallback.
+    for user in users:
+        for config, entity_id, store in user_helper_configs(user_slug(user)):
+            if store != "input_boolean":
+                continue
+            patched, user_messages = compute_patch(doc, config, entity_id)
+            changed = changed or patched
+            for message in user_messages:
+                print(message)
 
     text_doc = None
     text_changed = False
@@ -209,6 +312,14 @@ def main() -> int:
         text_changed = text_changed or patched
         for message in text_messages:
             print(message)
+        for user in users:
+            for config, entity_id, store in user_helper_configs(user_slug(user)):
+                if store != "input_text":
+                    continue
+                patched, user_messages = compute_patch(text_doc, config, entity_id)
+                text_changed = text_changed or patched
+                for message in user_messages:
+                    print(message)
 
     reg_doc = None
     reg_changed = False

@@ -197,6 +197,11 @@ provision_helpers() {
     # table selects into this helper instead of opening an empty dialog).
     local text_remote="/config/.storage/input_text"
     local text_copy="${tmp_dir}/input_text"
+    # .storage/auth is READ ONLY here: it is the list of users the per-user
+    # helpers are provisioned for (HA has no per-user entity state, so each
+    # user gets their own selection/expanded helper on the server).
+    local auth_remote="/config/.storage/auth"
+    local auth_copy="${tmp_dir}/auth"
 
     # A missing store is normal on an instance without any UI helper yet —
     # provision_helpers.py then creates a fresh, minimally-valid document.
@@ -206,10 +211,12 @@ provision_helpers() {
     # and re-registered as input_boolean.ais_table_expanded.
     ha_cat "${reg_remote}" > "${reg_copy}" 2>/dev/null || rm -f "${reg_copy}"
     ha_cat "${text_remote}" > "${text_copy}" 2>/dev/null || rm -f "${text_copy}"
+    ha_cat "${auth_remote}" > "${auth_copy}" 2>/dev/null || rm -f "${auth_copy}"
 
     local report_status=0
     python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" \
         --input-text "${text_copy}" \
+        --auth "${auth_copy}" \
         --entity-registry "${reg_copy}" || report_status=$?
 
     if [[ "${report_status}" -eq 0 ]]; then
@@ -222,6 +229,7 @@ provision_helpers() {
 
     python3 "${HELPERS_DIR}/provision_helpers.py" "${local_copy}" \
         --input-text "${text_copy}" \
+        --auth "${auth_copy}" \
         --entity-registry "${reg_copy}" --write
     ha_cp_to_container_if_changed "${local_copy}" "${remote_path}" "input_boolean (AIS table toggle)" \
         && echo "input_boolean" >> "${AIS_CHANGE_FLAG}"
