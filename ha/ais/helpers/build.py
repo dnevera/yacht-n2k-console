@@ -84,6 +84,8 @@ def build_placeholders(config):
     return {
         "AIS_MAP_ZOOM": str(int(map_cfg.get("default_zoom", 12))),
         "AIS_MAP_HEIGHT": str(map_cfg.get("height", "calc(100vh - 104px)")),
+        "AIS_MARKER_SIZE": str(map_cfg.get("marker_size", "52px")),
+        "AIS_MARKER_FONT_SIZE": str(map_cfg.get("marker_font_size", "10px")),
         "AIS_SORT_BY": str(tbl_cfg.get("default_sort", "state+")),
         # The table body is its own scroll container: N rows visible, the rest
         # reachable by scrolling (flex-table-card's `max_rows` would truncate).

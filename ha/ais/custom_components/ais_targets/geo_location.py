@@ -173,23 +173,39 @@ class AisTarget(GeolocationEvent):
         self._apply(reading)
         self.async_write_ha_state()
 
+    def _initials(self) -> str:
+        """Two-letter marker badge, exactly like HA's own default.
+
+        HA's map card, when no `label_mode` is set, labels a marker with the
+        first letters of the name's words. We reproduce that here (2 chars, as
+        requested) because the full vessel name turned the marker into a huge
+        blob — and for an unnamed target the name is "AIS <mmsi>", so the badge
+        degrades to the same short form it had before.
+        """
+        name = str(self._attr_name or "").replace(_OWN_BOAT_ICON, " ").strip()
+        initials = "".join(part[0] for part in name.split() if part)
+        return initials[:2].upper() or "?"
+
     def _map_label(self) -> str:
         """Marker label for the map card.
 
-        The map card renders a geo_location marker with the entity name's
-        INITIALS (3 chars max) unless the source is configured with
-        `label_mode: attribute`, so the readable label lives here: vessel name
-        plus its speed and length. Fields that are unavailable are simply left
-        out instead of showing a dash on the map.
+        Layout: two-letter badge, then speed and length on a second visual
+        chunk. `ha-entity-marker` renders this as PLAIN TEXT (no HTML), so the
+        speed/length cannot get their own font-size here — that is done on the
+        card via `--ha-marker-font-size` in the dashboard template. Fields that
+        are unavailable are simply left out (never "unknown"/dashes).
         """
-        parts: list[str] = [str(self._attr_name)]
+        parts: list[str] = []
         sog = self._reading.sog
         if isinstance(sog, (int, float)):
             parts.append(f"{sog:.1f}kn")
         length = self._static("length")
         if isinstance(length, (int, float)):
             parts.append(f"{length:.0f}m")
-        return " · ".join(parts)
+        label = self._initials()
+        if parts:
+            label = f"{label} {' '.join(parts)}"
+        return label
 
     @property
     def last_seen(self) -> datetime:

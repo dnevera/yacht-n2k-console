@@ -28,6 +28,13 @@ map:
   # both 12px gutters.
   # Placeholder: ${AIS_MAP_HEIGHT}
   height: calc(100vh - 104px)
+  # Marker badge geometry. The label is a two-letter badge from the vessel name
+  # plus its speed and length; `ha-entity-marker` renders it as PLAIN TEXT, so
+  # the speed/length cannot get their own font — the whole label font is shrunk
+  # here instead (that is what keeps them small next to the badge).
+  # Placeholders: ${AIS_MARKER_SIZE} / ${AIS_MARKER_FONT_SIZE}
+  marker_size: 52px
+  marker_font_size: 10px
 
 # ── Target table (custom:flex-table-card overlay) ───────────────────────────
 table:
