@@ -250,5 +250,71 @@ tableClasses.add('ais-table-collapsing');
 pollSelection(tableRoot, hass);
 t('a leftover fold class is swept on the next poll', !tableClasses.has('ais-table-collapsing'));
 
+// The fold must NOT depend on the blink succeeding: a target whose marker is
+// not rendered yet (or at all) still has to fold the table away.
+{
+  const noMarkerRoot = {
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    appendChild: () => {},
+  };
+  const timers = [];
+  const realT = global.setTimeout;
+  global.setTimeout = (fn) => { timers.push(fn); return 0; };
+  let folded = 0;
+  focusSelectedTarget(noMarkerRoot, hass, SEL, () => { folded += 1; });
+  t('no fold before the retry', folded === 0);
+  timers.forEach((fn) => fn());
+  t('a missing marker still folds the table', folded === 1);
+  global.setTimeout = realT;
+}
+
+// 7. the map's "home" button is taken over: it centres on OUR boat at the
+//    configured zoom instead of fitting all markers at an arbitrary one.
+const ownEntity = 'geo_location.ais_111222333';
+hass.states[ownEntity] = { state: '0.2', attributes: { is_own_ship: true, latitude: 43.5, longitude: 16.4 } };
+
+const homeViews = [];
+const homeMap = { setView: (pos, zoom) => homeViews.push([pos, zoom]), getZoom: () => 5 };
+const homeRoot = {
+  querySelectorAll: () => [{ leafletMap: homeMap }],
+};
+const realQuery = global.document.querySelector;
+global.document = { querySelector: realQuery, querySelectorAll: homeRoot.querySelectorAll };
+
+const homeBtnParent = { id: 'buttons' };
+const homeBtn = { localName: 'ha-icon-button', parentElement: homeBtnParent };
+homeBtnParent.lastElementChild = homeBtn;
+const groupBtn = { localName: 'ha-icon-button', parentElement: homeBtnParent };
+
+const homeEv = (path) => {
+  const ev = { stopped: false, prevented: false };
+  ev.composedPath = () => path;
+  ev.stopImmediatePropagation = () => { ev.stopped = true; };
+  ev.preventDefault = () => { ev.prevented = true; };
+  return ev;
+};
+
+t('the grouping button is left to the card', !isMapHomeButton(homeEv([groupBtn])));
+t('the home button is recognised', isMapHomeButton(homeEv([homeBtn])));
+t('a random button is not the home button',
+  !isMapHomeButton(homeEv([{ localName: 'ha-icon-button', parentElement: { id: 'other' } }])));
+
+window.__aisHomeZoom = 16;
+t('home centres on our own boat at the configured zoom',
+  goHome(homeRoot, hass) === true &&
+  JSON.stringify(homeViews[0]) === JSON.stringify([[43.5, 16.4], 16]));
+
+// Without a position of our own the stock fit-all must still happen.
+hass.states[ownEntity].attributes.latitude = null;
+const noOwn = homeEv([homeBtn]);
+fire('click', noOwn);
+t('without our position the card keeps its fit-all', !noOwn.stopped);
+
+hass.states[ownEntity].attributes.latitude = 43.5;
+const homeClick = homeEv([homeBtn]);
+fire('click', homeClick);
+t('the home click replaces the card fit-all', homeClick.stopped && homeViews.length === 2);
+
 console.log(ok ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED');
 process.exit(ok ? 0 : 1);

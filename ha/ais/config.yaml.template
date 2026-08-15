@@ -19,9 +19,17 @@
 
 # ── Map card ────────────────────────────────────────────────────────────────
 map:
-  # Initial zoom level of the `type: map` card (higher = more zoomed in).
-  # Placeholder: ${AIS_MAP_ZOOM}
-  default_zoom: 16
+  # Zoom level the map's "home" button lands on, centred on OUR boat
+  # (higher = more zoomed in).
+  #
+  # This is deliberately NOT the map card's stock `default_zoom`: as soon as
+  # the map shows more than one marker (and it always does — every AIS target
+  # is one) the card calls fitBounds() and ignores that option entirely, which
+  # is why editing it had no visible effect. The "home" button is taken over by
+  # src/js/ais-select-bridge.js, which centres on the vessel flagged
+  # `is_own_ship` and applies the zoom below.
+  # Placeholder: ${AIS_HOME_ZOOM}
+  home_zoom: 18
   # Height of the map card, as a CSS length. Viewport-relative on purpose: a
   # plain fixed height made the panel view taller than the window and turned
   # on the browser's vertical scrollbar. 104px = HA top bar + view-tabs row +

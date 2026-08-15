@@ -82,7 +82,12 @@ def build_placeholders(config):
     collapsed_rows = int(tbl_cfg.get("collapsed_visible_rows", 8))
 
     return {
-        "AIS_MAP_ZOOM": str(int(map_cfg.get("default_zoom", 12))),
+        # Zoom the map's "home" button lands on. The stock `default_zoom` of
+        # the map card is deliberately NOT used: with more than one marker the
+        # card always calls fitBounds() and ignores it, which is why changing
+        # it appeared to do nothing. src/js/ais-select-bridge.js takes the
+        # button over and applies this value instead.
+        "AIS_HOME_ZOOM": str(int(map_cfg.get("home_zoom", 14))),
         "AIS_MAP_HEIGHT": str(map_cfg.get("height", "calc(100vh - 104px)")),
         "AIS_MARKER_SIZE": str(map_cfg.get("marker_size", "52px")),
         "AIS_MARKER_FONT_SIZE": str(map_cfg.get("marker_font_size", "10px")),

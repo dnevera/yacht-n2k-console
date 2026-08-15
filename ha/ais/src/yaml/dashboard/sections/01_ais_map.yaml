@@ -40,6 +40,12 @@
     # because conditional cards and flex-table-card tap_actions both require a
     # literal entity_id and cannot be templated.
     type: custom:ais-user-scope
+    # Zoom the map's "home" button lands on. It is handed to the bridge THROUGH
+    # THIS CARD because src/js/ais-select-bridge.js is deployed verbatim (no
+    # build-time substitution happens inside .js). The map card's own
+    # `default_zoom` is deliberately absent below: with more than one marker
+    # the card always fits all of them and ignores it.
+    home_zoom: ${AIS_HOME_ZOOM}
     card:
         type: vertical-stack
         cards:
@@ -63,7 +69,11 @@
               - source: ais_targets
                 label_mode: attribute
                 attribute: map_label
-            default_zoom: ${AIS_MAP_ZOOM}
+            # NO `default_zoom` here on purpose: `hui-map-card` calls fitMap()
+            # (fitBounds over every marker) whenever it holds more than one
+            # point, so the option never applied and editing it looked like a
+            # broken deploy. The zoom is owned by the "home" button instead —
+            # see `home_zoom` above and ais-select-bridge.js.
             card_mod:
               # hui-map-card sets an INLINE `#root { padding-bottom: 100% }` when it
               # is not a direct panel/grid child (ours is inside a stack), i.e. the

@@ -39,7 +39,9 @@ def test_map_wheel_is_kept_away_from_leaflet():
     assert "leaflet-container" in js
     assert "stopImmediatePropagation" in js
     # No preventDefault in the wheel gate: the dashboard must keep scrolling.
-    wheel_gate = js.split("MAP ZOOM GESTURES", 1)[1].split("*/", 1)[1]
+    # Slice exactly the wheel gate (up to the next top-level block comment):
+    # other handlers in the file legitimately do call preventDefault.
+    wheel_gate = js.split("MAP ZOOM GESTURES", 1)[1].split("*/", 1)[1].split("/*", 1)[0]
     assert "preventDefault" not in wheel_gate
 
 
@@ -61,6 +63,23 @@ def test_own_boat_is_marked_on_the_map_without_duplicating_the_mmsi():
     # No literal MMSI anywhere in the frontend assets.
     assert not re.search(r"geo_location\.ais_\d", js)
     assert not re.search(r"geo_location\.ais_\d", _read(MAP_SECTION))
+
+
+def test_home_zoom_replaces_the_useless_default_zoom():
+    """`default_zoom` never applied (the card always fits all markers), so the
+    zoom is owned by our own "home" button handler and configured as
+    `map.home_zoom`."""
+    template = _read(os.path.join(AIS_DIR, "config.yaml.template"))
+    assert "home_zoom:" in template
+    assert "default_zoom:" not in template
+
+    section = _read(MAP_SECTION)
+    assert "home_zoom: ${AIS_HOME_ZOOM}" in section
+    assert "default_zoom: ${" not in section
+
+    js = _read(BRIDGE_JS)
+    assert "__aisHomeZoom" in js
+    assert "isMapHomeButton" in js
 
 
 def test_ais_select_bridge_js_suite():

@@ -129,6 +129,12 @@ class AisUserScope extends HTMLElement {
     if (!config || !config.card) {
       throw new Error("ais-user-scope: a `card` config is required");
     }
+    // The bridge is a plain module deployed as-is (no build-time templating),
+    // so the one numeric setting it needs — the zoom the "home" button lands
+    // on — travels through this wrapper's config instead.
+    if (config.home_zoom !== undefined) {
+      window.__aisHomeZoom = Number(config.home_zoom);
+    }
     this._config = config;
     this._card = null;
     this._suffix = null;
@@ -479,6 +485,91 @@ function panMapsTo(root, position) {
   return panned;
 }
 
+/*
+ * THE "HOME" BUTTON — CENTRE ON OUR OWN BOAT AT A KNOWN ZOOM
+ *
+ * The map card's own button (`ui.panel.lovelace.cards.map.reset_focus`, the
+ * last `ha-icon-button` inside `div#buttons` of `hui-map-card`'s shadow root)
+ * calls `fitMap()`, i.e. it FITS ALL MARKERS. With a dozen AIS targets around
+ * that means an arbitrary — usually very far out — zoom, and the card's
+ * `default_zoom` is not applied at all in that case (it only ever matters when
+ * the map holds 0-1 point). That is why `default_zoom` "did nothing" no matter
+ * what it was set to, and why the option is now called `home_zoom`: it is OUR
+ * setting, honoured by the handler below and by nothing else.
+ *
+ * The click is taken in the CAPTURE phase on `window`, before Lit's own
+ * `@click` binding inside the shadow root, and replaced with:
+ *     setView(own boat position, home_zoom)
+ * The own boat is found by the `is_own_ship` attribute — the MMSI stays in the
+ * `ais_targets` config entry and is not repeated anywhere on the frontend.
+ * If we cannot find our boat (no position yet), the event is left alone and the
+ * stock fit-all behaviour happens, which is a sane fallback.
+ */
+const DEFAULT_HOME_ZOOM = 14;
+
+function homeZoom() {
+  // Published by <ais-user-scope> from the dashboard config (${AIS_HOME_ZOOM}).
+  const value = Number(window.__aisHomeZoom);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_HOME_ZOOM;
+}
+
+function ownShipPosition(hass) {
+  const entityId = ownShipEntityId(hass);
+  if (!entityId) {
+    return null;
+  }
+  return targetPosition(hass, entityId.slice(ENTITY_PREFIX.length));
+}
+
+function isMapHomeButton(ev) {
+  const path = typeof ev.composedPath === "function" ? ev.composedPath() : [];
+  for (const node of path) {
+    if (!node || node.localName !== "ha-icon-button") {
+      continue;
+    }
+    const parent = node.parentElement;
+    if (!parent || parent.id !== "buttons") {
+      continue;
+    }
+    // `div#buttons` holds the optional grouping toggle first and the
+    // reset-focus ("home") button last, so position identifies it without
+    // depending on a localised label.
+    return parent.lastElementChild === node;
+  }
+  return false;
+}
+
+function goHome(root, hass) {
+  const position = ownShipPosition(hass);
+  if (!position) {
+    return false;
+  }
+  const zoom = homeZoom();
+  let moved = 0;
+  for (const map of collectLeafletMaps(root, [], 0)) {
+    map.setView(position, zoom, { animate: true });
+    moved += 1;
+  }
+  return moved > 0;
+}
+
+window.addEventListener(
+  "click",
+  (ev) => {
+    if (!isMapHomeButton(ev)) {
+      return;
+    }
+    const hass = getHass();
+    if (!hass || !goHome(document, hass)) {
+      // Nothing we can centre on — let the card do its usual fit-all.
+      return;
+    }
+    ev.stopImmediatePropagation();
+    ev.preventDefault();
+  },
+  true
+);
+
 function blinkMarker(root, entityId) {
   let blinked = 0;
   for (const marker of collectMarkers(root, [], 0)) {
@@ -508,24 +599,31 @@ function focusSelectedTarget(root, hass, mmsi, onBlink) {
   if (position) {
     panMapsTo(root, position);
   }
+  let notified = false;
   const blinked = () => {
+    if (notified) {
+      return;
+    }
+    notified = true;
     if (typeof onBlink === "function") {
       onBlink();
     }
   };
   // The marker may not exist yet right after the pan; a single retry covers the
-  // usual case without turning this into a watcher.
+  // usual case without turning this into a watcher. The callback fires after
+  // that retry EVEN IF the marker was never found (a target outside the
+  // rendered set, a map still loading): the fold must not depend on the blink
+  // succeeding, otherwise picking a row silently leaves the table open.
   if (blinkMarker(root, ENTITY_PREFIX + mmsi)) {
     blinked();
   } else {
     setTimeout(() => {
       try {
-        if (blinkMarker(root, ENTITY_PREFIX + mmsi)) {
-          blinked();
-        }
+        blinkMarker(root, ENTITY_PREFIX + mmsi);
       } catch (err) {
         /* ignore */
       }
+      blinked();
     }, SELECT_POLL_MS);
   }
   return Boolean(position);
