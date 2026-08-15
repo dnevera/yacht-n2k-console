@@ -186,10 +186,14 @@ opposite of the correct 0°. Without it the measured arrows jitter by tens of
 degrees around an hourly-mean forecast and look like they disagree with it even
 when their mean matches it exactly. Set it to `none` to draw every raw sample.
 
-`zoom_controls` (default `true`) unlocks the **time axis only**: the mouse wheel
-zooms in a browser, pinch zooms and one finger pans on a phone, and a vertical
-`+ / − / reset` button column is shown on the right edge of the chart (the only
-way to zoom on touch devices without a wheel). The Y axis always stays
+`zoom_controls` (default `true`) unlocks the **time axis only**: a vertical
+`+ / − / reset` button column is shown on the right edge of the chart, and on a
+phone a two-finger pinch zooms while one finger pans. A real mouse wheel /
+trackpad deliberately does **not** zoom (it kept producing momentum and
+diagonal-tick artefacts) — the page just scrolls over the chart as usual;
+`plotly_touch_patch_shapes.js` swallows those wheel events and lets only the
+synthetic, pinch-derived ones through. A tooltip on a phone requires a
+deliberate long press, a short tap does nothing. The Y axis always stays
 `fixedrange: true`, so traces can never be dragged off the value scale. Set it
 to `false` for completely static charts.
 

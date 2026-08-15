@@ -171,6 +171,10 @@ class DeviceManager:
         """Return discovered bus devices dictionary from SensorRegistry."""
         return self._sensor_registry.get_bus_devices()
 
+    def get_autopilot_state(self) -> Dict[str, Any]:
+        """Return the read-only autopilot snapshot from SensorRegistry."""
+        return self._sensor_registry.get_autopilot_state()
+
     def _update_sensor_state(self, parsed: Dict[str, Any]) -> None:
         """Update sensor registry state from NMEA frame."""
         self._sensor_registry.update(parsed)

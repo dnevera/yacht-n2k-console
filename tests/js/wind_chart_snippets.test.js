@@ -193,9 +193,10 @@ t('no forecast loaded falls back to a 1h window',
   avg(Object.assign({meta:{}},{hass:{states:{}}},{xs:[T(0),T(70)],ys:[4,6]})).ys.length===2);
 
 // 8. plotly_touch_patch_shapes.js no longer touches wheel events at all -
-// wheel/trackpad/pinch zoom is disabled entirely at the card config level
+// wheel/trackpad zoom is disabled entirely at the card config level
 // (`scrollZoom: false`), so the snippet must not install any wheel listener
-// or leave behind the old per-chart wheel-patch marker.
+// or leave behind the old per-chart wheel-patch marker. Touch pinch zoom is
+// implemented by the snippet itself instead - see 11 below.
 class FakeGd extends EventTarget {
   constructor() {
     super();
@@ -300,6 +301,99 @@ limitedButtons[1].click(gAtMax);
 t('zoom-out click at the configured maximum is a no-op (no resize/snap-back)',
   JSON.stringify(gAtMax.layout.xaxis.range) === JSON.stringify(rangeBeforeMax) && gAtMax.host.plotCalls.length === 0);
 
+// 11. plotly_touch_patch_shapes.js: the wheel gate. The card's own touch
+// controller implements pinch zoom by dispatching a SYNTHETIC wheel event at
+// the drag layer, so `scrollZoom` has to stay on; a real (trusted) wheel from
+// a mouse/trackpad must still never zoom, and a pinch must not cross the
+// configured zoom limits.
+// The snippet aborts any in-flight Plotly pan with a synthetic mouseup on
+// `document`; node has no MouseEvent, and a plain object is enough since the
+// fake `document.dispatchEvent` below swallows it.
+global.MouseEvent = class { constructor(type, opts) { Object.assign(this, { type }, opts || {}); } };
+const gd3 = new FakeGd();
+global.document = {
+  querySelectorAll: (sel) => (sel === 'plotly-graph' ? [{ shadowRoot: { querySelectorAll: (s) => (s === '.js-plotly-plot' ? [gd3] : []) } }] : []),
+  dispatchEvent: () => {},
+};
+load('plotly_touch_patch_shapes.js')({ getFromConfig: (k) => ({ zoom_min_hours: 2, zoom_max_hours: 24 })[k] });
+// Registered after the snippet's own listener, so it only runs for wheel
+// events the snippet let through.
+let wheelsThrough = 0;
+gd3.addEventListener('wheel', () => { wheelsThrough++; }, true);
+const wheelEvent = (deltaY, trusted) => {
+  const ev = new Event('wheel', { cancelable: true });
+  Object.defineProperty(ev, 'isTrusted', { value: trusted });
+  ev.deltaY = deltaY;
+  return ev;
+};
+const windowStart = new Date(T(0)).getTime();
+const setWindow = (gdx, hours) => {
+  gdx.layout.xaxis.range = [T(0), new Date(windowStart + hours * 3600000).toISOString()];
+};
+setWindow(gd3, 4);
+gd3.dispatchEvent(wheelEvent(-100, true));
+t('a real mouse wheel never reaches Plotly (no wheel zoom on a desktop)', wheelsThrough === 0);
+gd3.dispatchEvent(wheelEvent(-100, false));
+t('the pinch-derived synthetic wheel is let through (two-finger zoom works)', wheelsThrough === 1);
+setWindow(gd3, 2); // exactly zoom_min_hours
+gd3.dispatchEvent(wheelEvent(-100, false));
+t('pinching in is blocked at the configured zoom_min_hours', wheelsThrough === 1);
+gd3.dispatchEvent(wheelEvent(100, false));
+t('pinching out is still allowed at the minimum', wheelsThrough === 2);
+setWindow(gd3, 24); // exactly zoom_max_hours
+gd3.dispatchEvent(wheelEvent(100, false));
+t('pinching out is blocked at the configured zoom_max_hours', wheelsThrough === 2);
+
+// 12. plotly_touch_patch_shapes.js: touch handling of the modebar and of the
+// tooltip. Plotly pops the tooltip up for any tap; it must only survive a
+// deliberate long press. Taps on the modebar are left completely alone (the
+// browser's own click is what presses the +/-/reset buttons).
+const gd5 = new FakeGd();
+const drag = new EventTarget();
+const mouse = [];
+['mouseover', 'mousemove', 'mouseout', 'mouseleave'].forEach((type) => {
+  drag.addEventListener(type, () => mouse.push(type));
+});
+drag.dispatchEvent = (ev) => { mouse.push(ev.type); return true; };
+gd5.querySelector = (sel) => (sel === '.nsewdrag' ? drag : FakeGd.prototype.querySelector.call(gd5, sel));
+global.document = {
+  querySelectorAll: (sel) => (sel === 'plotly-graph' ? [{ shadowRoot: { querySelectorAll: (s) => (s === '.js-plotly-plot' ? [gd5] : []) } }] : []),
+  dispatchEvent: () => {},
+};
+load('plotly_touch_patch_shapes.js')({ getFromConfig: () => undefined });
+const touchEvent = (type, touches, inModebar) => {
+  const ev = new Event(type, { cancelable: true });
+  ev.touches = touches;
+  Object.defineProperty(ev, 'target', { value: { closest: (sel) => (inModebar && sel === '.modebar' ? {} : null) } });
+  return ev;
+};
+gd5.dispatchEvent(touchEvent('touchstart', [{ clientX: 5, clientY: 5 }], false));
+gd5.dispatchEvent(touchEvent('touchend', [], false));
+t('a short tap takes the tooltip back down instead of leaving it up',
+  mouse.includes('mouseout') && !mouse.includes('mouseover'));
+mouse.length = 0;
+gd5.dispatchEvent(touchEvent('touchstart', [{ clientX: 5, clientY: 5 }], true));
+gd5.dispatchEvent(touchEvent('touchend', [], true));
+t('a tap on the modebar is left entirely to the browser', mouse.length === 0);
+
+// 13. Two fingers must not produce the one-finger gestures: a second finger
+// takes the tooltip back down (and aborts Plotly's pan), and the mouse events
+// the browser replays after a touch sequence - which is what made a tooltip
+// pop up on the RELEASE of a tap or of a pinch - are swallowed.
+let mouseThrough = 0;
+gd5.addEventListener('mouseover', () => { mouseThrough++; }, true);
+mouse.length = 0;
+gd5.dispatchEvent(touchEvent('touchstart', [{ clientX: 5, clientY: 5 }], false));
+gd5.dispatchEvent(touchEvent('touchstart', [{ clientX: 5, clientY: 5 }, { clientX: 90, clientY: 90 }], false));
+gd5.dispatchEvent(touchEvent('touchmove', [{ clientX: 5, clientY: 5 }, { clientX: 120, clientY: 120 }], false));
+t('a pinch never turns into a hover', !mouse.includes('mouseover'));
+gd5.dispatchEvent(touchEvent('touchend', [{ clientX: 90, clientY: 90 }], false));
+t('lifting one finger of a pinch does not start a new tap', !mouse.includes('mouseout'));
+gd5.dispatchEvent(touchEvent('touchend', [], false));
+t('a finished pinch takes any tooltip down', mouse.includes('mouseout') && !mouse.includes('mouseover'));
+gd5.dispatchEvent(new Event('mouseover'));
+t('the mouse events replayed after a gesture never reach Plotly', mouseThrough === 0);
+
 const gReset = makeGd([T(0), T(60)]);
 buttons[2].click(gReset); // resetScale2d
 t('reset button clicks the same hidden reset button the dblclick handler uses', gReset.resetBtn.clicked === 1);
@@ -307,4 +401,12 @@ const gResetHidden = makeGd([T(0), T(60)], true);
 buttons[2].click(gResetHidden);
 t('reset button does nothing while the card reset button is hidden', gResetHidden.resetBtn.clicked === 0);
 
-process.exit(ok?0:1);
+// The long press only fires after its 400 ms hold - hence the deferred tail.
+mouse.length = 0;
+gd5.dispatchEvent(touchEvent('touchstart', [{ clientX: 5, clientY: 5 }], false));
+setTimeout(() => {
+  t('holding a finger down shows the tooltip', mouse.includes('mouseover'));
+  gd5.dispatchEvent(touchEvent('touchend', [], false));
+  t('releasing after a long press keeps the tooltip up', !mouse.includes('mouseout'));
+  process.exit(ok?0:1);
+}, 600);

@@ -15,3 +15,7 @@ resources:
     type: module
   - url: /local/windy-boat-card.js?v=1.2.0
     type: module
+  - url: /local/auto-entities.js?v=1.16.1
+    type: module
+  - url: /local/flex-table-card.js?v=1.4
+    type: module

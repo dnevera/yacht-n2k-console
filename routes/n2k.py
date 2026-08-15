@@ -12,6 +12,21 @@ from routes import get_device_mgr
 router = APIRouter()
 
 
+@router.get("/n2k/autopilot")
+async def autopilot_state():
+    """Read-only snapshot of the Raymarine Evolution autopilot state.
+
+    Never sends anything to the bus. With no autopilot traffic the answer is
+    still HTTP 200 with mode "unknown" and age_sec null.
+    See specs/active/008-autopilot-control.md.
+    """
+    dev_mgr = get_device_mgr()
+    if not dev_mgr:
+        raise HTTPException(503, "Device manager not running")
+
+    return {"status": "ok", "autopilot": dev_mgr.get_autopilot_state()}
+
+
 @router.post("/n2k/command")
 async def n2k_command(body: dict):
     """

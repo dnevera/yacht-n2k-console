@@ -19,6 +19,11 @@
 #   ./deploy.sh [--stage|--prod] --resources-only
 #   ./deploy.sh [--stage|--prod] --dashboard-only
 #   ./deploy.sh [--stage|--prod] --sensors-only
+#   ./deploy.sh [--stage|--prod] --clean-ha          # remove garbage devices & orphaned entities
+#   ./deploy.sh [--stage|--prod] --clean-sensors     # alias for --clean-ha
+#   ./deploy.sh [--stage|--prod] --clean-ais         # remove raw sensor.ais_* entities
+#   ./deploy.sh [--stage|--prod] --clean-all         # remove ALL nmea2000 devices
+#   ./deploy.sh [--stage|--prod] --dry-sensors       # dry-run mode for cleanup
 #
 #   Delivery is idempotent: a file is uploaded only when its sha256 differs from
 #   what the container already has, a whole directory only when its tree manifest
@@ -64,6 +69,10 @@ SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-0}"
 # Re-upload everything even when the target already holds identical content.
 HA_FORCE_DELIVERY="${HA_FORCE_DELIVERY:-0}"
 BACKUP_KEEP=5
+CLEAN_AIS_FLAG=0
+CLEAN_ALL_FLAG=0
+DRY_RUN_FLAG=0
+MODE_EXPLICIT=0
 
 while [[ $# -gt 0 ]]; do
     arg="$1"
@@ -72,14 +81,18 @@ while [[ $# -gt 0 ]]; do
         --prod)           TARGET_ENV="prod" ;;
         --target)         TARGET_ENV="${2:?--target needs a profile name}"; shift ;;
         --target=*)       TARGET_ENV="${arg#*=}" ;;
-        --install|--clean-install) MODE="install" ;;
-        --update)         MODE="update" ;;
-        --resources-only) MODE="resources-only" ;;
-        --dashboard-only) MODE="dashboard-only" ;;
-        --sensors-only)   MODE="sensors-only" ;;
-        --bootstrap)      MODE="bootstrap" ;;
-        --preflight)      MODE="preflight" ;;
-        --rollback)       MODE="rollback" ;;
+        --install|--clean-install) MODE="install"; MODE_EXPLICIT=1 ;;
+        --update)         MODE="update"; MODE_EXPLICIT=1 ;;
+        --resources-only) MODE="resources-only"; MODE_EXPLICIT=1 ;;
+        --dashboard-only) MODE="dashboard-only"; MODE_EXPLICIT=1 ;;
+        --sensors-only)   MODE="sensors-only"; MODE_EXPLICIT=1 ;;
+        --bootstrap)      MODE="bootstrap"; MODE_EXPLICIT=1 ;;
+        --preflight)      MODE="preflight"; MODE_EXPLICIT=1 ;;
+        --rollback)       MODE="rollback"; MODE_EXPLICIT=1 ;;
+        --clean-ha|--clean-sensors) MODE="clean-ha"; MODE_EXPLICIT=1 ;;
+        --clean-ais)      MODE="clean-ha"; CLEAN_AIS_FLAG=1; MODE_EXPLICIT=1 ;;
+        --clean-all)      MODE="clean-ha"; CLEAN_ALL_FLAG=1; MODE_EXPLICIT=1 ;;
+        --dry-run|--dry-sensors) DRY_RUN_FLAG=1 ;;
         --skip-preflight) SKIP_PREFLIGHT=1 ;;
         --force|--force-delivery) HA_FORCE_DELIVERY=1 ;;
         -h|--help)
@@ -97,6 +110,10 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+if [[ "${DRY_RUN_FLAG}" == "1" && "${MODE_EXPLICIT}" == "0" ]]; then
+    MODE="clean-ha"
+fi
 
 # ── Resolve the target profile (transport / host / container) ───────────────
 ha_target_init "${TARGET_ENV}" "${HOST_ARG}"
@@ -367,6 +384,40 @@ rollback_target() {
     echo "Rollback done (${restored} file(s) restored)."
 }
 
+# ── clean_ha_target(): clean NMEA 2000 devices/entities on target HA ─────────
+clean_ha_target() {
+    echo "-- Step: Home Assistant NMEA cleanup (${TARGET_ENV}) --"
+    if ! ha_container_running; then
+        echo "ERROR: container '${HA_CONTAINER}' is not running on ${HA_HOST}." >&2
+        exit 1
+    fi
+
+    local script_path="${PROJECT_ROOT}/homeassistant/cleanup_nmea_devices.py"
+    if [[ ! -f "${script_path}" ]]; then
+        echo "ERROR: cleanup script not found at ${script_path}" >&2
+        exit 1
+    fi
+
+    local cleanup_flags=()
+    [[ "${CLEAN_ALL_FLAG:-0}" == "1" ]] && cleanup_flags+=("--all")
+    [[ "${CLEAN_AIS_FLAG:-0}" == "1" ]] && cleanup_flags+=("--clean-ais")
+    [[ "${DRY_RUN_FLAG:-0}" == "1" ]] && cleanup_flags+=("--dry-run")
+
+    echo "Copying cleanup script to ${HA_CONTAINER}..."
+    ha_cp_to_container "${script_path}" "/tmp/cleanup_nmea_devices.py"
+
+    echo "Running cleanup_nmea_devices.py ${cleanup_flags[*]:-(default cleanup)} inside ${HA_CONTAINER}..."
+    ha_exec python3 /tmp/cleanup_nmea_devices.py "${cleanup_flags[@]}"
+
+    if [[ "${DRY_RUN_FLAG:-0}" == "1" ]]; then
+        echo "Dry run complete — no changes written, no restart."
+    else
+        echo "Restarting ${HA_CONTAINER}..."
+        ha_restart
+        echo "HA restarted ✓"
+    fi
+}
+
 # Subscript execution helpers
 SUB_ENV_FLAGS=("--target" "${TARGET_ENV}")
 if [[ "${HA_TRANSPORT}" == "ssh-docker" && -n "${HA_HOST}" ]]; then
@@ -382,6 +433,9 @@ case "${MODE}" in
         ;;
     rollback)
         rollback_target
+        ;;
+    clean-ha)
+        clean_ha_target
         ;;
     install|update)
         # The gate is enforced on real targets only: Stage is provisioned by

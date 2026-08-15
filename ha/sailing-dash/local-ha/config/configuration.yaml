@@ -88,7 +88,7 @@ template:
     unit_of_measurement: °
     icon: mdi:compass-rose
     availability: '{{ states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_heading'') | is_number }}'
-    state: '{% set raw = states(''sensor.vessel_heading_raymarine_20_442559_pk_b70bbc9b5eef0afbfed7ae988ce2ddb4_variation'') %} {{ raw | float(0) | round(1) if raw | is_number else 0.0 }}
+    state: '{% set raw = states(''sensor.magnetic_variation_raymarine_display_1180407_pk_0daa125357646802c53fc9dbc4e264e0_variation'') %} {{ raw | float(0) | round(1) if raw | is_number else 0.0 }}
 
       '
   - name: Boat Heading

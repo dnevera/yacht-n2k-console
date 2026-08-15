@@ -7,7 +7,8 @@ sensor readings (fluid levels, temperatures).
 import threading
 from typing import Dict, Any, Optional
 from ydnu02 import N2KPGNDecoder
-from sensors import GobiusCSensor
+from sensors import AutopilotState, GobiusCSensor
+import n2k_autopilot
 
 
 class SensorRegistry:
@@ -16,7 +17,9 @@ class SensorRegistry:
     PGN dispatch:
       60928  → ISO Address Claim → device identity cache
       126996 → Product Information → device model/version (fast-packet reassembly)
+      126720 → Raymarine proprietary → AutopilotState (fast-packet reassembly)
       127505 → Fluid Level → GobiusCSensor update
+      65345/65360/65379, 127237, 127245 → AutopilotState (single-frame, read only)
 
     Locking:
         Receives external lock reference (owned by DeviceManager facade).
@@ -26,6 +29,9 @@ class SensorRegistry:
         self._lock = lock or threading.Lock()
         self.sensors: Dict[int, GobiusCSensor] = {}
         self.discovered_bus_devices: Dict[int, Dict[str, Any]] = {}
+        # Single autopilot per boat (Raymarine Evolution) — read only, see
+        # specs/active/008-autopilot-control.md. Nothing here writes to the bus.
+        self.autopilot = AutopilotState()
 
     def update(self, parsed: Dict[str, Any]) -> None:
         """Process a decoded NMEA frame and update internal state.
@@ -120,6 +126,15 @@ class SensorRegistry:
                 # double-feeding the stateful _n2k_decoder singleton (which would poison the
                 # sequence counter and prevent assembly). See commit 1de3074.
                 lib_msg = N2KPGNDecoder.feed_to_lib(parsed)
+                # ── PGN 126720: Raymarine proprietary (autopilot) ─────────────
+                # Handled here, inside the existing lib_msg branch, precisely so
+                # that no second FastPacket reassembler is introduced.
+                if lib_msg is not None and lib_msg.PGN == n2k_autopilot.PROPRIETARY_PGN:
+                    payload = getattr(lib_msg, "raw_can_data", None)
+                    if isinstance(payload, (bytes, bytearray)):
+                        decoded = n2k_autopilot.decode_126720(bytes(payload))
+                        if decoded:
+                            self.autopilot.update_from_frame(decoded, lib_msg.source)
                 if lib_msg is not None and lib_msg.PGN == 126996:
                     fields = {f.id: f for f in lib_msg.fields}
                     dev = self.discovered_bus_devices.get(lib_msg.source)
@@ -171,6 +186,13 @@ class SensorRegistry:
                     "src":        src,
                 })
 
+            # ── Autopilot single-frame PGNs (read only) ───────────────────────
+            # 65345/65360/65379 Raymarine proprietary + standard 127237/127245.
+            if pgn in n2k_autopilot.AUTOPILOT_PGNS and pgn != n2k_autopilot.PROPRIETARY_PGN:
+                decoded = n2k_autopilot.decode_frame(pgn, data)
+                if decoded:
+                    self.autopilot.update_from_frame(decoded, src)
+
     def get_sensors_state(self) -> Dict[str, Any]:
         """Non-blocking snapshot of all known sensors (thread-safe)."""
         with self._lock:
@@ -180,6 +202,11 @@ class SensorRegistry:
             "fluid_levels": fluid_levels,
             "count": len(fluid_levels)
         }
+
+    def get_autopilot_state(self) -> Dict[str, Any]:
+        """Non-blocking snapshot of the autopilot state (thread-safe)."""
+        with self._lock:
+            return self.autopilot.to_dict()
 
     def get_bus_devices(self) -> Dict[int, Dict[str, Any]]:
         """Return cached bus device info keyed by Source Address."""
