@@ -174,4 +174,44 @@ if (!customElements.get("ais-user-scope")) {
   customElements.define("ais-user-scope", AisUserScope);
 }
 
+/*
+ * MAP ZOOM GESTURES
+ * On a touch device (HA Companion) a two-finger drag UP/DOWN is delivered to
+ * the page as a `wheel` event — and Leaflet's scrollWheelZoom handler turns
+ * every one of those into a zoom step. So scrolling the dashboard with two
+ * fingers over the map silently zoomed it, which is what "the map zoom goes
+ * crazy" looked like.
+ *
+ * Zoom is therefore left to the map's own +/- buttons and to a real pinch
+ * (Leaflet's touchZoom, which reacts to the distance BETWEEN the fingers and is
+ * not touched here). The wheel event is swallowed in the CAPTURE phase on
+ * `window`, i.e. before it reaches the `.leaflet-container` listener inside
+ * `ha-map`'s shadow root (wheel events are composed, so they do pass by here).
+ *
+ * NO preventDefault: the event is only kept away from Leaflet, the browser
+ * still scrolls the dashboard exactly as it would over any other card. Leaflet
+ * itself calls preventDefault, so this actually restores the page scroll.
+ */
+const LEAFLET_CONTAINER_CLASS = "leaflet-container";
+
+function isOverLeafletMap(ev) {
+  const path = typeof ev.composedPath === "function" ? ev.composedPath() : [];
+  for (const node of path) {
+    if (node && node.classList && node.classList.contains(LEAFLET_CONTAINER_CLASS)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+window.addEventListener(
+  "wheel",
+  (ev) => {
+    if (isOverLeafletMap(ev)) {
+      ev.stopImmediatePropagation();
+    }
+  },
+  true
+);
+
 console.info("%c AIS-SELECT-BRIDGE %c loaded ", "background:#0288d1;color:#fff", "");

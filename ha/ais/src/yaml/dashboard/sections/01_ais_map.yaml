@@ -170,6 +170,14 @@
                     z-index: 2;
                     width: ${AIS_TABLE_COLLAPSED_WIDTH};
                     max-width: calc(100vw - 48px);
+                    /* The host is a FULL-HEIGHT box (top+height above), but the
+                       table only fills it while there are enough rows. Without
+                       this the transparent remainder still swallowed every tap
+                       and drag — the map was dead below the last row even where
+                       it was plainly visible. Events are handed back on the
+                       ha-card, i.e. exactly on the pixels the table paints. The
+                       detail overlay below already does the same. */
+                    pointer-events: none;
                   }
                   /* Height cap only. Rounding/clipping and the scroll live in the
                      card's OWN `css:` block below — flex-table-card builds its
@@ -179,6 +187,7 @@
                      corners stayed square and the cells had no padding). */
                   ha-card {
                     max-height: min(calc(${AIS_ROWS_SCROLL_COMPACT_PX}px + 56px), 100%);
+                    pointer-events: auto;
                   }
               css:
                 # Clipping the HOST to the card radius is what actually rounds the
@@ -275,12 +284,17 @@
                     z-index: 2;
                     width: ${AIS_TABLE_WIDTH};
                     max-width: calc(100vw - 48px);
+                    /* See the collapsed table: the host spans the whole map
+                       height, so its empty part must let taps/drags reach the
+                       map underneath; ha-card takes them back. */
+                    pointer-events: none;
                   }
                   /* Height cap only — see the collapsed table: rounding and the
                      scroll are set through the card's own `css:` block, because
                      flex-table-card scrolls its HOST element, not `ha-card`. */
                   ha-card {
                     max-height: min(calc(${AIS_ROWS_SCROLL_PX}px + 56px), 100%);
+                    pointer-events: auto;
                   }
               css:
                 ":host": " border-radius: ${AIS_CARD_RADIUS}; overflow: hidden; display: block;"
