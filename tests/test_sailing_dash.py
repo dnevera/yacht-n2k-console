@@ -1288,19 +1288,23 @@ def test_line_smoothing_is_global_with_spline_as_default(tmp_path):
 def test_zoom_controls_unlock_only_the_time_axis(tmp_path):
     """Zoom is on by default: X axis free, Y locked, +/-/reset column on right.
 
-    Wheel/trackpad/pinch zoom is deliberately OFF (`scrollZoom: False`) even
-    when zoom is enabled - zoom only happens through the modebar buttons,
-    which get an animated transition back.
+    `scrollZoom` must stay ON: the card implements its two-finger pinch by
+    dispatching a synthetic wheel event, so switching it off killed pinch zoom
+    on phones. A real mouse wheel is filtered out in JS instead
+    (`plotly_touch_patch_shapes.js`). No `layout.transition` either - the eased
+    replot made every pinch frame rubber-band. The modebar itself must be
+    `'always'` on, or the first tap on a touch screen is eaten by Plotly's
+    hover-to-reveal.
     """
     cards = [c for c in _plotly_chart_cards(_build_with_chart_config(tmp_path)) if "arrow_kind" in c]
     assert {c["arrow_kind"] for c in cards} == {"wind", "wave"}
     for card in cards:
-        assert card["config"]["scrollZoom"] is False
-        assert card["config"]["displayModeBar"] is True
+        assert card["config"]["scrollZoom"] is True
+        assert card["config"]["displayModeBar"] == "always"
         assert card["config"]["modeBarButtons"].startswith("$fn ")
         assert "plotly_zoom_step_buttons" not in card["config"]["modeBarButtons"][:4]
         assert card["layout"]["modebar"] == {"orientation": "v"}
-        assert card["layout"]["transition"] == {"duration": 300, "easing": "cubic-in-out"}
+        assert "transition" not in card["layout"]
         assert card["layout"]["xaxis"]["fixedrange"] is False
         # The value axis must stay locked so traces cannot be dragged off scale.
         assert card["layout"]["yaxis"]["fixedrange"] is True
@@ -1358,7 +1362,7 @@ def test_forecast_scale_limits_reach_both_charts_and_do_not_affect_panning(tmp_p
         assert card["zoom_max_hours"] == 72.0
         assert "range" not in card["layout"]["xaxis"]
         # Existing zoom mechanics untouched.
-        assert card["config"]["scrollZoom"] is False
+        assert card["config"]["scrollZoom"] is True
         assert card["layout"]["dragmode"] == "pan"
 
     # Omitted entirely -> no override at all, panning/zoom fully unrestricted.

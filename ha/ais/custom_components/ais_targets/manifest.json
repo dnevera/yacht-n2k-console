@@ -1,0 +1,12 @@
+{
+  "domain": "ais_targets",
+  "name": "AIS Targets",
+  "codeowners": ["@dnevera"],
+  "config_flow": true,
+  "documentation": "https://github.com/dnevera/yacht-n2k-console/tree/main/ha/ais/custom_components/ais_targets",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/dnevera/yacht-n2k-console/issues",
+  "requirements": ["nmea2000 @ git+https://github.com/dnevera/nmea2000.git@cpu-overload-fix"],
+  "version": "0.2.0"
+}

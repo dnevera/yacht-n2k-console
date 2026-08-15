@@ -85,3 +85,25 @@ cards:
     ref: "1.3.6"
     asset: config-template-card.js
     sha256: "ecee3c7e0a10920e9a432de2e7f1f9506ae742425e95741d1835bbd4dea56c2e"
+  - name: auto-entities
+    # thomasloven/lovelace-auto-entities does NOT publish release assets — the
+    # built auto-entities.js lives at the repo root, so fetch it via github_raw.
+    # Used by ha/ais's target table to discover the changing set of
+    # geo_location.ais_* entities at runtime (the vessel list is not known at
+    # build time).
+    source: github_raw
+    repo: thomasloven/lovelace-auto-entities
+    ref: v1.16.1
+    path: auto-entities.js
+    asset: auto-entities.js
+    sha256: "b7327b2fcd39f1fb859b60b53c869760d1d762ab4d4e4617b748971f528bd407"
+  - name: flex-table-card
+    # custom-cards/flex-table-card also ships the built bundle at its repo root
+    # (no release assets), so github_raw as well. Renders the auto-entities
+    # target list as a full multi-column, clickable table for ha/ais.
+    source: github_raw
+    repo: custom-cards/flex-table-card
+    ref: v1.4
+    path: flex-table-card.js
+    asset: flex-table-card.js
+    sha256: "cc9f70b4573fb32c9d652da6e16c08da9859dfc61a8ae0fa29d765eff6b7522d"

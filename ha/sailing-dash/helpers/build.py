@@ -337,16 +337,17 @@ def apply_zoom_controls(card, enabled, min_hours=None, max_hours=None):
 
     Only the X axis is unlocked - the Y axis stays fixed, so dragging can never
     detach the traces from the value scale. `dragmode: pan` keeps one-finger/
-    mouse panning working exactly as before. Zooming, however, is deliberately
-    NOT wired to the mouse wheel/trackpad/pinch any more - that input is where
-    every past "twitchy"/"inertia"/"pans while zooming" complaint came from,
-    because the OS and the browser inject their own momentum and multi-axis
-    deltas into a raw wheel event that Plotly cannot tell apart from a genuine
-    user gesture. Zoom is now available ONLY through the deterministic
-    +/-/reset buttons of the vertical modebar, which also get their animated
-    transition back (`layout.transition`) so a button press visibly eases
-    into the new range instead of snapping. Plotly's own double-click handling
-    stays off so the card's `on_dblclick` reset keeps working.
+    mouse panning working exactly as before. A real mouse wheel/trackpad is
+    still not allowed to zoom - that input is where every past "twitchy"/
+    "inertia"/"pans while zooming" complaint came from - but `scrollZoom`
+    itself must stay ON: the card's own touch controller implements the
+    two-finger pinch by dispatching a SYNTHETIC wheel event at the drag layer,
+    so turning `scrollZoom` off killed pinch zoom on phones altogether.
+    `plotly_touch_patch_shapes.js` swallows the trusted (real) wheel events
+    instead, which leaves zoom available through the deterministic +/-/reset
+    modebar buttons and through pinch, and nothing else. Plotly's own
+    double-click handling stays off so the card's `on_dblclick` reset keeps
+    working.
 
     `min_hours`/`max_hours` (from `resolve_zoom_scale_limits()`) additionally
     cap how far the user can ZOOM: handed to the card as `zoom_min_hours`/
@@ -373,17 +374,24 @@ def apply_zoom_controls(card, enabled, min_hours=None, max_hours=None):
         layout.pop("modebar", None)
         layout.pop("transition", None)
         return
-    # Wheel/trackpad/pinch zoom is intentionally disabled - only the modebar
-    # buttons below can change the zoom level.
-    cfg["scrollZoom"] = False
-    cfg["displayModeBar"] = True
+    # Kept ON so the card's built-in pinch (which zooms by dispatching a
+    # synthetic wheel event at the drag layer) works on a phone; real
+    # wheel/trackpad scrolling is filtered out by `isTrusted` in
+    # `plotly_touch_patch_shapes.js`.
+    cfg["scrollZoom"] = True
+    # `'always'`, not `True`: with `True` Plotly only fades the modebar in on
+    # hover, and on a touch screen the first tap is spent producing that
+    # "hover" instead of pressing the button.
+    cfg["displayModeBar"] = "always"
     cfg["displaylogo"] = False
     cfg["doubleClick"] = False
     # Custom zoomIn2d/zoomOut2d/resetScale2d - see plotly_zoom_step_buttons.js
     # for why (gentler step; reset that tracks "now" like the dblclick reset).
     cfg["modeBarButtons"] = f"{INCLUDE_PREFIX}plotly_zoom_step_buttons"
     layout["modebar"] = {"orientation": "v"}
-    layout["transition"] = {"duration": 300, "easing": "cubic-in-out"}
+    # No `layout.transition`: an eased 300 ms replot looked nice on a button
+    # press but turned every pinch frame into a laggy, rubber-banding redraw.
+    layout.pop("transition", None)
     xaxis["fixedrange"] = False
     xaxis.pop("range", None)
     if min_hours or max_hours:

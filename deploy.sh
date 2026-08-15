@@ -23,6 +23,9 @@
 #   ./deploy.sh --web               — web only (gateway/HA untouched)
 #   ./deploy.sh --check-ha          — verify the nmea2000 fork inside the HA container
 #   ./deploy.sh --clean-ha          — delete garbage NMEA devices + restart HA
+#   ./deploy.sh --clean-sensors     — alias for --clean-ha
+#   ./deploy.sh --clean-ais         — remove raw sensor.ais_* entities
+#   ./deploy.sh --dry-sensors       — dry-run mode for HA NMEA cleanup
 #   ./deploy.sh user@host --proxy   — override host from CLI
 #   ./deploy.sh --proxy --no-test   — deploy without running post-deploy tests
 #
@@ -165,15 +168,20 @@ DEPLOY_PROXY=true
 DEPLOY_WEB=true
 CLEAN_HA=false
 RESTART_HA=false
+CLEANUP_FLAGS=()
+IS_DRY_RUN=false
 
 for arg in "$@"; do
     [[ "$arg" == "--restart-ha" ]] && RESTART_HA=true
+    [[ "$arg" == "--dry-run" || "$arg" == "--dry-sensors" ]] && IS_DRY_RUN=true && CLEANUP_FLAGS+=("--dry-run")
+    [[ "$arg" == "--clean-ais" ]] && CLEANUP_FLAGS+=("--clean-ais")
+    [[ "$arg" == "--all" || "$arg" == "--clean-all" ]] && CLEANUP_FLAGS+=("--all")
 done
 
-[[ "$MODE" == "--proxy"    ]] && DEPLOY_WEB=false
-[[ "$MODE" == "--web"      ]] && DEPLOY_PROXY=false
-[[ "$MODE" == "--check-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false
-[[ "$MODE" == "--clean-ha" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && CLEAN_HA=true && RESTART_HA=true
+[[ "$MODE" == "--proxy"        ]] && DEPLOY_WEB=false
+[[ "$MODE" == "--web"          ]] && DEPLOY_PROXY=false
+[[ "$MODE" == "--check-ha"     ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false
+[[ "$MODE" == "--clean-ha" || "$MODE" == "--clean-sensors" || "$MODE" == "--clean-ais" || "$MODE" == "--clean-all" || "$MODE" == "--dry-sensors" ]] && DEPLOY_PROXY=false && DEPLOY_WEB=false && CLEAN_HA=true
 
 # ── pre_deploy_diff() ────────────────────────────────────────────────────────
 # Shows current remote state and what will change BEFORE uploading anything.
@@ -418,11 +426,16 @@ clean_ha() {
     log "Copying cleanup script into HA container..."
     ${SCP} "${script}" "${HOST}:/tmp/cleanup_nmea_devices.py"
     ${SSH} ${HOST} "sudo docker cp /tmp/cleanup_nmea_devices.py ${HA_CONTAINER}:/tmp/cleanup_nmea_devices.py"
-    log "Running cleanup (--all: remove ALL nmea2000 devices)..."
-    ${SSH} ${HOST} "sudo docker exec ${HA_CONTAINER} python3 /tmp/cleanup_nmea_devices.py --all"
-    log "Restarting HA..."
-    ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
-    log "HA restarted ✓  devices will rebuild from live N2K data"
+    local run_args="${CLEANUP_FLAGS[*]:-(default cleanup)}"
+    log "Running cleanup (${run_args})..."
+    ${SSH} ${HOST} "sudo docker exec ${HA_CONTAINER} python3 /tmp/cleanup_nmea_devices.py ${CLEANUP_FLAGS[*]:-}"
+    if $IS_DRY_RUN; then
+        log "Dry run complete — no changes written, no restart needed."
+    else
+        log "Restarting HA..."
+        ${SSH} ${HOST} "sudo docker restart ${HA_CONTAINER}"
+        log "HA restarted ✓  devices will rebuild from live N2K data"
+    fi
 }
 
 if $CLEAN_HA; then

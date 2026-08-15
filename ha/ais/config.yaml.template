@@ -1,0 +1,102 @@
+# AIS Dashboard Build Configuration
+#
+# Copy to `config.yaml` (same directory) and edit; `helpers/build.py` falls back
+# to the values below for any key you omit, so this file is a complete
+# reference of every available option.
+#
+# HOW THIS INTERACTS WITH THE TEMPLATES (read this before adding an option):
+# The Lovelace templates in src/yaml/dashboard/** are the SINGLE SOURCE OF
+# TRUTH for the dashboard's structure and styling. build.py never rewrites,
+# injects or "normalises" anything inside a card — it only substitutes the
+# explicit `${AIS_*}` placeholders that the templates themselves declare, and
+# fails loudly if a placeholder is left unresolved. An older revision generated
+# whole card_mod blocks and column lists from this file and silently clobbered
+# hand edits in the templates on every deploy; that is gone for good.
+#
+# Runtime settings (gateway host/port, own-vessel MMSI, update interval, stale
+# timeout) live ONLY in the `ais_targets` integration's config entry
+# (Settings → Devices & Services → AIS Targets → Configure).
+
+# ── Map card ────────────────────────────────────────────────────────────────
+map:
+  # Initial zoom level of the `type: map` card (higher = more zoomed in).
+  # Placeholder: ${AIS_MAP_ZOOM}
+  default_zoom: 12
+  # Height of the map card, as a CSS length. Viewport-relative on purpose: a
+  # plain fixed height made the panel view taller than the window and turned
+  # on the browser's vertical scrollbar. 104px = HA top bar + view-tabs row +
+  # both 12px gutters.
+  # Placeholder: ${AIS_MAP_HEIGHT}
+  height: calc(100vh - 104px)
+  # Marker badge geometry. The label is a two-letter badge from the vessel name
+  # plus its speed and length; `ha-entity-marker` renders it as PLAIN TEXT, so
+  # the speed/length cannot get their own font — the whole label font is shrunk
+  # here instead (that is what keeps them small next to the badge).
+  # Placeholders: ${AIS_MARKER_SIZE} / ${AIS_MARKER_FONT_SIZE}
+  marker_size: 52px
+  marker_font_size: 10px
+
+# ── Target table (custom:flex-table-card overlay) ───────────────────────────
+table:
+  # Initial sort of the target list: a column's header name plus `+` (asc) or
+  # `-` (desc). Clicking any header re-sorts interactively; this is only the
+  # default. Our own boat is an ordinary row in the same table, marked only by
+  # a ⛵ icon in front of its name when the decoded MMSI matches the
+  # integration's `own_mmsi` option.
+  # Placeholder: ${AIS_SORT_BY}
+  default_sort: state+
+  # How many target rows are visible before the list starts scrolling, in the
+  # expanded (full table) and the collapsed (side-bar) states. The table body
+  # becomes its own scroll container, so extra targets are reachable by
+  # scrolling instead of being cut off (flex-table-card's own `max_rows`
+  # TRUNCATES rows — it does not scroll — so it is deliberately not used).
+  # Placeholders: ${AIS_ROWS_SCROLL_PX} / ${AIS_ROWS_SCROLL_COMPACT_PX}
+  visible_rows: 10
+  collapsed_visible_rows: 8
+  # Approximate rendered height of one table row, used to turn the row counts
+  # above into the scroll container's max-height. The scroll height is also
+  # capped to the viewport, so the table never grows past the window.
+  row_height_px: 34
+  # Width of the overlay, as a CSS length — set exactly the same way as the
+  # map's height above, e.g. `calc(60vw - 50px)`, `900px`, `70%`. The overlay is
+  # pinned to the right edge of the map container and additionally capped by
+  # `max-width: calc(100vw - 48px)`, so whatever you put here it never leaves
+  # the 12px gutters.
+  # Placeholders: ${AIS_TABLE_WIDTH} / ${AIS_TABLE_COLLAPSED_WIDTH}
+  width: calc(50vw - 48px)
+  collapsed_width: 340px
+  # Width of the vessel-name column, as a CSS length. The table uses
+  # `table-layout: fixed` (needed to keep header/body columns aligned while the
+  # body scrolls), which otherwise splits the width evenly and CLIPS long
+  # vessel names. Make this at least as wide as the longest name you want to
+  # see in full.
+  # Placeholder: ${AIS_VESSEL_COL_WIDTH}
+  vessel_column_width: 150px
+  # Minimum width of the expanded table, in px. The overlay itself is pinned to
+  # the map container's box (never wider than the window, 12px gutters kept);
+  # once that box is narrower than this value the table scrolls HORIZONTALLY
+  # instead of squeezing/clipping its single-line cells.
+  # Placeholder: ${AIS_TABLE_MIN_WIDTH}
+  min_width_px: 1100
+
+# ── Selected-target detail card ─────────────────────────────────────────────
+# Clicking a vessel (in the table OR its marker on the map) selects it into
+# input_text.ais_selected_mmsi and this overlay shows every decoded field.
+# The map click is routed here by src/js/ais-select-bridge.js: Home Assistant
+# has NO more-info control for `geo_location`, so its own dialog is empty.
+detail:
+  # Width of the overlay, as a CSS length — same convention as the table
+  # widths above. It is pinned to the bottom-left of the map container, capped
+  # by `max-width: calc(100vw - 48px)` and never taller than the container
+  # (it scrolls instead of being cut off).
+  # Placeholder: ${AIS_DETAIL_WIDTH}
+  width: 360px
+
+# ── Card styling ────────────────────────────────────────────────────────────
+style:
+  # Corner radius of the map, the target tables and the detail card.
+  # A LITERAL length on purpose: the theme in use sets
+  # `--ha-card-border-radius: 0`, so `var(--ha-card-border-radius, 12px)` never
+  # fell back to 12px and every card rendered with square corners.
+  # Placeholder: ${AIS_CARD_RADIUS}
+  card_radius: 12px
