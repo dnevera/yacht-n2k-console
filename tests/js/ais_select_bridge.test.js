@@ -86,5 +86,44 @@ let threw = false;
 try { fire('wheel', bare); } catch (e) { threw = true; }
 t('wheel without composedPath does not throw', !threw);
 
+// 3. dismissing the detail card: tap on the map / Escape clear the helper
+const HELPER = 'input_text.ais_selected_mmsi_denn';
+hass.states = { [HELPER]: { state: '244123456' } };
+calls.length = 0;
+
+const clickEv = (path) => {
+  const ev = {};
+  ev.composedPath = () => path;
+  ev.stopImmediatePropagation = () => {};
+  ev.preventDefault = () => {};
+  return ev;
+};
+const cleared = () => JSON.stringify(calls[calls.length - 1]) ===
+  JSON.stringify(['input_text', 'set_value', { entity_id: HELPER, value: '' }]);
+
+fire('click', clickEv(mapPath));
+t('click on a marker does not clear the selection', calls.length === 0);
+
+fire('click', clickEv([{ classList: { contains: (c) => c === 'leaflet-container' } }]));
+t('click on the map closes the detail card', calls.length === 1 && cleared());
+
+hass.states[HELPER].state = '';
+fire('click', clickEv([{ classList: { contains: (c) => c === 'leaflet-container' } }]));
+t('click on the map with nothing selected writes nothing', calls.length === 1);
+
+hass.states[HELPER].state = '244123456';
+fire('click', clickEv([{ classList: { contains: () => false } }]));
+t('click outside the map is ignored', calls.length === 1);
+
+fire('keydown', { key: 'Escape' });
+t('Escape closes the detail card', calls.length === 2 && cleared());
+
+fire('keydown', { key: 'a' });
+t('other keys are ignored', calls.length === 2);
+
+hass.states[HELPER].state = 'unknown';
+fire('keydown', { key: 'Escape' });
+t('Escape with no selection writes nothing', calls.length === 2);
+
 console.log(ok ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED');
 process.exit(ok ? 0 : 1);

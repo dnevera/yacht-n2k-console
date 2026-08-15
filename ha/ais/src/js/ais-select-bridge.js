@@ -214,4 +214,76 @@ window.addEventListener(
   true
 );
 
+/*
+ * DISMISSING THE DETAIL CARD
+ * The detail overlay could only be closed with its own Close tile, which is a
+ * long way from where the finger already is. It now also closes on:
+ *   * a click/tap on the MAP itself — but not on a marker (that selects another
+ *     target via `hass-more-info` above) and not on Leaflet's own controls;
+ *   * the Escape key, the usual "dismiss the thing on top" gesture.
+ *
+ * Both simply clear the per-user helper — exactly what the Close tile does —
+ * so the conditional card in the dashboard hides itself. Nothing is written
+ * when there is no selection, to keep pointless service calls off the bus.
+ */
+const LEAFLET_IGNORED_CLASSES = [
+  "leaflet-marker-icon",
+  "leaflet-popup",
+  "leaflet-control",
+  "leaflet-control-container",
+];
+
+function hasClassInPath(ev, classNames) {
+  const path = typeof ev.composedPath === "function" ? ev.composedPath() : [];
+  for (const node of path) {
+    if (!node || !node.classList) {
+      continue;
+    }
+    for (const name of classNames) {
+      if (node.classList.contains(name)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasSelection(hass) {
+  const state = hass && hass.states && hass.states[selectedHelper(hass)];
+  const value = state && state.state;
+  return Boolean(value) && value !== "unknown" && value !== "unavailable";
+}
+
+function clearSelection() {
+  const hass = getHass();
+  if (!hass || !hasSelection(hass)) {
+    return;
+  }
+  hass.callService("input_text", "set_value", {
+    entity_id: selectedHelper(hass),
+    value: "",
+  });
+}
+
+window.addEventListener(
+  "click",
+  (ev) => {
+    if (!isOverLeafletMap(ev)) {
+      return;
+    }
+    if (hasClassInPath(ev, LEAFLET_IGNORED_CLASSES)) {
+      return;
+    }
+    clearSelection();
+  },
+  true
+);
+
+window.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape") {
+    return;
+  }
+  clearSelection();
+});
+
 console.info("%c AIS-SELECT-BRIDGE %c loaded ", "background:#0288d1;color:#fff", "");
