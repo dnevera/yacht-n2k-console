@@ -125,5 +125,130 @@ hass.states[HELPER].state = 'unknown';
 fire('keydown', { key: 'Escape' });
 t('Escape with no selection writes nothing', calls.length === 2);
 
+// 4. own boat highlight: found by the `is_own_ship` attribute, NOT by a MMSI
+//    hardcoded in the dashboard (it already lives in the integration config).
+const OWN = 'geo_location.ais_244111111';
+const OTHER = 'geo_location.ais_244999999';
+hass.states[OWN] = { attributes: { is_own_ship: true } };
+hass.states[OTHER] = { attributes: { is_own_ship: false } };
+
+const fakeMarker = (entityId) => {
+  const classes = new Set();
+  return {
+    classes,
+    getAttribute: (n) => (n === 'entity-id' ? entityId : null),
+    getRootNode: () => shadow,
+    classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
+  };
+};
+const ownMarker = fakeMarker(OWN);
+const otherMarker = fakeMarker(OTHER);
+const shadow = {
+  styles: [],
+  querySelectorAll: (sel) => (sel === 'ha-entity-marker' ? [ownMarker, otherMarker] : []),
+  querySelector: (sel) => shadow.styles.find((s) => '#' + s.id === sel) || null,
+  appendChild: (el) => shadow.styles.push(el),
+};
+global.document.createElement = () => ({});
+
+t('own boat marker gets the highlight class', markOwnShipMarkers(shadow, hass) === 1 && ownMarker.classes.has('ais-own-ship'));
+t('other targets stay plain', !otherMarker.classes.has('ais-own-ship'));
+t('the ring stylesheet is injected once', shadow.styles.length === 1 && shadow.styles[0].id === 'ais-own-ship-style');
+
+markOwnShipMarkers(shadow, hass);
+t('a second pass injects no duplicate stylesheet', shadow.styles.length === 1);
+
+// Own boat gone from the state machine -> the stale ring is dropped.
+delete hass.states[OWN].attributes.is_own_ship;
+markOwnShipMarkers(shadow, hass);
+t('a stale highlight is removed when the own target is gone', !ownMarker.classes.has('ais-own-ship'));
+
+// 5. picking a target in the table pans the map to it and blinks its marker
+const SEL = '244999999';
+const selMarker = fakeMarker('geo_location.ais_' + SEL);
+const views = [];
+const leafletMap = {
+  getZoom: () => 8,
+  setView: (pos, zoom) => views.push([pos, zoom]),
+};
+const mapHost = { leafletMap };
+const mapRoot = {
+  styles: [],
+  querySelectorAll: (sel) => (sel === 'ha-entity-marker' ? [selMarker] : [mapHost]),
+  querySelector: (sel) => mapRoot.styles.find((s) => '#' + s.id === sel) || null,
+  appendChild: (el) => mapRoot.styles.push(el),
+};
+selMarker.getRootNode = () => mapRoot;
+
+hass.states['geo_location.ais_' + SEL] = { attributes: { latitude: 43.1, longitude: 16.4 } };
+t('the selected target pans the map, zooming in but never out',
+  focusSelectedTarget(mapRoot, hass, SEL) &&
+  views.length === 1 && views[0][0][0] === 43.1 && views[0][1] === 12);
+t('the selected marker blinks', selMarker.classes.has('ais-blink'));
+t('the blink stylesheet is injected once',
+  mapRoot.styles.length === 1 && mapRoot.styles[0].id === 'ais-blink-style');
+
+// No coordinates yet -> no pan, and nothing throws.
+hass.states['geo_location.ais_' + SEL] = { attributes: {} };
+t('a target without coordinates does not move the map',
+  focusSelectedTarget(mapRoot, hass, SEL) === false && views.length === 1);
+
+// The very first pass only PRIMES the state: a selection left over from a
+// previous session must not act as a fresh pick (that folded the table away
+// the moment the user opened it).
+hass.states[HELPER].state = SEL;
+t('the first poll only primes the remembered selection', pollSelection(mapRoot, hass) === false);
+t('the primed selection is not re-focused', pollSelection(mapRoot, hass) === false);
+
+// The poll only reacts to a CHANGE of the helper.
+hass.states[HELPER].state = '';
+pollSelection(mapRoot, hass);
+hass.states[HELPER].state = SEL;
+t('a new selection is picked up by the poll', pollSelection(mapRoot, hass) === true);
+t('an unchanged selection re-focuses nothing', pollSelection(mapRoot, hass) === false);
+hass.states[HELPER].state = '';
+t('clearing the selection focuses nothing', pollSelection(mapRoot, hass) === false);
+
+// 6. picking a target folds the FULL table away — animated, and only when it
+//    is actually expanded.
+const EXPANDED = 'input_boolean.ais_table_expanded_denn';
+const tableClasses = new Set();
+const tableEl = {
+  classList: { add: (c) => tableClasses.add(c), remove: (c) => tableClasses.delete(c), contains: (c) => tableClasses.has(c) },
+  getRootNode: () => tableRoot,
+};
+const tableRoot = {
+  styles: [],
+  querySelectorAll: (sel) => (sel === 'flex-table-card' ? [tableEl] : []),
+  querySelector: (sel) => tableRoot.styles.find((s) => '#' + s.id === sel) || null,
+  appendChild: (el) => tableRoot.styles.push(el),
+};
+
+calls.length = 0;
+hass.states[EXPANDED] = { state: 'off' };
+t('a collapsed table is left alone', collapseTableAfterSelect(tableRoot, hass) === false && calls.length === 0);
+
+hass.states[EXPANDED] = { state: 'on' };
+const realTimeout = global.setTimeout;
+const pending = [];
+global.setTimeout = (fn) => { pending.push(fn); return 0; };
+t('the expanded table is folded', collapseTableAfterSelect(tableRoot, hass) === true);
+t('the fold-out animation runs before the state flips',
+  tableClasses.has('ais-table-collapsing') && calls.length === 0);
+t('the fold stylesheet is injected once',
+  tableRoot.styles.length === 1 && tableRoot.styles[0].id === 'ais-table-collapse-style');
+pending.forEach((fn) => fn());
+t('the toggle is switched off after the animation',
+  JSON.stringify(calls[calls.length - 1]) ===
+    JSON.stringify(['input_boolean', 'turn_off', { entity_id: EXPANDED }]));
+t('the fold class does not outlive the animation', !tableClasses.has('ais-table-collapsing'));
+global.setTimeout = realTimeout;
+
+// A leftover fold class on a REUSED card (HA does not always destroy it) made
+// the table invisible on the next `on` — the poll sweeps it away.
+tableClasses.add('ais-table-collapsing');
+pollSelection(tableRoot, hass);
+t('a leftover fold class is swept on the next poll', !tableClasses.has('ais-table-collapsing'));
+
 console.log(ok ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED');
 process.exit(ok ? 0 : 1);

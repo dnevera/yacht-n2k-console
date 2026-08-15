@@ -288,7 +288,16 @@ class AisTarget(GeolocationEvent):
         length = self._static("length")
         if isinstance(length, (int, float)):
             parts.append(f"{length:.0f}m")
-        glyph = _type_marks(self._static("ship_type"))[0]
+        # OUR boat carries the sailboat glyph instead of its ship-type one, so
+        # it is readable at a glance among a dozen identical circles. The
+        # highlight ring around the marker is added in the browser (see
+        # src/js/ais-select-bridge.js) — the label is plain text and cannot
+        # style itself.
+        glyph = (
+            _OWN_BOAT_ICON
+            if self._is_own_ship
+            else _type_marks(self._static("ship_type"))[0]
+        )
         label = f"{glyph}{self._initials()}"
         if parts:
             label = f"{label} {' '.join(parts)}"

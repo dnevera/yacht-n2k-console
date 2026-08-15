@@ -120,6 +120,15 @@
                   z-index: 2;
                   width: 300px;
                 }
+                /* Tactile feedback for the on/off tap itself: the toggle row
+                   dips slightly while pressed, so a tap is visibly registered
+                   even before the table finishes animating. */
+                ha-card {
+                  transition: transform 120ms ease-out;
+                }
+                ha-card:active {
+                  transform: scale(0.97);
+                }
 
           # ── Collapsed overlay: compact side-bar (name + distance) ─────────────
           - type: conditional
@@ -162,7 +171,19 @@
                 # the map container, which is itself inset 12px from the window —
                 # so the card is always inside the viewport, margins included.
                 style: |
+                  /* Toggling the table is ANIMATED: the conditional card is
+                     created/destroyed by Home Assistant, so only the appearing
+                     side can be animated in CSS — it unfolds from the toggle
+                     above it. The disappearing side is animated by
+                     src/js/ais-select-bridge.js, which plays the fold-out and
+                     only then flips the helper. */
+                  @keyframes ais-table-unfold {
+                    from { opacity: 0; transform: scale(0.92) translateY(-8px); }
+                    to   { opacity: 1; transform: scale(1); }
+                  }
                   :host {
+                    transform-origin: top right;
+                    animation: ais-table-unfold 220ms ease-out;
                     position: absolute;
                     top: 84px;
                     right: 12px;
@@ -276,7 +297,15 @@
                 # `overflow: auto` on the inner ha-card gives the AUTOMATIC
                 # HORIZONTAL SCROLL for the wide table.
                 style: |
+                  /* Same unfold animation as the collapsed side-bar — see there
+                     for why only the appearing card can animate in CSS. */
+                  @keyframes ais-table-unfold {
+                    from { opacity: 0; transform: scale(0.92) translateY(-8px); }
+                    to   { opacity: 1; transform: scale(1); }
+                  }
                   :host {
+                    transform-origin: top right;
+                    animation: ais-table-unfold 220ms ease-out;
                     position: absolute;
                     top: 84px;
                     right: 12px;

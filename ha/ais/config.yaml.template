@@ -21,7 +21,7 @@
 map:
   # Initial zoom level of the `type: map` card (higher = more zoomed in).
   # Placeholder: ${AIS_MAP_ZOOM}
-  default_zoom: 12
+  default_zoom: 16
   # Height of the map card, as a CSS length. Viewport-relative on purpose: a
   # plain fixed height made the panel view taller than the window and turned
   # on the browser's vertical scrollbar. 104px = HA top bar + view-tabs row +
